@@ -1,0 +1,11 @@
+{
+  "name": "Worksheet Practice",
+  "short_name": "Worksheet",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f6f7fa",
+  "theme_color": "#1a4fc4",
+  "icons": []
+}

@@ -1,0 +1,19 @@
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# Local dev
+node_modules/
+.cache/
+
+# Local Claude settings (kept per-machine)
+.claude/settings.local.json
+
+# Never commit these — runtime artifacts or secrets
+*.pdf
+*.env
+.env.*
+secrets.json

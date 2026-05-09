@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <title>Worksheet Practice</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#1a4fc4" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Worksheet Practice</div>
+    <nav class="stages" aria-label="Stages">
+      <span data-stage="unlock">Unlock</span>
+      <span data-stage="setup">Setup</span>
+      <span data-stage="practice">Practice</span>
+      <span data-stage="marking">Marking</span>
+      <span data-stage="report">Report</span>
+    </nav>
+    <div class="topbar-actions">
+      <span id="autosave-indicator" class="autosave" aria-live="polite">saved</span>
+      <button id="reset-btn" type="button" class="link-btn" hidden>Start over</button>
+    </div>
+  </header>
+
+  <main id="app">
+
+    <!-- Unlock -->
+    <section id="stage-unlock" class="stage" hidden>
+      <h1>Enter passphrase</h1>
+      <p class="muted">
+        This is a placeholder access gate. For real protection use Cloudflare Access or another auth layer
+        in front of the static deployment.
+      </p>
+      <form id="unlock-form">
+        <label>Passphrase
+          <input id="unlock-input" type="password" autocomplete="current-password" />
+        </label>
+        <button type="submit">Unlock</button>
+      </form>
+      <p id="unlock-error" class="error" hidden>Wrong passphrase.</p>
+    </section>
+
+    <!-- Setup -->
+    <section id="stage-setup" class="stage" hidden>
+      <h1>Set up a worksheet</h1>
+
+      <div class="card">
+        <h2>Worksheet PDF</h2>
+        <input id="pdf-input" type="file" accept="application/pdf" />
+        <p id="pdf-status" class="muted"></p>
+        <p id="color-warning" class="warning" hidden></p>
+      </div>
+
+      <div class="card">
+        <h2>Pages</h2>
+        <label>Question pages
+          <input id="question-pages" type="text" placeholder="e.g. 1-20" />
+        </label>
+        <label>Answer pages
+          <input id="answer-pages" type="text" placeholder="e.g. 21-24" />
+        </label>
+        <p class="muted">Page numbers are 1-based. Examples: <code>1-20</code>, <code>1,2,5-8</code>.</p>
+        <p id="page-range-error" class="error" hidden></p>
+      </div>
+
+      <div class="card">
+        <h2>Worksheet metadata</h2>
+        <label>Subject
+          <input id="meta-subject" type="text" placeholder="e.g. P4 Maths" />
+        </label>
+        <label>Level
+          <input id="meta-level" type="text" placeholder="e.g. Primary 4" />
+        </label>
+      </div>
+
+      <details class="card">
+        <summary><h2 style="display:inline">Advanced settings</h2></summary>
+        <label>OpenAI API key (stored only in this browser)
+          <input id="openai-key" type="password" autocomplete="off" placeholder="sk-..." />
+        </label>
+        <label>Model
+          <input id="openai-model" type="text" placeholder="gpt-4o-mini" />
+        </label>
+        <label>Submission DPI
+          <select id="render-dpi">
+            <option value="150">150 (default)</option>
+            <option value="200">200 (sharper)</option>
+          </select>
+        </label>
+        <label>Pages per batch
+          <input id="batch-size" type="number" min="1" max="20" step="1" />
+        </label>
+        <label class="checkbox">
+          <input id="test-mode" type="checkbox" />
+          Test mode: only mark the first 2 question pages
+        </label>
+      </details>
+
+      <div class="actions">
+        <button id="start-practice-btn" type="button">Start practice</button>
+      </div>
+      <p class="muted small">
+        This prototype stores worksheet attempts locally in your browser. When you submit for marking,
+        completed worksheet images and answer sheet images are sent to OpenAI for AI-assisted review.
+        Do not upload sensitive documents.
+      </p>
+    </section>
+
+    <!-- Practice -->
+    <section id="stage-practice" class="stage" hidden>
+      <div class="practice-toolbar">
+        <button data-tool="pen" class="tool-btn active" type="button" title="Pen (P)">Pen</button>
+        <button data-tool="eraser" class="tool-btn" type="button" title="Eraser (E)">Eraser</button>
+        <button id="undo-btn" type="button" title="Undo (Ctrl+Z)">Undo</button>
+        <button id="clear-page-btn" type="button" title="Clear page">Clear page</button>
+        <span class="sep"></span>
+        <button id="zoom-out-btn" type="button" title="Zoom out">−</button>
+        <button id="zoom-fit-btn" type="button" title="Fit to width">Fit</button>
+        <button id="zoom-in-btn" type="button" title="Zoom in">+</button>
+        <span class="sep"></span>
+        <button id="prev-page-btn" type="button">◀</button>
+        <span id="page-indicator" class="page-indicator">– / –</span>
+        <button id="next-page-btn" type="button">▶</button>
+        <span class="sep"></span>
+        <button id="submit-btn" type="button" class="primary">Submit for marking</button>
+      </div>
+      <div id="page-stage" class="page-stage">
+        <div id="page-wrap" class="page-wrap">
+          <canvas id="pdf-canvas" class="pdf-canvas"></canvas>
+          <canvas id="ink-canvas" class="ink-canvas"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- Marking -->
+    <section id="stage-marking" class="stage" hidden>
+      <h1>Marking</h1>
+      <div id="marking-progress" class="card">
+        <p id="marking-status">Preparing…</p>
+        <ol id="batch-list" class="batch-list"></ol>
+      </div>
+      <div class="actions">
+        <button id="cancel-marking-btn" type="button">Cancel</button>
+      </div>
+    </section>
+
+    <!-- Report -->
+    <section id="stage-report" class="stage" hidden>
+      <h1>Marking report</h1>
+      <div id="report-summary" class="card"></div>
+      <div id="report-wrong" class="card"></div>
+      <div id="report-uncertain" class="card"></div>
+      <div id="report-weak" class="card"></div>
+      <div id="report-redo" class="card"></div>
+      <div id="report-table" class="card"></div>
+      <div class="actions">
+        <button id="download-report-pdf" type="button">Download report PDF</button>
+        <button id="download-attempt-pdf" type="button">Download completed attempt PDF</button>
+        <button id="toggle-raw-json" type="button">Show raw JSON</button>
+      </div>
+      <pre id="raw-json" class="raw-json" hidden></pre>
+    </section>
+
+  </main>
+
+  <div id="confirm-modal" class="modal" hidden>
+    <div class="modal-card">
+      <h2 id="confirm-title">Confirm</h2>
+      <p id="confirm-body"></p>
+      <div class="actions">
+        <button id="confirm-cancel" type="button">Cancel</button>
+        <button id="confirm-ok" type="button" class="primary">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import * as pdfjsLib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.min.mjs';
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs';
+    window.pdfjsLib = pdfjsLib;
+  </script>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
