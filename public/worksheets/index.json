@@ -8,9 +8,9 @@
       "level": "Primary 4",
       "pdfPath": "public/worksheets/p4-math-2025-sa2.pdf",
       "totalPages": 32,
-      "questionPages": "1-32",
+      "questionPages": "",
       "answerPages": "",
-      "description": "Question paper only. No answer key bundled; set Answer pages manually if you have an answer sheet."
+      "description": "Set the question and answer page ranges yourself before starting."
     },
     {
       "id": "p4-english-2025-sa2",
@@ -19,9 +19,9 @@
       "level": "Primary 4",
       "pdfPath": "public/worksheets/p4-english-2025-sa2.pdf",
       "totalPages": 26,
-      "questionPages": "1-26",
+      "questionPages": "",
       "answerPages": "",
-      "description": "Question paper only. No answer key bundled."
+      "description": "Set the question and answer page ranges yourself before starting."
     },
     {
       "id": "p4-chinese-2025-sa2",
@@ -30,9 +30,9 @@
       "level": "Primary 4",
       "pdfPath": "public/worksheets/p4-chinese-2025-sa2.pdf",
       "totalPages": 16,
-      "questionPages": "1-16",
+      "questionPages": "",
       "answerPages": "",
-      "description": "Question paper only. No answer key bundled."
+      "description": "Set the question and answer page ranges yourself before starting."
     },
     {
       "id": "p4-science-2025-sa2",
@@ -41,9 +41,9 @@
       "level": "Primary 4",
       "pdfPath": "public/worksheets/p4-science-2025-sa2.pdf",
       "totalPages": 38,
-      "questionPages": "1-38",
+      "questionPages": "",
       "answerPages": "",
-      "description": "Question paper only. No answer key bundled."
+      "description": "Set the question and answer page ranges yourself before starting."
     },
     {
       "id": "p2-chinese-2019-sa2-ai-tong",
@@ -52,9 +52,9 @@
       "level": "Primary 2",
       "pdfPath": "public/worksheets/p2-chinese-2019-sa2-ai-tong.pdf",
       "totalPages": 1,
-      "questionPages": "1",
+      "questionPages": "",
       "answerPages": "",
-      "description": "Single-page extract. Useful for fast end-to-end testing."
+      "description": "Set the question and answer page ranges yourself before starting."
     },
     {
       "id": "p1-higher-chinese-2018-ai-tong-test2",
@@ -63,9 +63,9 @@
       "level": "Primary 1",
       "pdfPath": "public/worksheets/p1-higher-chinese-2018-ai-tong-test2.pdf",
       "totalPages": 1,
-      "questionPages": "1",
+      "questionPages": "",
       "answerPages": "",
-      "description": "Single-page extract. Useful for fast end-to-end testing."
+      "description": "Set the question and answer page ranges yourself before starting."
     }
   ]
 }
