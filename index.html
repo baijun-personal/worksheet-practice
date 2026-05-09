@@ -106,7 +106,13 @@
           <input id="openai-key" type="password" autocomplete="off" placeholder="sk-..." />
         </label>
         <label>Model
-          <input id="openai-model" type="text" placeholder="gpt-4o-mini" />
+          <select id="openai-model-preset">
+            <!-- options populated from MODEL_PRESETS -->
+            <option value="__custom__">Other (custom name)…</option>
+          </select>
+        </label>
+        <label id="openai-model-custom-wrap" hidden>Custom model name
+          <input id="openai-model" type="text" placeholder="e.g. gpt-5.4-mini" />
         </label>
         <label>Submission DPI
           <select id="render-dpi">

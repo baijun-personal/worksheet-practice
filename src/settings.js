@@ -6,16 +6,16 @@ const KEY = 'wsp.settings.v1';
 
 const DEFAULTS = {
   openaiKey: '',
-  openaiModel: 'gpt-4o-mini',
+  openaiModel: 'gpt-5.4-mini',
   renderDpi: 150,
   batchSize: 5,
   testMode: false,
-  // USD per 1M tokens. Defaults are gpt-4o-mini rates as commonly published;
-  // users should verify against https://openai.com/api/pricing/ for the
-  // model they actually selected. The cost shown in the report is labelled
+  // USD per 1M tokens. Defaults match the gpt-5.4-mini preset and are
+  // placeholders only — verify against https://openai.com/api/pricing/ for
+  // the model actually selected. The cost shown in the report is labelled
   // "estimated" and is computed from these rates only.
-  priceInPerMTokens: 0.15,
-  priceOutPerMTokens: 0.60,
+  priceInPerMTokens: 0.25,
+  priceOutPerMTokens: 1.00,
   // Marking mode: how completed pages are grouped before sending to OpenAI.
   // - "auto"            → single combined (≤4 question pages) or batch4_fullpage (>4)
   // - "single_fullpage" → one request, all completed pages as separate full-page images

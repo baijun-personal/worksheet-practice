@@ -10,7 +10,7 @@ import {
 import { loadPdfFromBlob, renderPageToCanvas } from './pdfRender.js';
 import { attachInkController, redrawAll } from './draw.js';
 import { flattenQuestionPage, renderAnswerPage, colorContentRatio } from './flatten.js';
-import { markBatch, mergeReports, chunkPages } from './openai.js';
+import { markBatch, mergeReports, chunkPages, MODEL_PRESETS, DEFAULT_MODEL, presetForModel } from './openai.js';
 import { renderReport, exportReportPdf, exportCompletedAttemptPdf } from './report.js';
 import { loadCatalog, fetchBuiltinPdf, builtinAttemptId } from './builtin.js';
 import { composeFourUpA4, chunkInto } from './fourup.js';
@@ -114,14 +114,18 @@ function bindUnlockForm() {
 // --- Setup ----------------------------------------------------------------
 
 function bindSetupForm() {
+  // Populate the model preset dropdown from the openai.js table.
+  populateModelPresetSelect();
+
   // Prefill settings inputs.
   $('openai-key').value = state.settings.openaiKey || '';
-  $('openai-model').value = state.settings.openaiModel || 'gpt-4o-mini';
+  $('openai-model').value = state.settings.openaiModel || DEFAULT_MODEL;
+  applyModelToControls(state.settings.openaiModel || DEFAULT_MODEL);
   $('render-dpi').value = String(state.settings.renderDpi || 150);
   $('batch-size').value = String(state.settings.batchSize || 5);
   $('test-mode').checked = !!state.settings.testMode;
-  $('price-in').value = String(state.settings.priceInPerMTokens ?? 0.15);
-  $('price-out').value = String(state.settings.priceOutPerMTokens ?? 0.60);
+  $('price-in').value = String(state.settings.priceInPerMTokens ?? 0.25);
+  $('price-out').value = String(state.settings.priceOutPerMTokens ?? 1.00);
   $('marking-mode').value = state.settings.markingMode || 'auto';
 
   $('pdf-input').addEventListener('change', onPdfPicked);
@@ -133,10 +137,13 @@ function bindSetupForm() {
   }
   $('builtin-select').addEventListener('change', onBuiltinSelect);
 
+  // Model preset: switch model + auto-fill prices.
+  $('openai-model-preset').addEventListener('change', onModelPresetChange);
+
   // Persist settings on change so they survive a refresh.
   for (const [id, key, parser] of [
     ['openai-key', 'openaiKey', (v) => v],
-    ['openai-model', 'openaiModel', (v) => v.trim() || 'gpt-4o-mini'],
+    ['openai-model', 'openaiModel', (v) => v.trim() || DEFAULT_MODEL],
     ['render-dpi', 'renderDpi', (v) => parseInt(v, 10) || 150],
     ['batch-size', 'batchSize', (v) => Math.max(1, parseInt(v, 10) || 5)],
     ['price-in', 'priceInPerMTokens', (v) => Math.max(0, parseFloat(v) || 0)],
@@ -153,6 +160,56 @@ function bindSetupForm() {
 
   populateBuiltinCatalog();
   applySourceVisibility();
+}
+
+function populateModelPresetSelect() {
+  const sel = $('openai-model-preset');
+  // Build presets first, then keep the existing trailing "__custom__" option.
+  const customOpt = sel.querySelector('option[value="__custom__"]');
+  sel.innerHTML = '';
+  for (const p of MODEL_PRESETS) {
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    opt.textContent = p.label;
+    sel.appendChild(opt);
+  }
+  sel.appendChild(customOpt);
+}
+
+function applyModelToControls(model) {
+  const preset = presetForModel(model);
+  if (preset) {
+    $('openai-model-preset').value = preset.id;
+    $('openai-model-custom-wrap').hidden = true;
+    $('openai-model').value = preset.id;
+  } else {
+    // Custom model name not in the preset table.
+    $('openai-model-preset').value = '__custom__';
+    $('openai-model-custom-wrap').hidden = false;
+    $('openai-model').value = model;
+  }
+}
+
+function onModelPresetChange() {
+  const v = $('openai-model-preset').value;
+  if (v === '__custom__') {
+    $('openai-model-custom-wrap').hidden = false;
+    // Don't touch prices; user is going off-menu.
+    const customName = $('openai-model').value.trim() || '';
+    state.settings = saveSettings({ openaiModel: customName });
+    return;
+  }
+  const preset = presetForModel(v);
+  if (!preset) return;
+  $('openai-model-custom-wrap').hidden = true;
+  $('openai-model').value = preset.id;
+  $('price-in').value = String(preset.priceInPerMTokens);
+  $('price-out').value = String(preset.priceOutPerMTokens);
+  state.settings = saveSettings({
+    openaiModel: preset.id,
+    priceInPerMTokens: preset.priceInPerMTokens,
+    priceOutPerMTokens: preset.priceOutPerMTokens,
+  });
 }
 
 async function populateBuiltinCatalog() {
@@ -346,7 +403,7 @@ async function onStartPractice() {
   }
   state.settings = saveSettings({
     openaiKey: apiKey,
-    openaiModel: $('openai-model').value.trim() || 'gpt-4o-mini',
+    openaiModel: $('openai-model').value.trim() || DEFAULT_MODEL,
     renderDpi: parseInt($('render-dpi').value, 10) || 150,
     batchSize: Math.max(1, parseInt($('batch-size').value, 10) || 5),
     testMode: $('test-mode').checked,

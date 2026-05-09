@@ -2,10 +2,41 @@
 // The system prompt and user prompt include the color-convention sentence
 // verbatim — see design doc "Prompt contract".
 //
-// Model is configurable; default "gpt-4o-mini". Verify against current
-// OpenAI model list when iterating; this is a config field, not hardcoded.
+// Model is configurable via MODEL_PRESETS below; default "gpt-5.4-mini".
+// Verify against current OpenAI model list when iterating; the model name
+// and pricing are config fields, not hardcoded into the marking call.
 
 const ENDPOINT = 'https://api.openai.com/v1/chat/completions';
+
+// Model presets shown in the Setup → Advanced settings dropdown.
+// Default prices are placeholders — verify on https://openai.com/api/pricing/
+// before relying on the cost estimate. Edit them in the form to override.
+export const MODEL_PRESETS = [
+  {
+    id: 'gpt-5.4-mini',
+    label: 'gpt-5.4-mini — default, balanced',
+    priceInPerMTokens: 0.25,
+    priceOutPerMTokens: 1.00,
+  },
+  {
+    id: 'gpt-5.4',
+    label: 'gpt-5.4 — higher accuracy',
+    priceInPerMTokens: 2.50,
+    priceOutPerMTokens: 10.00,
+  },
+  {
+    id: 'gpt-5.5',
+    label: 'gpt-5.5 — best benchmark, expensive',
+    priceInPerMTokens: 10.00,
+    priceOutPerMTokens: 30.00,
+  },
+];
+
+export const DEFAULT_MODEL = 'gpt-5.4-mini';
+
+export function presetForModel(model) {
+  return MODEL_PRESETS.find((p) => p.id === model) || null;
+}
 
 const SYSTEM_PROMPT = [
   'You are an AI worksheet marking assistant for a parent.',
