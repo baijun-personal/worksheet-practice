@@ -195,6 +195,17 @@ button.tool-btn.active { background: var(--accent); color: white; border-color: 
   z-index: 50;
 }
 .modal[hidden] { display: none; }
+
+.source-toggle { display: flex; gap: 16px; margin-bottom: 8px; }
+.source-toggle .checkbox { display: flex; gap: 6px; align-items: center; color: var(--text); }
+#builtin-resume {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+#builtin-resume .actions { margin: 0; }
 .modal-card {
   background: white;
   border-radius: 8px;

@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "worksheets": [
+    {
+      "id": "p4-math-2025-sa2",
+      "title": "P4 Math 2025 SA2 (Nanyang)",
+      "subject": "P4 Maths",
+      "level": "Primary 4",
+      "pdfPath": "public/worksheets/p4-math-2025-sa2.pdf",
+      "totalPages": 32,
+      "questionPages": "1-32",
+      "answerPages": "",
+      "description": "Question paper only. No answer key bundled; set Answer pages manually if you have an answer sheet."
+    },
+    {
+      "id": "p4-english-2025-sa2",
+      "title": "P4 English 2025 SA2 (TN)",
+      "subject": "P4 English",
+      "level": "Primary 4",
+      "pdfPath": "public/worksheets/p4-english-2025-sa2.pdf",
+      "totalPages": 26,
+      "questionPages": "1-26",
+      "answerPages": "",
+      "description": "Question paper only. No answer key bundled."
+    },
+    {
+      "id": "p4-chinese-2025-sa2",
+      "title": "P4 Chinese 2025 SA2 (SH)",
+      "subject": "P4 Chinese",
+      "level": "Primary 4",
+      "pdfPath": "public/worksheets/p4-chinese-2025-sa2.pdf",
+      "totalPages": 16,
+      "questionPages": "1-16",
+      "answerPages": "",
+      "description": "Question paper only. No answer key bundled."
+    },
+    {
+      "id": "p4-science-2025-sa2",
+      "title": "P4 Science 2025 SA2 (RS)",
+      "subject": "P4 Science",
+      "level": "Primary 4",
+      "pdfPath": "public/worksheets/p4-science-2025-sa2.pdf",
+      "totalPages": 38,
+      "questionPages": "1-38",
+      "answerPages": "",
+      "description": "Question paper only. No answer key bundled."
+    },
+    {
+      "id": "p2-chinese-2019-sa2-ai-tong",
+      "title": "P2 Chinese 2019 SA2 (Ai Tong) — extract",
+      "subject": "P2 Chinese",
+      "level": "Primary 2",
+      "pdfPath": "public/worksheets/p2-chinese-2019-sa2-ai-tong.pdf",
+      "totalPages": 1,
+      "questionPages": "1",
+      "answerPages": "",
+      "description": "Single-page extract. Useful for fast end-to-end testing."
+    },
+    {
+      "id": "p1-higher-chinese-2018-ai-tong-test2",
+      "title": "P1 Higher Chinese 2018 (Ai Tong test 2) — extract",
+      "subject": "P1 Higher Chinese",
+      "level": "Primary 1",
+      "pdfPath": "public/worksheets/p1-higher-chinese-2018-ai-tong-test2.pdf",
+      "totalPages": 1,
+      "questionPages": "1",
+      "answerPages": "",
+      "description": "Single-page extract. Useful for fast end-to-end testing."
+    }
+  ]
+}

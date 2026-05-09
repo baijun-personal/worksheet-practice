@@ -5,13 +5,15 @@ import { parsePageRange, validateRanges, rangesOverlap } from './pageRange.js';
 import { loadSettings, saveSettings } from './settings.js';
 import {
   putAttempt, getAttempt, putStroke, deleteStroke, getStrokesForPage,
-  clearStrokesForPage,
+  clearStrokesForPage, deleteAttempt, attemptExists,
 } from './storage.js';
 import { loadPdfFromBlob, renderPageToCanvas } from './pdfRender.js';
 import { attachInkController, redrawAll } from './draw.js';
 import { flattenQuestionPage, renderAnswerPage, colorContentRatio } from './flatten.js';
 import { markBatch, mergeReports, chunkPages } from './openai.js';
 import { renderReport, exportReportPdf, exportCompletedAttemptPdf } from './report.js';
+import { loadCatalog, fetchBuiltinPdf, builtinAttemptId } from './builtin.js';
+import { composeFourUpA4, chunkInto } from './fourup.js';
 
 const STAGES = ['unlock', 'setup', 'practice', 'marking', 'report'];
 
@@ -29,6 +31,11 @@ const state = {
   cancelMarking: false,
   flattenedCompletedPages: null, // cached after submit for "download attempt"
   reportJson: null,
+  // Setup-stage source state
+  sourceMode: 'builtin',           // "builtin" | "upload"
+  catalog: [],                     // [Worksheet]
+  selectedWorksheet: null,         // current built-in worksheet (or null)
+  resumableAttempt: null,          // existing attempt for the chosen built-in (or null)
 };
 
 const els = {};
@@ -115,9 +122,16 @@ function bindSetupForm() {
   $('test-mode').checked = !!state.settings.testMode;
   $('price-in').value = String(state.settings.priceInPerMTokens ?? 0.15);
   $('price-out').value = String(state.settings.priceOutPerMTokens ?? 0.60);
+  $('marking-mode').value = state.settings.markingMode || 'auto';
 
   $('pdf-input').addEventListener('change', onPdfPicked);
   $('start-practice-btn').addEventListener('click', onStartPractice);
+
+  // Source toggle
+  for (const radio of document.querySelectorAll('input[name="source-mode"]')) {
+    radio.addEventListener('change', onSourceChange);
+  }
+  $('builtin-select').addEventListener('change', onBuiltinSelect);
 
   // Persist settings on change so they survive a refresh.
   for (const [id, key, parser] of [
@@ -127,6 +141,7 @@ function bindSetupForm() {
     ['batch-size', 'batchSize', (v) => Math.max(1, parseInt(v, 10) || 5)],
     ['price-in', 'priceInPerMTokens', (v) => Math.max(0, parseFloat(v) || 0)],
     ['price-out', 'priceOutPerMTokens', (v) => Math.max(0, parseFloat(v) || 0)],
+    ['marking-mode', 'markingMode', (v) => v || 'auto'],
   ]) {
     $(id).addEventListener('change', () => {
       state.settings = saveSettings({ [key]: parser($(id).value) });
@@ -135,6 +150,145 @@ function bindSetupForm() {
   $('test-mode').addEventListener('change', () => {
     state.settings = saveSettings({ testMode: $('test-mode').checked });
   });
+
+  populateBuiltinCatalog();
+  applySourceVisibility();
+}
+
+async function populateBuiltinCatalog() {
+  try {
+    state.catalog = await loadCatalog();
+  } catch (e) {
+    console.warn('Built-in catalog not available:', e);
+    state.catalog = [];
+  }
+  const sel = $('builtin-select');
+  sel.innerHTML = '<option value="">— choose —</option>' +
+    state.catalog.map((w) =>
+      `<option value="${w.id}">${escapeAttr(w.title)} (${w.totalPages || '?'} pages)</option>`
+    ).join('');
+  if (state.catalog.length === 0) {
+    $('builtin-status').textContent = 'No built-in worksheets are available.';
+  }
+}
+
+function escapeAttr(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function onSourceChange() {
+  const checked = document.querySelector('input[name="source-mode"]:checked');
+  state.sourceMode = checked ? checked.value : 'builtin';
+  applySourceVisibility();
+  // Reset any loaded PDF state so the next picker action fully drives it.
+  state.pdf = null;
+  state.pdfBlob = null;
+  state.selectedWorksheet = null;
+  state.resumableAttempt = null;
+  $('pdf-status').textContent = '';
+  $('color-warning').hidden = true;
+  $('builtin-resume').hidden = true;
+  // Clear auto-filled fields so the next picker drives them fresh.
+  $('question-pages').value = '';
+  $('answer-pages').value = '';
+  $('meta-subject').value = '';
+  $('meta-level').value = '';
+  $('builtin-description').textContent = '';
+  $('builtin-status').textContent = '';
+  $('pdf-input').value = '';
+  $('builtin-select').value = '';
+}
+
+function applySourceVisibility() {
+  $('builtin-picker').hidden = state.sourceMode !== 'builtin';
+  $('upload-picker').hidden = state.sourceMode !== 'upload';
+}
+
+async function onBuiltinSelect() {
+  const id = $('builtin-select').value;
+  $('builtin-resume').hidden = true;
+  if (!id) {
+    state.selectedWorksheet = null;
+    state.pdf = null;
+    state.pdfBlob = null;
+    $('builtin-description').textContent = '';
+    $('builtin-status').textContent = '';
+    return;
+  }
+  const w = state.catalog.find((x) => x.id === id);
+  if (!w) return;
+  state.selectedWorksheet = w;
+  $('builtin-description').textContent = w.description || '';
+  $('builtin-status').textContent = 'Loading…';
+  try {
+    state.pdfBlob = await fetchBuiltinPdf(w.pdfPath);
+    state.pdf = await loadPdfFromBlob(state.pdfBlob);
+    $('builtin-status').textContent = `${w.title} — ${state.pdf.numPages} pages`;
+    // Auto-fill metadata + page ranges (still editable).
+    if (w.subject) $('meta-subject').value = w.subject;
+    if (w.level) $('meta-level').value = w.level;
+    $('question-pages').value = w.questionPages || '';
+    $('answer-pages').value = w.answerPages || '';
+    // Color check (non-blocking).
+    runColorCheck();
+    // Resume prompt if a saved attempt exists.
+    const aid = builtinAttemptId(w.id);
+    if (await attemptExists(aid)) {
+      const banner = $('builtin-resume');
+      banner.hidden = false;
+      banner.innerHTML =
+        `Saved work found for <strong>${escapeAttr(w.title)}</strong>.` +
+        `<div class="actions">` +
+        `<button id="resume-continue" type="button" class="primary">Continue previous attempt</button>` +
+        `<button id="resume-restart" type="button">Start from scratch</button>` +
+        `</div>`;
+      $('resume-continue').addEventListener('click', () => onResumeBuiltin(w, 'continue'));
+      $('resume-restart').addEventListener('click', () => onResumeBuiltin(w, 'restart'));
+    }
+  } catch (e) {
+    $('builtin-status').textContent = 'Failed to load worksheet: ' + (e?.message || e);
+  }
+}
+
+async function onResumeBuiltin(worksheet, mode) {
+  const aid = builtinAttemptId(worksheet.id);
+  if (mode === 'restart') {
+    if (!confirm(`Discard saved strokes and saved report for "${worksheet.title}" and start a blank attempt?`)) return;
+    await deleteAttempt(aid);
+    $('builtin-resume').hidden = true;
+    // Fall through into a fresh practice attempt using the auto-filled fields.
+    await onStartPractice();
+    return;
+  }
+  // continue: load existing attempt and jump straight into Practice.
+  const existing = await getAttempt(aid);
+  if (!existing) return;
+  state.attempt = existing;
+  // Refresh in-memory PDF from the catalog (Blob isn't reliably persisted).
+  if (!state.pdf) {
+    state.pdfBlob = await fetchBuiltinPdf(worksheet.pdfPath);
+    state.pdf = await loadPdfFromBlob(state.pdfBlob);
+  }
+  state.currentPage = existing.currentPage || (existing.questionPages?.[0] ?? 1);
+  setStage('practice');
+  await loadCurrentPage();
+}
+
+async function runColorCheck() {
+  $('color-warning').hidden = true;
+  if (!state.pdf) return;
+  try {
+    const ratio = await colorContentRatio(state.pdf);
+    if (ratio > 0.02) {
+      $('color-warning').hidden = false;
+      $('color-warning').textContent =
+        'This worksheet contains color content. The marking AI works best with black-and-white worksheets. ' +
+        'You can continue, but accuracy may be reduced on pages with colored elements.';
+    }
+  } catch (e) {
+    console.warn('Color check failed', e);
+  }
 }
 
 async function onPdfPicked(ev) {
@@ -146,25 +300,14 @@ async function onPdfPicked(ev) {
     state.pdfBlob = file;
     state.pdf = await loadPdfFromBlob(file);
     $('pdf-status').textContent = `${file.name} — ${state.pdf.numPages} pages`;
-    // Suggest sensible defaults
+    // Suggest sensible defaults for upload only.
     if (!$('question-pages').value) {
       $('question-pages').value = `1-${Math.max(1, state.pdf.numPages - 4)}`;
     }
     if (!$('answer-pages').value && state.pdf.numPages > 4) {
       $('answer-pages').value = `${state.pdf.numPages - 3}-${state.pdf.numPages}`;
     }
-    // Color check (non-blocking).
-    try {
-      const ratio = await colorContentRatio(state.pdf);
-      if (ratio > 0.02) {
-        $('color-warning').hidden = false;
-        $('color-warning').textContent =
-          'This worksheet contains color content. The marking AI works best with black-and-white worksheets. ' +
-          'You can continue, but accuracy may be reduced on pages with colored elements.';
-      }
-    } catch (e) {
-      console.warn('Color check failed', e);
-    }
+    runColorCheck();
   } catch (e) {
     $('pdf-status').textContent = 'Failed to load PDF: ' + (e?.message || e);
   }
@@ -209,18 +352,49 @@ async function onStartPractice() {
     testMode: $('test-mode').checked,
     priceInPerMTokens: Math.max(0, parseFloat($('price-in').value) || 0),
     priceOutPerMTokens: Math.max(0, parseFloat($('price-out').value) || 0),
+    markingMode: $('marking-mode').value || 'auto',
   });
 
   const subject = $('meta-subject').value.trim();
   const level = $('meta-level').value.trim();
-  const pdfName = $('pdf-input').files?.[0]?.name || 'worksheet.pdf';
+
+  // Determine attempt id and pdfName based on source.
+  let attemptId, pdfName, builtinId = null;
+  if (state.sourceMode === 'builtin') {
+    if (!state.selectedWorksheet) {
+      $('page-range-error').hidden = false;
+      $('page-range-error').textContent = 'Select a built-in worksheet first.';
+      return;
+    }
+    builtinId = state.selectedWorksheet.id;
+    attemptId = builtinAttemptId(builtinId);
+    pdfName = state.selectedWorksheet.title;
+    // If user changed their mind and clicked Start practice while a saved
+    // attempt exists, treat that as a fresh start (the resume banner is the
+    // explicit "continue" path).
+    const existing = await getAttempt(attemptId);
+    if (existing) {
+      const overwrite = confirm(
+        `Saved work exists for "${state.selectedWorksheet.title}".\n\n` +
+        `OK = discard the saved work and start a fresh attempt.\n` +
+        `Cancel = keep saved work; close this dialog and use "Continue previous attempt" above.`
+      );
+      if (!overwrite) return;
+      await deleteAttempt(attemptId);
+    }
+  } else {
+    attemptId = 'att_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    pdfName = $('pdf-input').files?.[0]?.name || 'worksheet.pdf';
+  }
 
   // Create attempt
   state.attempt = {
-    id: 'att_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    id: attemptId,
     createdAt: Date.now(),
     pdfName,
-    pdfBlob: state.pdfBlob,
+    builtinId,
+    pdfBlob: state.sourceMode === 'upload' ? state.pdfBlob : null,
+    pdfPath: state.sourceMode === 'builtin' ? state.selectedWorksheet.pdfPath : null,
     subject,
     level,
     questionPages,
@@ -421,15 +595,39 @@ async function onSubmit() {
   let qPages = [...state.attempt.questionPages];
   if (state.settings.testMode) qPages = qPages.slice(0, 2);
   const aPages = state.attempt.answerPages;
-  const batchSize = state.settings.batchSize || 5;
-  const numBatches = Math.ceil(qPages.length / batchSize);
-  const totalImagesPerBatch = batchSize + aPages.length;
-  const totalImages = qPages.length + aPages.length * numBatches;
 
+  // Resolve marking mode (Auto chooses between single combined and batch4_fullpage).
+  const requestedMode = state.settings.markingMode || 'auto';
+  let mode = requestedMode;
+  if (mode === 'auto') {
+    mode = qPages.length <= 4 ? 'single_fullpage' : 'batch4_fullpage';
+  }
+
+  // Build the batches up front so we can show a confirmation with image counts.
+  // Each "batch" is: { label, completedImages: [{pageNumber, dataUrl}], answerImages: same array each time }
+  let batchesPlan; // [{ pages: number[], composite: "fullpage"|"fourup" }]
+  if (mode === 'single_fullpage') {
+    batchesPlan = [{ pages: qPages, composite: 'fullpage' }];
+  } else if (mode === 'batch4_fourup') {
+    batchesPlan = chunkInto(qPages, 4).map((g) => ({ pages: g, composite: 'fourup' }));
+  } else {
+    // batch4_fullpage
+    batchesPlan = chunkInto(qPages, 4).map((g) => ({ pages: g, composite: 'fullpage' }));
+  }
+
+  const imagesPerBatch = batchesPlan.map((b) => (b.composite === 'fourup' ? 1 : b.pages.length) + aPages.length);
+  const totalImages = imagesPerBatch.reduce((a, b) => a + b, 0);
+  const modeLabel = (
+    requestedMode === 'auto' ? `Auto → ${humanMode(mode)}` : humanMode(mode)
+  );
   const ok = confirm(
-    `About to send ${totalImages} images to OpenAI in ${numBatches} batch(es).\n` +
-    `Each batch: up to ${batchSize} completed pages + ${aPages.length} answer pages = ` +
-    `${totalImagesPerBatch} images.\n\nContinue?`
+    `Marking mode: ${modeLabel}\n` +
+    `About to send ${totalImages} images to OpenAI in ${batchesPlan.length} request(s).\n` +
+    batchesPlan.map((b, i) =>
+      `  Request ${i + 1}: ${b.composite === 'fourup' ? '1 4-up image' : b.pages.length + ' full-page image(s)'}` +
+      ` covering pages ${b.pages.join(', ')} + ${aPages.length} answer page(s)`
+    ).join('\n') +
+    `\n\nContinue?`
   );
   if (!ok) return;
 
@@ -440,16 +638,16 @@ async function onSubmit() {
 
   const dpi = state.settings.renderDpi || 150;
 
-  // Flatten all completed question pages (cache for later download).
+  // Flatten all completed question pages once (cache for "download attempt").
   const completedPagesAll = [];
   for (const pageNum of qPages) {
     if (state.cancelMarking) return abortMarking('Cancelled');
     const strokes = await getStrokesForPage(state.attempt.id, pageNum);
     const dataUrl = await flattenQuestionPage(state.pdf, pageNum, strokes, dpi);
-    completedPagesAll.push({ pageNumber: pageNum, dataUrl });
+    completedPagesAll.push({ pageNumber: pageNum, dataUrl, strokes });
     $('marking-status').textContent = `Flattening ${completedPagesAll.length}/${qPages.length} pages…`;
   }
-  state.flattenedCompletedPages = completedPagesAll;
+  state.flattenedCompletedPages = completedPagesAll.map(({ pageNumber, dataUrl }) => ({ pageNumber, dataUrl }));
 
   // Render answer pages once.
   const answerImages = [];
@@ -459,13 +657,39 @@ async function onSubmit() {
     answerImages.push({ pageNumber: pageNum, dataUrl });
   }
 
-  // Run batches.
-  const batches = chunkPages(completedPagesAll, batchSize);
+  // Now build per-batch image arrays, composing 4-up sheets where requested.
+  const completedByPage = new Map(completedPagesAll.map((p) => [p.pageNumber, p]));
+  const batches = [];
+  for (const plan of batchesPlan) {
+    if (plan.composite === 'fourup') {
+      const tilePages = plan.pages.map((n) => ({
+        pageNumber: n,
+        strokes: completedByPage.get(n).strokes,
+      }));
+      const composed = await composeFourUpA4(state.pdf, tilePages, { dpi: 200 });
+      // Use the first page of the group as the representative pageNumber so
+      // the existing image-label logic still works (the prompt text already
+      // mentions "Completed worksheet page PDF p.N"; for 4-up the per-tile
+      // labels are baked into the image itself).
+      batches.push({
+        completed: [{ pageNumber: plan.pages[0], dataUrl: composed.dataUrl, fourup: true, includedPageNumbers: composed.includedPageNumbers }],
+        answer: answerImages,
+        plannedPages: plan.pages,
+      });
+    } else {
+      batches.push({
+        completed: plan.pages.map((n) => ({ pageNumber: n, dataUrl: completedByPage.get(n).dataUrl })),
+        answer: answerImages,
+        plannedPages: plan.pages,
+      });
+    }
+  }
+
   const batchListEl = $('batch-list');
   batches.forEach((b, i) => {
     const li = document.createElement('li');
     li.id = `batch-${i}`;
-    li.textContent = `Batch ${i + 1}: pages ${b.map((p) => p.pageNumber).join(', ')} — pending`;
+    li.textContent = `Request ${i + 1}: pages ${b.plannedPages.join(', ')} — pending`;
     batchListEl.appendChild(li);
   });
 
@@ -480,21 +704,21 @@ async function onSubmit() {
       for (let j = i; j < batches.length; j++) {
         const li = $(`batch-${j}`);
         if (li && !li.classList.contains('done') && !li.classList.contains('failed')) {
-          li.textContent = `Batch ${j + 1}: pages ${batches[j].map((p) => p.pageNumber).join(', ')} — skipped (stopped)`;
+          li.textContent = `Request ${j + 1}: pages ${batches[j].plannedPages.join(', ')} — skipped (stopped)`;
           li.classList.add('failed');
         }
       }
       break;
     }
     const li = $(`batch-${i}`);
-    li.textContent = `Batch ${i + 1}: pages ${batches[i].map((p) => p.pageNumber).join(', ')} — sending…`;
-    $('marking-status').textContent = `Marking batch ${i + 1} of ${batches.length}…`;
+    li.textContent = `Request ${i + 1}: pages ${batches[i].plannedPages.join(', ')} — sending…`;
+    $('marking-status').textContent = `Marking request ${i + 1} of ${batches.length}…`;
     try {
       const res = await markBatch({
         apiKey: state.settings.openaiKey,
         model: state.settings.openaiModel,
-        completedPageImages: batches[i],
-        answerPageImages: answerImages,
+        completedPageImages: batches[i].completed,
+        answerPageImages: batches[i].answer,
         subject: state.attempt.subject,
         level: state.attempt.level,
       });
@@ -502,21 +726,21 @@ async function onSubmit() {
       if (res.usage) {
         batchUsages.push({
           index: i,
-          pages: batches[i].map((p) => p.pageNumber),
+          pages: batches[i].plannedPages,
           usage: res.usage,
         });
       }
       li.classList.add('done');
-      li.textContent = `Batch ${i + 1}: pages ${batches[i].map((p) => p.pageNumber).join(', ')} — done`;
+      li.textContent = `Request ${i + 1}: pages ${batches[i].plannedPages.join(', ')} — done`;
     } catch (e) {
       console.error('Batch failed', e);
       li.classList.add('failed');
-      li.textContent = `Batch ${i + 1}: failed — ${e.message}`;
-      const retry = confirm(`Batch ${i + 1} failed:\n${e.message}\n\nRetry?`);
+      li.textContent = `Request ${i + 1}: failed — ${e.message}`;
+      const retry = confirm(`Request ${i + 1} failed:\n${e.message}\n\nRetry?`);
       if (retry) { i--; continue; }
       failedBatches.push({
         index: i,
-        pages: batches[i].map((p) => p.pageNumber),
+        pages: batches[i].plannedPages,
         error: e.message,
       });
       // Fall through with partial batches; merged report will show what we have.
@@ -577,6 +801,15 @@ async function onSubmit() {
 
 function abortMarking(reason) {
   $('marking-status').textContent = reason;
+}
+
+function humanMode(mode) {
+  switch (mode) {
+    case 'single_fullpage': return 'Single combined request, full-page images';
+    case 'batch4_fullpage': return 'Batch by 4 pages, full-page images';
+    case 'batch4_fourup':   return 'Batch by 4 pages, 4-up A4 combined images';
+    default:                return mode;
+  }
 }
 
 // --- Report ---------------------------------------------------------------

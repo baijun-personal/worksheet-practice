@@ -47,8 +47,33 @@
       <h1>Set up a worksheet</h1>
 
       <div class="card">
-        <h2>Worksheet PDF</h2>
-        <input id="pdf-input" type="file" accept="application/pdf" />
+        <h2>Worksheet</h2>
+        <div role="radiogroup" aria-label="Worksheet source" class="source-toggle">
+          <label class="checkbox">
+            <input type="radio" name="source-mode" value="builtin" checked />
+            Use built-in worksheet
+          </label>
+          <label class="checkbox">
+            <input type="radio" name="source-mode" value="upload" />
+            Upload my own PDF
+          </label>
+        </div>
+
+        <div id="builtin-picker">
+          <label>Built-in worksheet
+            <select id="builtin-select">
+              <option value="">— choose —</option>
+            </select>
+          </label>
+          <p id="builtin-description" class="muted small"></p>
+          <p id="builtin-status" class="muted"></p>
+          <div id="builtin-resume" class="warning" hidden></div>
+        </div>
+
+        <div id="upload-picker" hidden>
+          <input id="pdf-input" type="file" accept="application/pdf" />
+        </div>
+
         <p id="pdf-status" class="muted"></p>
         <p id="color-warning" class="warning" hidden></p>
       </div>
@@ -89,7 +114,19 @@
             <option value="200">200 (sharper)</option>
           </select>
         </label>
-        <label>Pages per batch
+        <label>Marking mode
+          <select id="marking-mode">
+            <option value="auto">Auto (recommended)</option>
+            <option value="single_fullpage">Single combined request — full-page images</option>
+            <option value="batch4_fourup">Batch by 4 pages — 4-up A4 combined images (test)</option>
+            <option value="batch4_fullpage">Batch by 4 pages — full-page images</option>
+          </select>
+        </label>
+        <p class="muted small">
+          Auto: single request when ≤ 4 question pages, otherwise batch by 4 pages with full-page images.
+          The 4-up A4 option packs 4 pages into one image to reduce image count and cost; treat it as a test layout.
+        </p>
+        <label>Pages per batch <span class="muted small">(only used in legacy batch sizing — Marking mode now controls grouping)</span>
           <input id="batch-size" type="number" min="1" max="20" step="1" />
         </label>
         <label class="checkbox">

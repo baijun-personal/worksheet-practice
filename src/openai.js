@@ -117,7 +117,20 @@ export async function markBatch({
   // to specific PDF page numbers reliably.
   const content = [{ type: 'text', text: userText }];
   for (const p of completedPageImages) {
-    content.push({ type: 'text', text: `Completed worksheet page PDF p.${p.pageNumber}` });
+    let label;
+    if (p.fourup && Array.isArray(p.includedPageNumbers)) {
+      const order = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+      const tiles = p.includedPageNumbers
+        .map((n, i) => `${order[i] || `tile ${i + 1}`}: PDF p.${n}`)
+        .join('; ');
+      label =
+        `Completed worksheet 4-up sheet — four worksheet pages arranged 2x2 on one A4 image (${tiles}). ` +
+        `Each tile has a small blue label printed at the top of its quadrant naming the source PDF page. ` +
+        `Use those tile labels to populate completed_page_number per question.`;
+    } else {
+      label = `Completed worksheet page PDF p.${p.pageNumber}`;
+    }
+    content.push({ type: 'text', text: label });
     content.push({
       type: 'image_url',
       image_url: { url: p.dataUrl, detail: 'high' },

@@ -16,6 +16,12 @@ const DEFAULTS = {
   // "estimated" and is computed from these rates only.
   priceInPerMTokens: 0.15,
   priceOutPerMTokens: 0.60,
+  // Marking mode: how completed pages are grouped before sending to OpenAI.
+  // - "auto"            → single combined (≤4 question pages) or batch4_fullpage (>4)
+  // - "single_fullpage" → one request, all completed pages as separate full-page images
+  // - "batch4_fullpage" → groups of 4 pages, full-page images per page
+  // - "batch4_fourup"   → groups of 4 pages, composed into one 4-up A4 image per group
+  markingMode: 'auto',
   passphrase: '', // empty = unlocked; first run sets it
   unlocked: false,
 };

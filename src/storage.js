@@ -65,6 +65,11 @@ export async function getAttempt(id) {
   return reqToPromise(t.objectStore('attempts').get(id));
 }
 
+export async function attemptExists(id) {
+  const a = await getAttempt(id);
+  return !!a;
+}
+
 export async function listAttempts() {
   const t = await tx('attempts', 'readonly');
   return reqToPromise(t.objectStore('attempts').getAll());
