@@ -65,7 +65,6 @@ export function attachInkController({
   getTool,               // () => "pen" | "eraser"
   onStrokeAdded,         // async (stroke) => void
   onStrokeRemoved,       // async (strokeId) => void
-  onRedrawRequested,     // () => Promise<void>
 }) {
   // Match canvas backing-store size to its CSS size on each redraw.
   const ctx = inkCanvas.getContext('2d');
@@ -74,6 +73,14 @@ export function attachInkController({
   let activePointerId = null;
   let currentPoints = null;
   let currentStroke = null;
+  // Eraser: prevent overlapping erase operations. pointermove can fire
+  // every few ms; eraseAt awaits IndexedDB. Without a flag, two
+  // concurrent calls can read the same stroke list and both pick the
+  // same stroke (one becomes a no-op delete). The flag also keeps the
+  // canvas redraw (triggered inside onStrokeRemoved) coherent — the
+  // next erase event won't queue until the previous one's UI repaint
+  // has completed.
+  let erasing = false;
 
   function localPoint(ev) {
     const rect = inkCanvas.getBoundingClientRect();
@@ -160,19 +167,25 @@ export function attachInkController({
   }
 
   async function eraseAt(ev) {
-    const meta = getPageMeta();
-    if (!meta) return;
-    const p = localPoint(ev);
-    const strokes = await getStrokes();
-    const hitRadiusNormX = ERASER_HIT_RADIUS_PT / meta.pageWidthPts;
-    const hitRadiusNormY = ERASER_HIT_RADIUS_PT / meta.pageHeightPts;
-    let hit = null;
-    // Find the most recent stroke whose path passes near the pointer
-    for (let i = strokes.length - 1; i >= 0; i--) {
-      const s = strokes[i];
-      if (strokeNearPoint(s, p, hitRadiusNormX, hitRadiusNormY)) { hit = s; break; }
+    if (erasing) return;
+    erasing = true;
+    try {
+      const meta = getPageMeta();
+      if (!meta) return;
+      const p = localPoint(ev);
+      const strokes = await getStrokes();
+      const hitRadiusNormX = ERASER_HIT_RADIUS_PT / meta.pageWidthPts;
+      const hitRadiusNormY = ERASER_HIT_RADIUS_PT / meta.pageHeightPts;
+      let hit = null;
+      // Find the most recent stroke whose path passes near the pointer.
+      for (let i = strokes.length - 1; i >= 0; i--) {
+        const s = strokes[i];
+        if (strokeNearPoint(s, p, hitRadiusNormX, hitRadiusNormY)) { hit = s; break; }
+      }
+      if (hit) await onStrokeRemoved(hit.id);
+    } finally {
+      erasing = false;
     }
-    if (hit) await onStrokeRemoved(hit.id);
   }
 
   function strokeNearPoint(stroke, p, rx, ry) {
@@ -190,7 +203,8 @@ export function attachInkController({
     if (!ev.isPrimary) return;
     if (getTool() === 'eraser') {
       ev.preventDefault();
-      eraseAt(ev);
+      // .catch so IndexedDB errors aren't swallowed silently.
+      eraseAt(ev).catch((e) => console.error('eraseAt failed', e));
     } else {
       ev.preventDefault();
       startPenStroke(ev);
@@ -198,7 +212,7 @@ export function attachInkController({
   }
   function onPointerMove(ev) {
     if (getTool() === 'eraser' && ev.buttons > 0 && ev.isPrimary) {
-      eraseAt(ev);
+      eraseAt(ev).catch((e) => console.error('eraseAt failed', e));
       return;
     }
     if (drawing && ev.pointerId === activePointerId) {

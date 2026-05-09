@@ -1,12 +1,15 @@
 // OpenAI vision calls. Uses chat/completions with image_url parts.
 //
-// Marking is split into two extractions plus a code-side comparison:
-//   - extractStudentAnswers(): completed worksheet pages only.
-//   - extractAnswerKey():      answer sheet pages only.
-//   - compareExtractions() in compare.js merges the two structured outputs.
-// Keeping the two reads isolated stops the answer key from biasing how the
-// model reads the student's handwriting (observed failure mode: model
-// "reads" a 1 as a 4 because the key expected 4).
+// Marking is staged across multiple OpenAI calls:
+//   - extractStudentAnswers(): vision, completed worksheet pages only.
+//   - extractAnswerKey():      vision, answer sheet pages only.
+//   - markPairs():             text-only, semantic comparison of matched
+//                              text pairs in a single batched call.
+//   - compareVisualPair():     vision, one call per drawing/diagram pair.
+// Keeping the student/answer-key reads isolated stops the answer key from
+// biasing how the model reads the student's handwriting (observed failure
+// mode: model "reads" a 1 as a 4 because the key expected 4). Matching is
+// then deterministic in code (compare.js: matchExtractions).
 //
 // Model is configurable via MODEL_PRESETS below; default "gpt-5.4-mini".
 // Verify against current OpenAI model list when iterating; the model name
@@ -109,7 +112,11 @@ Compare each student answer with the expected answer.
 Mark:
 - correct: same answer or same meaning (paraphrases, equivalent forms, equivalent units, minor formatting differences are correct).
 - incorrect: different meaning, wrong choice, irrelevant answer, OR student answer is blank/missing while the expected answer is present.
-- unclear: expected answer is missing, the extracted student answer reads "unclear" or is unreadable, the question matching is uncertain (low match_confidence), or the answer genuinely cannot be judged from the extracted text.
+- unclear: expected answer is missing, the extracted student answer reads "unclear" or is unreadable, the question matching is uncertain, or the answer genuinely cannot be judged from the extracted text.
+
+Confidence rule: treat match_confidence >= 0.8 as reliable — do not mark an item "unclear" solely because of match_confidence in that range. Only use "unclear" when the answer text itself is missing/unreadable or the comparison genuinely cannot be made.
+
+For MCQ-style answers, "3 (scooped)" should be considered the same as "3" or "scooped" alone — match by either component.
 
 The 'question' field carries the printed question label (e.g. "Q17", "Q19(i)"); preserve it exactly in your output.
 
@@ -144,16 +151,18 @@ For questions with subparts (e.g. Q19 with parts (i) and (ii)), output ONE entry
 
 For each answer, set "answer_type" to one of:
 - "text": short or long handwritten text answer.
-- "choice": MCQ option letter ("A", "B") or option number ("3").
+- "choice": MCQ option letter ("A", "B") or option number ("3"). For choice questions, if the selected option's text is visible next to the option number/letter, include both in "answer", e.g. "3 (scooped)" or "B (the dolphin jumped)". This helps later comparison when the answer key extraction may carry the option text instead of the number.
 - "number": numeric answer (units optional).
 - "tick_box": the child ticked one or more boxes; "answer" should list which (e.g. "B and D").
-- "drawing": the answer is a drawing or marking (clock hands, shaded fraction, lines, arrows, plotted points, completed diagram, etc.). For "answer", give a short description like "student drew a line from A to B" or "student shaded the right half" — visual judgement happens later.
-- "diagram_label": the child labelled or annotated a diagram visually. Same description style as "drawing".
+- "drawing": the answer is a drawing or marking. Examples: shaded area, shaded fraction, circled item, underlined item, matching line, arrow, graph point, plotted point, clock hand, completed diagram, drawn shape, drawn angle.
+- "diagram_label": the child labelled or annotated a diagram visually.
 - "unknown": cannot determine confidently.
 
-Do NOT force a drawing answer into plain text. If the child's answer is fundamentally visual, set answer_type="drawing" (or "diagram_label") and let the description be brief — the final mark for these is decided by a separate visual comparison stage.
+CLASSIFICATION RULE: if the answer cannot be FULLY represented as typed text — i.e. the visual placement / shape / mark on the page is what carries the meaning — classify it as "drawing" or "diagram_label", NOT "text". Forcing a drawing into a short text description and routing it through text-equality comparison reliably marks it wrong. For drawing/diagram_label answers, "answer" is just a brief human description for the parent to read; the final mark uses a separate visual comparison stage.
 
 If a worksheet has multiple sections, capture the section label (e.g. "Section A - Vocabulary"). Use the page number from the image label.
+
+For 4-up images: each tile has a small dark-grey label "PDF page N — not student answer" above its quadrant. Use that tile label to set "page" for answers in that quadrant. The dark-grey labels are NOT student answers — student answers are blue.
 
 If an answer is unreadable, set "answer" to "unclear" and a low confidence.
 
@@ -182,7 +191,9 @@ For multi-part questions, output ONE entry per subpart with question_number valu
 For each expected answer, set "answer_type" to one of the same values used for the student extraction:
 - "text", "choice", "number", "tick_box", "drawing", "diagram_label", "unknown".
 
-For visual expected answers (drawings, diagrams, shading, lines, plotted points, etc.), set answer_type="drawing" (or "diagram_label") and let "answer" be a short description ("a clock showing 3:15", "the upper half shaded", "lines connecting A→3, B→1"). The final judgement for these is done by visual comparison, not by text equality.
+For choice questions, if the option text is visible next to the option number/letter on the answer sheet, include both in "answer", e.g. "3 (scooped)" or "B (the dolphin jumped)". This helps later comparison when the student's extraction may carry the option number while the key carries the option text or vice versa.
+
+CLASSIFICATION RULE: if the expected answer cannot be FULLY represented as typed text — shaded area, matching line, arrow, plotted point, clock hand, completed diagram, drawn shape, etc. — classify it as "drawing" or "diagram_label", NOT "text". For these visual expected answers, "answer" is a short description ("a clock showing 3:15", "the upper half shaded", "lines connecting A→3, B→1"); the final judgement is done by a separate visual comparison stage, not by text equality.
 
 If a worksheet has multiple sections, capture the section label. Use the page number from the image label.
 
@@ -214,7 +225,10 @@ export async function extractStudentAnswers({
   const content = [];
   for (const p of completedPageImages) {
     const label = (p.fourup && Array.isArray(p.includedPageNumbers))
-      ? `Completed 4-up image: pages ${p.includedPageNumbers.join(', ')} arranged 2x2 and labelled in the image.`
+      ? `Completed 4-up image: pages ${p.includedPageNumbers.join(', ')} arranged 2x2 and labelled in the image. ` +
+        `Each tile carries a small dark-grey label "PDF page N — not student answer" above its quadrant. ` +
+        `Use that tile label to identify the page number for any answer in that quadrant. ` +
+        `The dark-grey labels are NOT student answers — student answers are blue.`
       : `Completed page ${p.pageNumber}`;
     content.push({ type: 'text', text: label });
     content.push({ type: 'image_url', image_url: { url: p.dataUrl, detail: 'high' } });
@@ -379,10 +393,4 @@ async function chatJson({ apiKey, model, system, content, signal, apiMode, proxy
     throw new Error('OpenAI response was not valid JSON: ' + text.slice(0, 200));
   }
   return { parsed, raw: json, usage: json.usage };
-}
-
-export function chunkPages(pages, size) {
-  const out = [];
-  for (let i = 0; i < pages.length; i += size) out.push(pages.slice(i, i + size));
-  return out;
 }

@@ -1050,7 +1050,18 @@ async function navigateBy(dir) {
   if (next != null) {
     state.currentPage = next;
     state.attempt.currentPage = next;
-    putAttempt(state.attempt);
+    // Persist the new currentPage as a tracked autosave (was fire-and-
+    // forget before — failures were silent and the indicator still read
+    // 'saved'). Render the page in parallel; failures of either surface
+    // through their own UI hooks.
+    setAutosave('saving…', 'saving');
+    try {
+      await putAttempt(state.attempt);
+      setAutosave('saved');
+    } catch (e) {
+      console.error('Failed to persist current page', e);
+      setAutosave('save failed', 'error');
+    }
     await loadCurrentPage();
     // Always land at the top-left of the new page so the user doesn't
     // start the next page mid-scroll from the previous one.
@@ -1124,14 +1135,6 @@ async function loadCurrentPage() {
         console.error(e);
         setAutosave('save failed', 'error');
       }
-    },
-    onRedrawRequested: async () => {
-      const all = await getStrokesForPage(state.attempt.id, state.currentPage);
-      redrawAll(inkCtx, all, {
-        widthPx: inkCanvas.width,
-        heightPx: inkCanvas.height,
-        pageWidthPts: state.pageMeta.pageWidthPts,
-      });
     },
   });
 
@@ -1545,18 +1548,33 @@ async function onSubmit() {
   const merged = buildFinalReport({ match, aiTextReport, visualResults });
   const compareUsedAi = !!aiTextReport;
 
+  // Compare-stage request count: 1 if the text compare ran + N for each
+  // visual pair. Visual pairs without page images don't trigger a request
+  // but still contribute an unclear row in the report.
+  const visualRequestsAttempted = visualResults.filter((v) => v.parsed || v.error).length;
+  const visualRequestsSucceeded = visualResults.filter((v) => v.parsed).length;
+  const extraCompareRequestCount = (canRunTextCompare ? 1 : 0) + visualRequestsAttempted;
+  const extraCompareCompleted = (compareUsedAi ? 1 : 0) + visualRequestsSucceeded;
+
   const stopped = cancelledAfterIndex != null;
   const skippedCount = stopped ? tasks.length - cancelledAfterIndex : 0;
-  if (failedTasks.length > 0 || stopped || compareError) {
+  if (failedTasks.length > 0 || stopped || compareError || (visualRequestsAttempted > visualRequestsSucceeded)) {
     merged.app_warnings = {
       incomplete: true,
-      batches_total: tasks.length + (canRunCompare ? 1 : 0),
-      batches_completed: (tasks.length - failedTasks.length - skippedCount) + (compareUsedAi ? 1 : 0),
-      failed_batches: failedTasks.map((t) => ({
-        index: t.index,
-        pages: t.pages,
-        error: `${t.kind === 'answer_key' ? 'Answer key' : 'Student answers'}: ${t.error}`,
-      })),
+      batches_total: tasks.length + extraCompareRequestCount,
+      batches_completed: (tasks.length - failedTasks.length - skippedCount) + extraCompareCompleted,
+      failed_batches: [
+        ...failedTasks.map((t) => ({
+          index: t.index,
+          pages: t.pages,
+          error: `${t.kind === 'answer_key' ? 'Answer key' : 'Student answers'}: ${t.error}`,
+        })),
+        ...visualResults.filter((v) => v.error).map((v) => ({
+          index: -1,
+          pages: [v.pair.completed_page, v.pair.answer_page].filter(Boolean),
+          error: `Visual compare ${v.pair.display_question || v.pair.question}: ${v.error}`,
+        })),
+      ],
       stopped_by_user: stopped,
       stopped_skipped_count: skippedCount,
       missing_answer_key: keyResults.length === 0 && answerImages.length > 0,

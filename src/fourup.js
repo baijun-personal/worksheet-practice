@@ -74,9 +74,13 @@ export async function composeFourUpA4(pdf, pages, opts = {}) {
     const { pageNumber, strokes } = pages[i];
     includedPageNumbers.push(pageNumber);
 
-    // Draw label band at top of the cell.
-    ctx.fillStyle = '#1a4fc4';
-    ctx.fillText(`Completed worksheet PDF p.${pageNumber}`, slot.x + 4, slot.y + labelH / 2);
+    // Draw label band at top of the cell. The color is intentionally
+    // dark grey, NOT blue: the extraction prompt tells the model that
+    // blue marks are the child's answers, so a blue label here would be
+    // a real misclassification risk. The wording also makes it clear
+    // the label is metadata, not a student answer.
+    ctx.fillStyle = '#5b6573';
+    ctx.fillText(`PDF page ${pageNumber} — not student answer`, slot.x + 4, slot.y + labelH / 2);
     ctx.fillStyle = '#14181f';
 
     // Render the page off-screen at a DPI matched to the tile size, then

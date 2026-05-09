@@ -8,12 +8,15 @@
 //   1. matchExtractions(): pairing student answers to answer-key entries by
 //      printed question identity (section + question_number, with a safe
 //      qnum-only fallback). Returns matched pairs + a not_in_attempt list.
-//   2. buildReportFromAi(): turning the final-stage AI compare response
-//      into the report shape used by the UI, enriched with local pair
-//      metadata (page numbers, section, display label) the AI doesn't see.
-//   3. scorePairsLocally(): a string-equality scorer used as a fallback
-//      when the AI compare call fails — keeps the user moving even if
-//      the third call breaks.
+//   2. partitionPairsByModality(): split into text vs visual pairs so
+//      they can be sent to the right comparison call.
+//   3. buildFinalReport(): merge the AI text-compare output and the
+//      per-question visual-compare outputs into the report shape used
+//      by the UI, enriched with local pair metadata (page numbers,
+//      section, display label) the AI doesn't see.
+//   4. scorePairsLocally(): a string-equality scorer used as a fallback
+//      when the AI text-compare call fails — keeps the user moving
+//      even if the call breaks.
 //
 // Why split? The compare prompt previously embedded BOTH semantic
 // reasoning AND image reading in a single OpenAI call, which was the
@@ -103,11 +106,17 @@ export function matchExtractions(studentBatchResults, answerKeyResults) {
   const keys = flattenAnswers(answerKeyResults);
 
   const keyByKey = new Map();
+  const keyByKeyAmbiguous = new Set();
   const keyByQNum = new Map();
   const keyByQNumAmbiguous = new Set();
   for (const k of keys) {
     if (k.section || k.question_number) {
-      keyByKey.set(compositeKey(k.section || '', k.question_number || ''), k);
+      const ck = compositeKey(k.section || '', k.question_number || '');
+      // If the same composite (section + question_number) appears more
+      // than once in the answer key, mark it ambiguous so we don't
+      // silently pair against whichever one happened to land last.
+      if (keyByKey.has(ck)) keyByKeyAmbiguous.add(ck);
+      else keyByKey.set(ck, k);
     }
     const qn = normalizeQNumber(k.question_number);
     if (qn) {
@@ -124,7 +133,13 @@ export function matchExtractions(studentBatchResults, answerKeyResults) {
     let matchMethod = 'unmatched';
     let matchConfidence = 0.5;
     const ck = compositeKey(s.section || '', s.question_number || '');
-    if (keyByKey.has(ck)) {
+    if (keyByKeyAmbiguous.has(ck)) {
+      // Composite key collides with another answer-key entry —
+      // refuse to pick one. Pair has no expected answer; AI compare
+      // gets a low match_confidence and should mark unclear.
+      matchMethod = 'ambiguous-composite-key';
+      matchConfidence = 0.4;
+    } else if (keyByKey.has(ck)) {
       key = keyByKey.get(ck);
       matchMethod = 'section+question_number';
       matchConfidence = 1.0;
@@ -173,81 +188,6 @@ export function matchExtractions(studentBatchResults, answerKeyResults) {
   return { pairs, not_in_attempt: notInAttempt, keysProvided: keys.length > 0 };
 }
 
-// Build the report consumed by the UI from the AI compare response,
-// enriched with local pair metadata.
-//   aiReport: { summary, questions[], redo[], weak_points[] } as returned
-//             by the COMPARE_PROMPT call (text-only, post-extraction).
-//   match:    { pairs, not_in_attempt, keysProvided } from matchExtractions.
-export function buildReportFromAi(aiReport, match) {
-  const pairsByQ = new Map();
-  for (const p of match.pairs) {
-    pairsByQ.set(normalizeQNumber(p.display_question || p.question), p);
-    pairsByQ.set(normalizeQNumber(p.question || ''), p);
-  }
-  const aiQuestions = Array.isArray(aiReport?.questions) ? aiReport.questions : [];
-  const seenLocalRefs = new Set();
-  const questions = aiQuestions.map((q) => {
-    const lookupKey =
-      pairsByQ.get(normalizeQNumber(q.question || '')) ||
-      pairsByQ.get(normalizeQNumber(q.display_question || ''));
-    if (lookupKey) seenLocalRefs.add(refOf(lookupKey));
-    return {
-      question: lookupKey?.question ?? String(q.question || ''),
-      section: lookupKey?.section ?? '',
-      display_question: lookupKey?.display_question ?? String(q.question || ''),
-      completed_page: lookupKey?.completed_page ?? null,
-      answer_page: lookupKey?.answer_page ?? null,
-      student_answer: q.student_answer ?? lookupKey?.student_answer ?? '',
-      expected_answer: q.expected_answer ?? lookupKey?.expected_answer ?? '',
-      status: normalizeStatus(q.status),
-      comment: q.comment ? String(q.comment) : '',
-    };
-  });
-
-  // Safety net: if the AI dropped any pair we sent, surface it as
-  // 'unclear' so it doesn't silently disappear.
-  for (const p of match.pairs) {
-    if (seenLocalRefs.has(refOf(p))) continue;
-    questions.push({
-      question: p.question,
-      section: p.section,
-      display_question: p.display_question,
-      completed_page: p.completed_page,
-      answer_page: p.answer_page,
-      student_answer: p.student_answer,
-      expected_answer: p.expected_answer,
-      status: 'unclear',
-      comment: 'AI compare did not return a row for this question.',
-    });
-  }
-
-  // If the AI didn't compute estimated_score, do it from rows.
-  let summary = aiReport?.summary || { estimated_score: '', comment: '' };
-  if (!summary.estimated_score) {
-    const correct = questions.filter((q) => q.status === 'correct').length;
-    const total = questions.length;
-    summary = {
-      estimated_score: total > 0 ? `${correct}/${total}` : '',
-      comment: summary.comment || '',
-    };
-  }
-
-  // Redo: incorrect rows from attempted questions only.
-  const redo = (Array.isArray(aiReport?.redo) && aiReport.redo.length > 0)
-    ? aiReport.redo
-    : questions.filter((q) => q.status === 'incorrect')
-        .map((q) => q.display_question || q.question)
-        .filter(Boolean);
-
-  return {
-    summary,
-    questions,
-    not_in_attempt: match.not_in_attempt,
-    redo,
-    weak_points: Array.isArray(aiReport?.weak_points) ? aiReport.weak_points : [],
-  };
-}
-
 // Pair classification: a pair is visual when either side's
 // answer_type is "drawing" or "diagram_label". "unknown" routes to
 // the text path by default — the text compare call returns "unclear"
@@ -270,8 +210,9 @@ export function partitionPairsByModality(match) {
 //   aiTextReport    — parsed JSON from markPairs() (text compare call) or null.
 //   visualResults   — [{ pair, parsed?, error? }] one per visual pair.
 //
-// Output: same report shape as buildReportFromAi(), but each pair's row
-// gets its status from the appropriate source:
+// Output report shape: { summary, questions, not_in_attempt, redo,
+// weak_points }. Each pair's row gets its status from the appropriate
+// source:
 //   - visual pairs   → matching entry in visualResults
 //   - text pairs     → matching entry in aiTextReport.questions
 //   - text pair with no AI result → local string-equality fallback
@@ -425,7 +366,7 @@ function scoreOnePairLocally(p, keysProvided) {
 }
 
 // Local string-equality scorer — used when the AI compare call fails.
-// Mirrors the shape of buildReportFromAi() so the rest of the app
+// Mirrors the shape of buildFinalReport() so the rest of the app
 // doesn't need to know which path produced the result.
 export function scorePairsLocally(match) {
   const pairs = match.pairs;
@@ -519,11 +460,4 @@ const _refMap = new WeakMap();
 function refOf(o) {
   if (!_refMap.has(o)) _refMap.set(o, ++_refSeq);
   return _refMap.get(o);
-}
-
-// Backward-compat shim: a few earlier diagnostics may still call
-// compareExtractions(). Route them to local scoring so nothing breaks.
-export function compareExtractions(studentBatchResults, answerKeyResults) {
-  const match = matchExtractions(studentBatchResults, answerKeyResults);
-  return scorePairsLocally(match);
 }
