@@ -271,6 +271,15 @@ Return JSON only. Each entry is EITHER flat (single answer) OR multi-part:
 
 const ANSWER_KEY_PROMPT = `Extract the expected answers from these answer sheet pages.
 
+CRITICAL — compact MCQ answer grids: many answer keys pack the MCQ section into a tight tabular grid where each cell holds a question number paired with its answer. For example:
+
+    | 1  | 1  | 6  | 2  | 11 | 4  | 16 | 4  | 21 | 3  | 26 | 1 |
+    | 2  | 2  | 7  | 4  | 12 | 3  | 17 | 4  | 22 | 3  | 27 | 3 |
+    | 3  | 4  | 8  | 2  | 13 | 2  | 18 | 3  | 23 | 1  | 28 | 2 |
+    ...
+
+Each "<number> <number>" pair in such a grid is ONE entry: the first number is the question_number and the second is the answer. The grid above carries 30 separate entries (Q1 answer 1, Q2 answer 2, Q3 answer 4, Q6 answer 2, Q7 answer 4, Q8 answer 2, Q11 answer 4, …). Output ALL of them, not just the open-ended answers below the grid. Do not skip the grid because it looks dense or repetitive — those compact pairs are the bulk of the answer key.
+
 Preserve the printed question_number EXACTLY as it appears (e.g. "17", "5a", "19(i)"). Do not renumber or skip questions.
 
 For LIST-ANSWER questions (single stem with several expected items, e.g. "Name two reasons"), output ONE entry with:
