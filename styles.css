@@ -293,7 +293,12 @@ body.app-immersive #page-indicator { display: none; }
 
 body.app-immersive #page-stage-frame {
   position: relative;
-  height: calc(100vh - 56px);   /* viewport minus the practice toolbar */
+  /* 100svh = smallest viewport height; on iPad Safari this excludes the
+     URL bar / home indicator so the frame stays inside the visible area
+     even when Safari's chrome is showing. Falls back to 100vh on browsers
+     that don't support svh. */
+  height: calc(100vh - 56px);
+  height: calc(100svh - 56px);
   overflow: hidden;
 }
 body.app-immersive #page-stage {
@@ -301,18 +306,20 @@ body.app-immersive #page-stage {
   min-height: 0;
   width: 100%;
   /* Leave room on the right for the vertical rail and at the bottom for
-     the page-nav bar so worksheet content can scroll past them. */
+     the page-nav bar (plus iPad home-indicator safe area) so worksheet
+     content can scroll past them. */
   padding-right: 36px;
-  padding-bottom: 80px;
+  padding-bottom: calc(80px + env(safe-area-inset-bottom));
 }
 
-/* Vertical rail: fixed against the right edge of the frame. */
+/* Vertical rail: position:fixed against the visible viewport so iPad
+   Safari can't push it below the visible area. */
 body.app-immersive .scroll-rail-v {
   display: block;
-  position: absolute;
-  top: 0;
+  position: fixed;
+  top: 56px;          /* sits below the practice toolbar */
   right: 0;
-  bottom: 64px;       /* leave room for the bottom nav bar */
+  bottom: calc(64px + env(safe-area-inset-bottom));
   width: 28px;
   background: rgba(255, 255, 255, 0.08);
   border-left: 1px solid rgba(255, 255, 255, 0.18);
@@ -321,10 +328,10 @@ body.app-immersive .scroll-rail-v {
 }
 /* Horizontal rail: only shown by JS when scrollWidth > clientWidth. */
 body.app-immersive .scroll-rail-h {
-  position: absolute;
+  position: fixed;
   left: 0;
   right: 28px;        /* don't overlap the vertical rail */
-  bottom: 64px;
+  bottom: calc(64px + env(safe-area-inset-bottom));
   height: 24px;
   background: rgba(255, 255, 255, 0.08);
   border-top: 1px solid rgba(255, 255, 255, 0.18);
@@ -361,19 +368,24 @@ body.app-immersive .scroll-rail-v[hidden] { display: none; }
 }
 .scroll-thumb:active { cursor: grabbing; background: rgba(255, 255, 255, 0.85); }
 
-/* Bottom page-nav bar: large prev/next + page indicator. */
+/* Bottom page-nav bar: large prev/next + page indicator.
+   position:fixed (not absolute) so iPad Safari can't push it under
+   the URL bar / home indicator. The padding-bottom honours
+   env(safe-area-inset-bottom) so the buttons stay above the home
+   indicator on iPad. */
 body.app-immersive #page-nav-bar {
   display: flex;
-  position: absolute;
+  position: fixed;
   bottom: 0;
   left: 0;
   right: 0;
-  height: 64px;
+  min-height: 64px;
   align-items: center;
   justify-content: center;
   gap: 24px;
   padding: 8px 16px;
-  background: rgba(0, 0, 0, 0.85);
+  padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  background: rgba(0, 0, 0, 0.92);
   color: white;
   z-index: 6;
   font-size: 16px;
