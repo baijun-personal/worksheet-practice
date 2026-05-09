@@ -42,6 +42,60 @@ const els = {};
 
 function $(id) { return document.getElementById(id); }
 
+// --- Helpers for shuttling attempt metadata into the setup form ----------
+
+function pageArrayToRange(arr) {
+  if (!arr || arr.length === 0) return '';
+  const sorted = [...new Set(arr.map(Number))].sort((a, b) => a - b);
+  const parts = [];
+  let runStart = sorted[0], runEnd = sorted[0];
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] === runEnd + 1) { runEnd = sorted[i]; continue; }
+    parts.push(runStart === runEnd ? `${runStart}` : `${runStart}-${runEnd}`);
+    runStart = runEnd = sorted[i];
+  }
+  parts.push(runStart === runEnd ? `${runStart}` : `${runStart}-${runEnd}`);
+  return parts.join(',');
+}
+
+function updateStartPracticeButton() {
+  const btn = $('start-practice-btn');
+  if (!btn) return;
+  btn.textContent = state.attempt ? 'Resume practice' : 'Start practice';
+}
+
+function fillSetupFormFromAttempt() {
+  if (!state.attempt) return;
+  $('question-pages').value = pageArrayToRange(state.attempt.questionPages);
+  $('answer-pages').value = pageArrayToRange(state.attempt.answerPages);
+  $('meta-subject').value = state.attempt.subject || '';
+  $('meta-level').value = state.attempt.level || '';
+  if (state.attempt.builtinId) {
+    const radio = document.querySelector('input[name="source-mode"][value="builtin"]');
+    if (radio) radio.checked = true;
+    state.sourceMode = 'builtin';
+    applySourceVisibility();
+    $('builtin-select').value = state.attempt.builtinId;
+    state.selectedWorksheet = state.catalog.find((w) => w.id === state.attempt.builtinId) || null;
+    if (state.selectedWorksheet) {
+      $('builtin-description').textContent = state.selectedWorksheet.description || '';
+    }
+    if (state.pdf) {
+      $('builtin-status').textContent = `${state.attempt.pdfName} — ${state.pdf.numPages} pages`;
+    }
+    $('builtin-resume').hidden = true; // suppress the Continue/Restart banner — already in an attempt
+  } else {
+    const radio = document.querySelector('input[name="source-mode"][value="upload"]');
+    if (radio) radio.checked = true;
+    state.sourceMode = 'upload';
+    applySourceVisibility();
+    if (state.pdf) {
+      $('pdf-status').textContent = `${state.attempt.pdfName} — ${state.pdf.numPages} pages`;
+    }
+  }
+  updateStartPracticeButton();
+}
+
 function setStage(stage) {
   state.stage = stage;
   for (const s of STAGES) {
@@ -92,6 +146,7 @@ function resetApp() {
   state.flattenedCompletedPages = null;
   state.reportJson = null;
   if (state.inkController) { state.inkController.detach(); state.inkController = null; }
+  updateStartPracticeButton();
   setStage('setup');
 }
 
@@ -240,7 +295,27 @@ function escapeAttr(s) {
 
 function onSourceChange() {
   const checked = document.querySelector('input[name="source-mode"]:checked');
-  state.sourceMode = checked ? checked.value : 'builtin';
+  const newMode = checked ? checked.value : 'builtin';
+  if (newMode === state.sourceMode) return;
+  // Switching source while an attempt is active means the PDF and stroke
+  // page-numbering would no longer match the attempt; require explicit
+  // confirmation to drop the attempt before changing source.
+  if (state.attempt) {
+    const ok = confirm(
+      'Switching worksheet source will leave the current attempt.\n\n' +
+      'OK = leave the attempt (it stays saved; you can pick the worksheet again to resume).\n' +
+      'Cancel = stay on the current source.'
+    );
+    if (!ok) {
+      const radio = document.querySelector(`input[name="source-mode"][value="${state.sourceMode}"]`);
+      if (radio) radio.checked = true;
+      return;
+    }
+    state.attempt = null;
+    if (state.inkController) { state.inkController.detach(); state.inkController = null; }
+    updateStartPracticeButton();
+  }
+  state.sourceMode = newMode;
   applySourceVisibility();
   // Reset any loaded PDF state so the next picker action fully drives it.
   state.pdf = null;
@@ -332,6 +407,9 @@ async function onResumeBuiltin(worksheet, mode) {
     state.pdf = await loadPdfFromBlob(state.pdfBlob);
   }
   state.currentPage = existing.currentPage || (existing.questionPages?.[0] ?? 1);
+  // Mirror the attempt's values into the setup form so the Setup back-button
+  // shows them (and lets the user edit before resuming).
+  fillSetupFormFromAttempt();
   setStage('practice');
   await loadCurrentPage();
 }
@@ -420,7 +498,37 @@ async function onStartPractice() {
   const subject = $('meta-subject').value.trim();
   const level = $('meta-level').value.trim();
 
-  // Determine attempt id and pdfName based on source.
+  // Update path: if there's an active attempt, just rewrite its metadata
+  // from the current form values and resume practice. Strokes saved on
+  // pages that fall outside the new question range stay in IndexedDB but
+  // are no longer visible (and won't be sent for marking).
+  if (state.attempt) {
+    const oldQ = new Set(state.attempt.questionPages || []);
+    const newQ = new Set(questionPages);
+    const dropped = [...oldQ].filter((p) => !newQ.has(p));
+    if (dropped.length > 0) {
+      const ok = confirm(
+        `Question pages no longer in the range: ${dropped.join(', ')}\n\n` +
+        `Strokes saved on those pages will be hidden but not deleted. Continue?`
+      );
+      if (!ok) return;
+    }
+    state.attempt.questionPages = questionPages;
+    state.attempt.answerPages = answerPages;
+    state.attempt.subject = subject;
+    state.attempt.level = level;
+    if (!questionPages.includes(state.attempt.currentPage)) {
+      state.attempt.currentPage = questionPages[0];
+    }
+    state.currentPage = state.attempt.currentPage;
+    await putAttempt(state.attempt);
+    setStage('practice');
+    await loadCurrentPage();
+    return;
+  }
+
+  // Determine attempt id and pdfName based on source for the fresh-create
+  // path.
   let attemptId, pdfName, builtinId = null;
   if (state.sourceMode === 'builtin') {
     if (!state.selectedWorksheet) {
@@ -431,9 +539,9 @@ async function onStartPractice() {
     builtinId = state.selectedWorksheet.id;
     attemptId = builtinAttemptId(builtinId);
     pdfName = state.selectedWorksheet.title;
-    // If user changed their mind and clicked Start practice while a saved
-    // attempt exists, treat that as a fresh start (the resume banner is the
-    // explicit "continue" path).
+    // If user clicked Start practice while a saved attempt exists, treat
+    // that as a fresh start (the resume banner is the explicit "continue"
+    // path).
     const existing = await getAttempt(attemptId);
     if (existing) {
       const overwrite = confirm(
@@ -467,6 +575,7 @@ async function onStartPractice() {
   };
   await putAttempt(state.attempt);
   state.currentPage = questionPages[0];
+  updateStartPracticeButton();
   setStage('practice');
   await loadCurrentPage();
 }
@@ -490,6 +599,7 @@ function bindPracticeUI() {
   $('prev-page-btn').addEventListener('click', () => navigateBy(-1));
   $('next-page-btn').addEventListener('click', () => navigateBy(1));
   $('submit-btn').addEventListener('click', onSubmit);
+  $('back-to-setup-btn').addEventListener('click', onBackToSetup);
 
   document.addEventListener('keydown', (ev) => {
     if (state.stage !== 'practice') return;
@@ -875,6 +985,13 @@ async function onSubmit() {
 
 function abortMarking(reason) {
   $('marking-status').textContent = reason;
+}
+
+function onBackToSetup() {
+  // Preserve the attempt; just navigate to Setup with the current values
+  // pre-filled so the parent can edit and click Resume practice.
+  fillSetupFormFromAttempt();
+  setStage('setup');
 }
 
 function humanMode(mode) {
