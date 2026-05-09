@@ -182,223 +182,157 @@ async function getPdfLib() {
   return pdfLibPromise;
 }
 
-// pdf-lib's StandardFonts only encode WinAnsi (Windows-1252). Any character
-// beyond Latin-1 (CJK, Hebrew, Arabic, etc.) crashes drawText. We sanitize
-// strings before drawing: keep ASCII and Latin-1 + a few common smart
-// punctuation chars; replace anything else with '?'. If a string ends up
-// substantially '?', swap it for a placeholder pointing at the on-screen
-// report so the PDF doesn't fill with gibberish.
-const PDF_SAFE_RE = /[\x09\x0A\x0D\x20-\x7E\xA0-\xFF‘’“”–—€]/;
-
-function pdfSafe(text, ctx) {
-  const s = String(text == null ? '' : text);
-  if (!s) return '';
-  let out = '';
-  let unsafeCount = 0;
-  for (const ch of s) {
-    if (PDF_SAFE_RE.test(ch)) out += ch;
-    else { unsafeCount++; out += '?'; }
+let html2canvasPromise = null;
+async function getHtml2Canvas() {
+  if (!html2canvasPromise) {
+    html2canvasPromise = import('https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/+esm')
+      .then((m) => m.default || m);
   }
-  if (unsafeCount === 0) return s;
-  if (ctx) ctx.sanitized = true;
-  // If the sanitized result is mostly '?'s (e.g. an all-CJK string), replace
-  // it with a clear placeholder rather than a row of question marks.
-  const meaningful = out.replace(/[?\s\-,.]/g, '');
-  if (meaningful.length === 0) return '[non-Latin text — see on-screen report]';
-  return out;
+  return html2canvasPromise;
 }
 
-// Build a simple report PDF: text-only summary plus one page per question.
+// Build the report PDF by rasterising the on-screen report DOM via
+// html2canvas, then assembling those bitmaps as US Letter pages with pdf-lib.
+//
+// Why image-based instead of text? pdf-lib + standard fonts only encode
+// WinAnsi (Windows-1252), so Chinese (and any other non-Latin script) can't
+// be rendered as text. We tried embedding a CJK Unicode font via fontkit
+// + Noto Sans SC, but the resulting PDFs failed to render correctly across
+// readers (FreeType-based viewers including iPadOS / MuPDF rejected the
+// embedded CFF font). Rasterising the DOM sidesteps font embedding entirely:
+// the browser already renders the on-screen report in any language, so the
+// PDF inherits that rendering. Trade-off: PDF is not text-searchable, but
+// the on-screen report and raw-JSON download cover that need.
 export async function exportReportPdf(report, meta) {
-  const { PDFDocument, StandardFonts, rgb } = await getPdfLib();
+  const { PDFDocument } = await getPdfLib();
+  const html2canvas = await getHtml2Canvas();
+
+  // Build a clean off-screen DOM that mirrors the visible report cards.
+  // We clone the live #stage-report cards so the PDF reflects exactly what
+  // the parent saw on screen, including the warning banner and cost card.
+  const reportStage = document.getElementById('stage-report');
+  if (!reportStage) {
+    throw new Error('Report stage not found in DOM; export needs the on-screen report');
+  }
+
+  const printRoot = document.createElement('div');
+  printRoot.style.cssText = [
+    'position:fixed',
+    'left:-99999px',
+    'top:0',
+    'width:780px',
+    'padding:32px',
+    'background:#ffffff',
+    'color:#14181f',
+    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
+    'font-size:14px',
+    'line-height:1.45',
+    'z-index:-1',
+  ].join(';');
+
+  // Title block at the top of the PDF
+  const title = document.createElement('div');
+  title.innerHTML = `
+    <h1 style="margin:0 0 4px;font-size:22px;">Worksheet Marking Report</h1>
+    <div style="color:#5b6573;font-size:12px;">PDF: ${escapeHtml(meta?.pdfName || '')}</div>
+    <div style="color:#5b6573;font-size:12px;margin-bottom:16px;">Generated: ${escapeHtml(new Date().toLocaleString())}</div>
+  `;
+  printRoot.appendChild(title);
+
+  // Clone each non-empty card from the live report. Drop any interactive
+  // elements (buttons, action rows) so the print copy is purely informational.
+  for (const card of reportStage.querySelectorAll('.card')) {
+    if (!card.textContent.trim()) continue;
+    const clone = card.cloneNode(true);
+    clone.querySelectorAll('button, .actions, summary').forEach((el) => el.remove());
+    // Expand any <details> so all per-batch breakdowns end up in the PDF.
+    clone.querySelectorAll('details').forEach((d) => d.setAttribute('open', ''));
+    // Re-apply card styling inline so html2canvas captures it without
+    // depending on the page's stylesheet linkage timing.
+    clone.style.cssText = [
+      'background:#ffffff',
+      'border:1px solid #d8dde5',
+      'border-radius:8px',
+      'padding:16px',
+      'margin-bottom:12px',
+      'box-shadow:0 1px 2px rgba(0,0,0,0.06)',
+    ].join(';');
+    printRoot.appendChild(clone);
+  }
+
+  document.body.appendChild(printRoot);
+
+  let canvas;
+  try {
+    canvas = await html2canvas(printRoot, {
+      scale: 2,
+      backgroundColor: '#ffffff',
+      logging: false,
+      useCORS: true,
+    });
+  } finally {
+    document.body.removeChild(printRoot);
+  }
+
+  // Slice the tall canvas into US Letter (612 × 792 pt) pages.
   const doc = await PDFDocument.create();
-  const font = await doc.embedFont(StandardFonts.Helvetica);
-  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const pageWidthPt = 612;
+  const pageHeightPt = 792;
+  const margin = 24;
+  const drawableWidthPt = pageWidthPt - margin * 2;
+  // ptPerPx scales canvas pixel rows to PDF points so the canvas's pixel
+  // width fits drawableWidthPt.
+  const ptPerPx = drawableWidthPt / canvas.width;
+  const sliceHeightPx = Math.max(1, Math.floor((pageHeightPt - margin * 2) / ptPerPx));
 
-  const margin = 48;
-  const pageWidth = 612;
-  const pageHeight = 792;
-  let page = doc.addPage([pageWidth, pageHeight]);
-  let y = pageHeight - margin;
-
-  // Track whether any text needed sanitization, and if so add a banner at
-  // the very top once the rest of the document is laid out.
-  const ctx = { sanitized: false };
-
-  function newPage() { page = doc.addPage([pageWidth, pageHeight]); y = pageHeight - margin; }
-  function drawText(text, opts = {}) {
-    const fnt = opts.bold ? bold : font;
-    const size = opts.size || 11;
-    const color = opts.color || rgb(0.08, 0.1, 0.12);
-    const safe = pdfSafe(text, ctx);
-    const lines = wrap(safe, fnt, size, pageWidth - margin * 2);
-    for (const line of lines) {
-      if (y < margin + size) newPage();
-      page.drawText(line, { x: margin, y, size, font: fnt, color });
-      y -= size * 1.4;
+  let yPx = 0;
+  while (yPx < canvas.height) {
+    const h = Math.min(sliceHeightPx, canvas.height - yPx);
+    // Skip trailing slices that are basically just margin/whitespace —
+    // protects against an off-by-one tail page when the canvas height
+    // doesn't divide evenly into page-sized slices.
+    if (h < 40 && yPx > 0) break;
+    const slice = document.createElement('canvas');
+    slice.width = canvas.width;
+    slice.height = h;
+    const sctx = slice.getContext('2d');
+    sctx.fillStyle = '#ffffff';
+    sctx.fillRect(0, 0, slice.width, slice.height);
+    sctx.drawImage(canvas, 0, -yPx);
+    // Skip pages that came out essentially all-white (sample a grid of
+    // pixels; any non-white triggers keep). This catches the case where
+    // tall white margins pushed past the previous page.
+    if (yPx > 0 && isMostlyWhite(sctx, slice.width, slice.height)) {
+      yPx += h;
+      continue;
     }
-    y -= 4;
-  }
-
-  drawText('Worksheet Marking Report', { bold: true, size: 18 });
-  drawText(`PDF: ${meta.pdfName || ''}`, { size: 10, color: rgb(0.4, 0.45, 0.5) });
-  drawText(`Generated: ${new Date().toLocaleString()}`, { size: 10, color: rgb(0.4, 0.45, 0.5) });
-  y -= 8;
-
-  if (report.app_warnings) {
-    const w = report.app_warnings;
-    drawText('WARNING: report is incomplete', { bold: true, size: 13, color: rgb(0.6, 0.1, 0.1) });
-    drawText(
-      `Only ${w.batches_completed} of ${w.batches_total} batches were marked.`,
-      { color: rgb(0.4, 0.1, 0.1) }
-    );
-    if (w.stopped_by_user) {
-      drawText(`Marking was stopped by the user; ${w.stopped_skipped_count} batch(es) were skipped.`,
-        { color: rgb(0.4, 0.1, 0.1) });
-    }
-    if (Array.isArray(w.failed_batches) && w.failed_batches.length > 0) {
-      for (const fb of w.failed_batches) {
-        drawText(`Failed batch ${fb.index + 1} (pages ${fb.pages.join(', ')}): ${fb.error}`,
-          { color: rgb(0.4, 0.1, 0.1) });
-      }
-    }
-    y -= 6;
-  }
-
-  const s = report.summary || {};
-  drawText('Summary', { bold: true, size: 14 });
-  drawText(`Estimated score: ${s.estimated_score || '—'}`);
-  if (s.comment) drawText(s.comment);
-  y -= 4;
-
-  if (report.app_usage) {
-    const u = report.app_usage;
-    const t = u.totals || {};
-    drawText('Cost & usage (estimate)', { bold: true, size: 14 });
-    drawText(
-      `Estimated total: $${(u.estimated_cost_usd ?? 0).toFixed(4)}  ` +
-      `(input $${(u.estimated_input_cost_usd ?? 0).toFixed(4)} ` +
-      `= uncached $${(u.estimated_uncached_input_cost_usd ?? 0).toFixed(4)} ` +
-      `+ cached $${(u.estimated_cached_input_cost_usd ?? 0).toFixed(4)}; ` +
-      `output $${(u.estimated_output_cost_usd ?? 0).toFixed(4)})`
-    );
-    drawText(
-      `Model: ${u.model || '—'}. ` +
-      `Rates: input $${(u.price_in_per_m_tokens ?? 0).toFixed(3)}/1M, ` +
-      `cached input $${(u.price_cached_in_per_m_tokens ?? 0).toFixed(3)}/1M, ` +
-      `output $${(u.price_out_per_m_tokens ?? 0).toFixed(3)}/1M. ` +
-      `Verify against openai.com/api/pricing.`,
-      { size: 10, color: rgb(0.4, 0.45, 0.5) }
-    );
-    drawText(
-      `Total tokens: input ${(t.prompt_tokens || 0).toLocaleString()} ` +
-      `(of which cached ${(t.cached_input_tokens || 0).toLocaleString()}) + ` +
-      `output ${(t.completion_tokens || 0).toLocaleString()} = ` +
-      `${(t.total_tokens || 0).toLocaleString()}.`,
-      { size: 10, color: rgb(0.4, 0.45, 0.5) }
-    );
-    y -= 4;
-  }
-
-  const results = report.questions || [];
-  const wrong = results.filter(isWrong);
-  if (wrong.length) {
-    drawText(`Incorrect (${wrong.length})`, { bold: true, size: 14 });
-    for (const r of wrong) {
-      drawText(`Q${r.question}: student "${r.student_answer || ''}" vs expected "${r.expected_answer || ''}"`);
-      if (r.comment) drawText(`  ${r.comment}`, { size: 10, color: rgb(0.4, 0.45, 0.5) });
-    }
-  }
-
-  const uncertain = results.filter(isUncertain);
-  if (uncertain.length) {
-    drawText(`Unclear (${uncertain.length})`, { bold: true, size: 14 });
-    for (const r of uncertain) {
-      drawText(`Q${r.question}: ${r.comment || ''}`);
-    }
-  }
-
-  const weak = report.weak_points || [];
-  if (weak.length) {
-    drawText('Weak points', { bold: true, size: 14 });
-    for (const w of weak) drawText(`- ${w}`);
-  }
-
-  const redo = report.redo || [];
-  if (redo.length) {
-    drawText('Suggested redo', { bold: true, size: 14 });
-    drawText(redo.join(', '));
-  }
-
-  drawText('All questions', { bold: true, size: 14 });
-  for (const r of results) {
-    const pageBits = [];
-    if (r.completed_page) pageBits.push(`completed p.${r.completed_page}`);
-    if (r.answer_page)    pageBits.push(`answer p.${r.answer_page}`);
-    const pageSuffix = pageBits.length ? ` [${pageBits.join(', ')}]` : '';
-    drawText(
-      `Q${r.question} [${r.status || 'unknown'}]${pageSuffix}: ` +
-      `student "${r.student_answer || ''}" / expected "${r.expected_answer || ''}"`
-    );
-    if (r.comment) drawText(`  ${r.comment}`, { size: 10, color: rgb(0.4, 0.45, 0.5) });
-  }
-
-  // If any text needed sanitization, prepend a banner page explaining why
-  // some content reads "[non-Latin text — see on-screen report]" or has
-  // '?' substitutions. The on-screen report and the raw JSON download
-  // carry the full original text.
-  if (ctx.sanitized) {
-    const banner = doc.insertPage(0, [pageWidth, pageHeight]);
-    let by = pageHeight - margin;
-    const drawBannerLine = (text, opts = {}) => {
-      const fnt = opts.bold ? bold : font;
-      const size = opts.size || 11;
-      const color = opts.color || rgb(0.08, 0.1, 0.12);
-      const lines = wrap(pdfSafe(text), fnt, size, pageWidth - margin * 2);
-      for (const line of lines) {
-        banner.drawText(line, { x: margin, y: by, size, font: fnt, color });
-        by -= size * 1.4;
-      }
-      by -= 4;
-    };
-    drawBannerLine('Note', { bold: true, size: 18, color: rgb(0.6, 0.1, 0.1) });
-    drawBannerLine(
-      'This PDF report cannot render some characters from the worksheet ' +
-      '(for example Chinese, Japanese, or other non-Latin text) because ' +
-      'the embedded font only supports Latin characters.'
-    );
-    drawBannerLine(
-      'Where original text was non-Latin, you will see one of:'
-    );
-    drawBannerLine('  - "?" in place of individual characters', { size: 10, color: rgb(0.4, 0.45, 0.5) });
-    drawBannerLine('  - "[non-Latin text — see on-screen report]" for a whole value', { size: 10, color: rgb(0.4, 0.45, 0.5) });
-    by -= 6;
-    drawBannerLine(
-      'For the full text, open the marking report in the app, ' +
-      'or click "Show raw JSON" and copy the JSON below.'
-    );
+    const dataUrl = slice.toDataURL('image/jpeg', 0.85);
+    const bytes = dataUrlToBytes(dataUrl);
+    const img = await doc.embedJpg(bytes);
+    const page = doc.addPage([pageWidthPt, pageHeightPt]);
+    const drawHeightPt = h * ptPerPx;
+    page.drawImage(img, {
+      x: margin,
+      y: pageHeightPt - margin - drawHeightPt,
+      width: drawableWidthPt,
+      height: drawHeightPt,
+    });
+    yPx += h;
   }
 
   const bytes = await doc.save();
   return new Blob([bytes], { type: 'application/pdf' });
 }
 
-function wrap(text, font, size, maxWidth) {
-  const words = String(text).split(/\s+/);
-  const lines = [];
-  let line = '';
-  for (const w of words) {
-    const candidate = line ? line + ' ' + w : w;
-    const width = font.widthOfTextAtSize(candidate, size);
-    if (width > maxWidth && line) {
-      lines.push(line);
-      line = w;
-    } else {
-      line = candidate;
-    }
+function isMostlyWhite(ctx, w, h) {
+  const samples = 100;
+  for (let i = 0; i < samples; i++) {
+    const x = Math.floor(Math.random() * w);
+    const y = Math.floor(Math.random() * h);
+    const data = ctx.getImageData(x, y, 1, 1).data;
+    if (data[0] < 240 || data[1] < 240 || data[2] < 240) return false;
   }
-  if (line) lines.push(line);
-  return lines;
+  return true;
 }
 
 // Build a PDF of the completed worksheet pages (question pages with strokes)
