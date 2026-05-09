@@ -222,3 +222,53 @@ button.tool-btn.active { background: var(--accent); color: white; border-color: 
   .practice-toolbar { gap: 4px; padding: 6px 8px; }
   .practice-toolbar button { padding: 6px 10px; font-size: 13px; }
 }
+
+/* ---------- Immersive (full-screen) practice mode ---------- */
+/* Activated by adding `app-immersive` to <body>. Used together with the
+   browser Fullscreen API where supported, or as a standalone immersive
+   layout where Fullscreen isn't (older iPad Safari). */
+
+/* Hide chrome — topbar, stage tabs, "Start over" — so the page becomes
+   essentially the worksheet plus its toolbar. Autosave indicator and
+   Exit fullscreen button move into the practice toolbar instead. */
+body.app-immersive .topbar { display: none; }
+body.app-immersive #app { padding: 0; max-width: none; margin: 0; }
+body.app-immersive #stage-practice { padding: 0; }
+body.app-immersive .practice-toolbar {
+  top: 0;
+  padding: 10px 14px;
+}
+body.app-immersive .page-stage {
+  min-height: calc(100vh - 56px);
+  background: #1f242c;
+}
+/* Larger, finger-friendly tap targets in immersive mode (44px iOS
+   touch-target guideline). */
+body.app-immersive .practice-toolbar button {
+  padding: 10px 14px;
+  font-size: 15px;
+  min-height: 44px;
+  min-width: 44px;
+}
+body.app-immersive #page-indicator {
+  font-size: 15px;
+  min-width: 110px;
+}
+
+/* Show the Exit fullscreen button + the toolbar-internal autosave
+   indicator only while immersive. Hidden otherwise so the topbar's
+   autosave indicator handles non-immersive views. */
+#exit-fullscreen-btn { display: none; }
+#autosave-indicator-practice { display: none; }
+body.app-immersive #exit-fullscreen-btn { display: inline-block; }
+body.app-immersive #autosave-indicator-practice {
+  display: inline-block;
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--muted);
+}
+body.app-immersive #autosave-indicator-practice.saving { color: var(--accent); }
+body.app-immersive #autosave-indicator-practice.error { color: var(--error); }
+/* In immersive mode, hide the in-toolbar Setup button — the parent
+   wanted "API/model settings" out of the way during writing. */
+body.app-immersive #back-to-setup-btn { display: none; }

@@ -110,8 +110,49 @@ function setStage(stage) {
 }
 
 function setAutosave(label, cls = '') {
-  els.autosave.textContent = label;
-  els.autosave.className = 'autosave' + (cls ? ' ' + cls : '');
+  const className = 'autosave' + (cls ? ' ' + cls : '');
+  for (const el of [els.autosave, els.autosavePractice]) {
+    if (!el) continue;
+    el.textContent = label;
+    el.className = className;
+  }
+}
+
+// --- Immersive practice mode ---------------------------------------------
+// Hides chrome (topbar, stage tabs, etc.) and requests browser fullscreen so
+// the worksheet feels like a clean writing surface. Falls back to immersive
+// CSS only if Fullscreen API isn't available (older iPad Safari).
+async function enterFullscreenPractice() {
+  document.body.classList.add('app-immersive');
+  const root = document.documentElement;
+  const req = root.requestFullscreen || root.webkitRequestFullscreen;
+  if (typeof req === 'function') {
+    try {
+      await req.call(root);
+    } catch (e) {
+      // User can deny or the API may be unavailable; immersive CSS still
+      // applies so the experience is acceptable either way.
+      console.warn('Fullscreen request failed; using immersive layout only', e);
+    }
+  }
+  // The page-stage just changed size; re-render so the canvas and ink
+  // overlay match the new dimensions.
+  if (state.stage === 'practice' && state.attempt) {
+    setTimeout(() => loadCurrentPage(), 50);
+  }
+}
+
+async function exitFullscreenPractice() {
+  document.body.classList.remove('app-immersive');
+  const exitFn = document.exitFullscreen || document.webkitExitFullscreen;
+  if (document.fullscreenElement || document.webkitFullscreenElement) {
+    if (typeof exitFn === 'function') {
+      try { await exitFn.call(document); } catch { /* ignore */ }
+    }
+  }
+  if (state.stage === 'practice' && state.attempt) {
+    setTimeout(() => loadCurrentPage(), 50);
+  }
 }
 
 // --- Init -----------------------------------------------------------------
@@ -120,7 +161,17 @@ document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
   els.autosave = $('autosave-indicator');
+  els.autosavePractice = $('autosave-indicator-practice');
   setAutosave('saved');
+
+  // Keep our `app-immersive` class in sync if the user exits full-screen via
+  // the OS shortcut (Esc on desktop, swipe on iPad).
+  document.addEventListener('fullscreenchange', () => {
+    if (!document.fullscreenElement) document.body.classList.remove('app-immersive');
+  });
+  document.addEventListener('webkitfullscreenchange', () => {
+    if (!document.webkitFullscreenElement) document.body.classList.remove('app-immersive');
+  });
 
   // Show unlock if a passphrase was previously set and not yet unlocked.
   if (state.settings.passphrase && !state.settings.unlocked) {
@@ -147,6 +198,7 @@ function resetApp() {
   state.flattenedCompletedPages = null;
   state.reportJson = null;
   if (state.inkController) { state.inkController.detach(); state.inkController = null; }
+  exitFullscreenPractice();
   updateStartPracticeButton();
   setStage('setup');
 }
@@ -413,6 +465,7 @@ async function onResumeBuiltin(worksheet, mode) {
   fillSetupFormFromAttempt();
   setStage('practice');
   await loadCurrentPage();
+  enterFullscreenPractice();
 }
 
 async function runColorCheck() {
@@ -525,6 +578,7 @@ async function onStartPractice() {
     await putAttempt(state.attempt);
     setStage('practice');
     await loadCurrentPage();
+    enterFullscreenPractice();
     return;
   }
 
@@ -579,6 +633,7 @@ async function onStartPractice() {
   updateStartPracticeButton();
   setStage('practice');
   await loadCurrentPage();
+  enterFullscreenPractice();
 }
 
 // --- Practice -------------------------------------------------------------
@@ -601,6 +656,7 @@ function bindPracticeUI() {
   $('next-page-btn').addEventListener('click', () => navigateBy(1));
   $('submit-btn').addEventListener('click', onSubmit);
   $('back-to-setup-btn').addEventListener('click', onBackToSetup);
+  $('exit-fullscreen-btn').addEventListener('click', () => exitFullscreenPractice());
 
   document.addEventListener('keydown', (ev) => {
     if (state.stage !== 'practice') return;
@@ -804,6 +860,7 @@ async function onSubmit() {
   );
   if (!ok) return;
 
+  exitFullscreenPractice();
   setStage('marking');
   $('marking-status').textContent = 'Flattening pages…';
   $('batch-list').innerHTML = '';
@@ -1044,6 +1101,7 @@ function onBackToSetup() {
   } catch (e) {
     console.error('fillSetupFormFromAttempt failed', e);
   }
+  exitFullscreenPractice();
   setStage('setup');
 }
 
