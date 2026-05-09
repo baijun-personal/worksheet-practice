@@ -1218,18 +1218,34 @@ async function onSubmit() {
     batchesPlan = chunkInto(qPages, 4).map((g) => ({ pages: g, composite: 'fullpage' }));
   }
 
-  const imagesPerBatch = batchesPlan.map((b) => (b.composite === 'fourup' ? 1 : b.pages.length) + aPages.length);
-  const totalImages = imagesPerBatch.reduce((a, b) => a + b, 0);
+  // Build the request list for the confirmation. Staged pipeline: each
+  // student-extraction request carries ONLY completed worksheet images
+  // (no answer-key images). The answer-key extraction is its own
+  // separate request carrying only answer-page images.
+  const studentRequestImages = batchesPlan.map((b) => (b.composite === 'fourup' ? 1 : b.pages.length));
+  const studentRequestCount = batchesPlan.length;
+  const answerKeyRequestCount = aPages.length > 0 ? 1 : 0;
+  const totalRequests = studentRequestCount + answerKeyRequestCount;
+  const totalStudentImages = studentRequestImages.reduce((a, b) => a + b, 0);
+  const totalAnswerImages = aPages.length;
+  const totalImages = totalStudentImages + totalAnswerImages;
   const modeLabel = (
     requestedMode === 'auto' ? `Auto → ${humanMode(mode)}` : humanMode(mode)
   );
+  const studentLines = batchesPlan.map((b, i) =>
+    `  Request ${i + 1}: Student answers — ${
+      b.composite === 'fourup' ? '1 4-up image' : `${b.pages.length} full-page image(s)`
+    } covering completed pages ${b.pages.join(', ')}`
+  ).join('\n');
+  const answerLine = answerKeyRequestCount > 0
+    ? `  Request ${studentRequestCount + 1}: Answer key — ${aPages.length} answer page image(s) covering page${aPages.length === 1 ? '' : 's'} ${aPages.join(', ')}`
+    : `  (No answer pages specified — answer-key extraction will be skipped.)`;
   const ok = confirm(
     `Marking mode: ${modeLabel}\n` +
-    `About to send ${totalImages} images to OpenAI in ${batchesPlan.length} request(s).\n` +
-    batchesPlan.map((b, i) =>
-      `  Request ${i + 1}: ${b.composite === 'fourup' ? '1 4-up image' : b.pages.length + ' full-page image(s)'}` +
-      ` covering pages ${b.pages.join(', ')} + ${aPages.length} answer page(s)`
-    ).join('\n') +
+    `Two-stage pipeline: student answers extracted independently of the answer key.\n` +
+    `About to send ${totalRequests} request(s) to OpenAI ` +
+    `(${totalStudentImages} student image(s) + ${totalAnswerImages} answer page image(s) = ${totalImages} total).\n` +
+    studentLines + '\n' + answerLine +
     `\n\nContinue?`
   );
   if (!ok) return;
@@ -1262,6 +1278,8 @@ async function onSubmit() {
   }
 
   // Now build per-batch image arrays, composing 4-up sheets where requested.
+  // Each batch carries ONLY completed images — the answer key is sent as
+  // a separate request later in the staged pipeline.
   const completedByPage = new Map(completedPagesAll.map((p) => [p.pageNumber, p]));
   const batches = [];
   for (const plan of batchesPlan) {
@@ -1270,20 +1288,27 @@ async function onSubmit() {
         pageNumber: n,
         strokes: completedByPage.get(n).strokes,
       }));
+      // composeFourUpA4 currently always renders at 200 DPI regardless of
+      // the user's submission DPI setting. 200 DPI keeps a 4-up A4 tile
+      // (each ~795x1115 px) readable for typical worksheet text. If you
+      // later expose a "4-up DPI" setting, plumb it in here. For now, this
+      // is intentional and decoupled from settings.renderDpi.
       const composed = await composeFourUpA4(state.pdf, tilePages, { dpi: 200 });
-      // Use the first page of the group as the representative pageNumber so
-      // the existing image-label logic still works (the prompt text already
-      // mentions "Completed worksheet page PDF p.N"; for 4-up the per-tile
-      // labels are baked into the image itself).
+      // Use the first page of the group as the representative pageNumber
+      // so the per-image text label naming still works; the per-tile
+      // page labels are also baked into the image itself.
       batches.push({
-        completed: [{ pageNumber: plan.pages[0], dataUrl: composed.dataUrl, fourup: true, includedPageNumbers: composed.includedPageNumbers }],
-        answer: answerImages,
+        completed: [{
+          pageNumber: plan.pages[0],
+          dataUrl: composed.dataUrl,
+          fourup: true,
+          includedPageNumbers: composed.includedPageNumbers,
+        }],
         plannedPages: plan.pages,
       });
     } else {
       batches.push({
         completed: plan.pages.map((n) => ({ pageNumber: n, dataUrl: completedByPage.get(n).dataUrl })),
-        answer: answerImages,
         plannedPages: plan.pages,
       });
     }

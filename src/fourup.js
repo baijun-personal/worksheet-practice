@@ -6,6 +6,12 @@
 // At 200 DPI, portrait A4 is 1654 x 2339 px. Each tile gets ~795 x 1115 px
 // (after margins/gutter) — large enough to preserve printed text legibility
 // for typical worksheet pages.
+//
+// NOTE: this composer always renders at 200 DPI by default, intentionally
+// decoupled from settings.renderDpi (the per-page submission DPI). 4-up
+// tiles need higher density than full-page submissions to stay readable
+// after the 4x area reduction. If a future "4-up DPI" setting is exposed,
+// thread it through the `dpi` option here.
 
 import { renderPageOffscreen } from './pdfRender.js';
 import { drawStroke } from './draw.js';
