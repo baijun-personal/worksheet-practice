@@ -73,71 +73,71 @@ function buildDisplayQuestion(a) {
 
 // studentBatchResults: array of Stage-1 parsed JSONs (one per batch)
 // answerKeyResults:    array of Stage-2 parsed JSONs (typically just one)
+//
+// Returns:
+//   {
+//     summary: { estimated_score, comment },
+//     questions: [...rows the student attempted...],
+//     not_in_attempt: [...answer-key questions NOT found on completed pages...],
+//     redo: [...labels of incorrect attempted rows...],
+//     weak_points: [],
+//   }
+//
+// The score's denominator is the number of attempted questions (those
+// extracted from the completed pages). Answer-key entries with no matching
+// student answer go into not_in_attempt[] and don't affect the score or
+// the redo list — they're shown separately so the parent can decide
+// whether to revisit those questions on a different attempt.
 export function compareExtractions(studentBatchResults, answerKeyResults) {
   const students = flattenAnswers(studentBatchResults);
   const keys = flattenAnswers(answerKeyResults);
 
-  // Index student answers for lookup.
-  const studentByKey = new Map();
-  const studentByGlobal = new Map();
-  for (const s of students) {
-    if (s.section || s.question_number) {
-      studentByKey.set(compositeKey(s.section || '', s.question_number || ''), s);
+  // Index answer-key answers for lookup.
+  const keyByKey = new Map();
+  const keyByGlobal = new Map();
+  for (const k of keys) {
+    if (k.section || k.question_number) {
+      keyByKey.set(compositeKey(k.section || '', k.question_number || ''), k);
     }
-    if (s.global_question_index != null) {
-      studentByGlobal.set(Number(s.global_question_index), s);
+    if (k.global_question_index != null) {
+      keyByGlobal.set(Number(k.global_question_index), k);
     }
   }
 
-  // Build the merged questions array. If we have an answer key, drive from
-  // it (one row per expected question). Otherwise drive from student
-  // answers and mark every entry as `unclear` since there's nothing to
-  // compare against.
   const questions = [];
-  const usedStudentRefs = new Set();
-  const driver = keys.length > 0 ? keys : students;
-  const mode = keys.length > 0 ? 'compare' : 'student-only';
-
+  const usedKeyRefs = new Set();
   let correct = 0, incorrect = 0, unclear = 0;
 
-  for (const k of driver) {
-    const expected = mode === 'compare' ? (k.answer ?? '') : '';
-    let student = null;
-
-    if (mode === 'compare') {
-      const ck = compositeKey(k.section || '', k.question_number || '');
-      if (studentByKey.has(ck)) student = studentByKey.get(ck);
-      else if (k.global_question_index != null && studentByGlobal.has(Number(k.global_question_index))) {
-        student = studentByGlobal.get(Number(k.global_question_index));
-      }
-    } else {
-      // student-only mode: each driver entry IS the student
-      student = k;
+  // Drive the questions list from the student extraction — every row in
+  // `questions` represents a question the student actually attempted.
+  for (const s of students) {
+    let key = null;
+    const ck = compositeKey(s.section || '', s.question_number || '');
+    if (keyByKey.has(ck)) key = keyByKey.get(ck);
+    else if (s.global_question_index != null && keyByGlobal.has(Number(s.global_question_index))) {
+      key = keyByGlobal.get(Number(s.global_question_index));
     }
+    if (key) usedKeyRefs.add(refOf(key));
 
-    if (student) usedStudentRefs.add(refOf(student));
-
-    const studentAns = student ? (student.answer ?? '') : '';
-    const studentConfidence = student && typeof student.confidence === 'number'
-      ? student.confidence
-      : null;
+    const studentAns = s.answer ?? '';
+    const expectedAns = key ? (key.answer ?? '') : '';
+    const studentConfidence = typeof s.confidence === 'number' ? s.confidence : null;
     const isUnreadable = !studentAns || /^unclear$/i.test(String(studentAns).trim());
 
-    let status;
-    let comment = '';
-
-    if (mode === 'student-only') {
+    let status, comment = '';
+    if (keys.length === 0) {
       status = 'unclear';
-      comment = 'No answer key provided; compare manually.';
-    } else if (!student || isUnreadable) {
+      comment = 'No answer pages provided; compare manually.';
+    } else if (!key) {
       status = 'unclear';
-      comment = !student
-        ? 'No matching student answer found for this question.'
-        : 'Student answer was unreadable.';
+      comment = 'No matching answer-key entry for this question.';
+    } else if (isUnreadable) {
+      status = 'unclear';
+      comment = 'Student answer was unreadable.';
     } else if (studentConfidence != null && studentConfidence < 0.4) {
       status = 'unclear';
       comment = `Low extraction confidence (${studentConfidence.toFixed(2)}).`;
-    } else if (normalizeAnswer(studentAns) === normalizeAnswer(expected)) {
+    } else if (normalizeAnswer(studentAns) === normalizeAnswer(expectedAns)) {
       status = 'correct';
     } else {
       status = 'incorrect';
@@ -148,61 +148,70 @@ export function compareExtractions(studentBatchResults, answerKeyResults) {
     else unclear++;
 
     questions.push({
-      question: String(k.question_number || k.global_question_index || ''),
-      section: k.section || '',
-      display_question: buildDisplayQuestion(k),
-      completed_page: student?.page ?? null,
-      answer_page: mode === 'compare' ? (k.page ?? null) : null,
+      question: String(s.question_number || s.global_question_index || ''),
+      section: s.section || '',
+      display_question: buildDisplayQuestion(s),
+      completed_page: s.page ?? null,
+      answer_page: key?.page ?? null,
       student_answer: studentAns,
-      expected_answer: expected,
+      expected_answer: expectedAns,
       status,
       comment,
     });
   }
 
-  // Surface student answers that didn't match any answer-key entry. They
-  // typically signal questions the model identified on the worksheet but
-  // not on the key — useful for the parent to spot gaps.
-  if (mode === 'compare') {
-    for (const s of students) {
-      if (usedStudentRefs.has(refOf(s))) continue;
-      questions.push({
-        question: String(s.question_number || s.global_question_index || ''),
-        section: s.section || '',
-        display_question: buildDisplayQuestion(s),
-        completed_page: s.page ?? null,
-        answer_page: null,
-        student_answer: s.answer ?? '',
-        expected_answer: '',
-        status: 'unclear',
-        comment: 'No matching entry on the answer key.',
-      });
-      unclear++;
-    }
+  // Answer-key entries the student didn't attempt — listed separately, not
+  // counted in the main score, not added to the redo list.
+  const notInAttempt = [];
+  for (const k of keys) {
+    if (usedKeyRefs.has(refOf(k))) continue;
+    notInAttempt.push({
+      question: String(k.question_number || k.global_question_index || ''),
+      section: k.section || '',
+      display_question: buildDisplayQuestion(k),
+      answer_page: k.page ?? null,
+      expected_answer: k.answer ?? '',
+    });
   }
 
-  const total = correct + incorrect + unclear;
+  const attempted = correct + incorrect + unclear;
   const summary = {
-    estimated_score: total > 0 ? `${correct}/${total}` : '',
-    comment: total > 0
-      ? `${correct} correct, ${incorrect} incorrect, ${unclear} unclear out of ${total}.`
-      : '',
+    estimated_score: attempted > 0 && keys.length > 0 ? `${correct}/${attempted}` : '',
+    comment: buildSummaryComment({ correct, incorrect, unclear, attempted, notInAttempt, keysProvided: keys.length > 0 }),
   };
 
+  // Redo: incorrect rows from attempted questions only. Unmatched-key
+  // questions deliberately do not appear here (the student didn't see them
+  // on the completed pages, so "redo" doesn't apply yet).
   const redo = questions
-    .filter((q) => q.status === 'incorrect' || (q.status === 'unclear' && q.expected_answer))
+    .filter((q) => q.status === 'incorrect')
     .map((q) => q.display_question || q.question)
     .filter(Boolean);
 
   return {
     summary,
     questions,
+    not_in_attempt: notInAttempt,
     redo,
     // Weak points: reserved field, kept empty by code-side comparison so
     // the report doesn't surface generic guesses like "understanding of
     // the topic". Future enhancement: a separate pattern-detection pass.
     weak_points: [],
   };
+}
+
+function buildSummaryComment({ correct, incorrect, unclear, attempted, notInAttempt, keysProvided }) {
+  if (attempted === 0 && notInAttempt.length === 0) return '';
+  if (attempted === 0) {
+    return 'No answers were extracted from the completed pages.';
+  }
+  let s = `${correct} correct, ${incorrect} incorrect, ${unclear} unclear out of ${attempted} attempted question(s).`;
+  if (!keysProvided) {
+    s += ' No answer pages were specified, so questions are listed but not graded. Open Setup → Pages to add an Answer pages range.';
+  } else if (notInAttempt.length > 0) {
+    s += ` ${notInAttempt.length} answer-key question(s) were not found on the completed pages — listed separately and not counted in the score.`;
+  }
+  return s;
 }
 
 let _refSeq = 0;

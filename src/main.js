@@ -1112,6 +1112,7 @@ function showReport(merged) {
     uncertainEl: $('report-uncertain'),
     weakEl: $('report-weak'),
     redoEl: $('report-redo'),
+    notAttemptedEl: $('report-not-attempted'),
     tableEl: $('report-table'),
     rawEl: $('raw-json'),
   });

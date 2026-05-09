@@ -5,7 +5,7 @@ import { KNOWN_STATUSES } from './openai.js';
 
 export function renderReport(report, mountNodes) {
   const {
-    summaryEl, costEl, wrongEl, uncertainEl, weakEl, redoEl, tableEl, rawEl,
+    summaryEl, costEl, wrongEl, uncertainEl, weakEl, redoEl, notAttemptedEl, tableEl, rawEl,
   } = mountNodes;
 
   const summary = report.summary || {};
@@ -48,6 +48,32 @@ export function renderReport(report, mountNodes) {
   redoEl.innerHTML = `<h2>Suggested redo</h2>` +
     (redo.length === 0 ? '<p class="muted">None.</p>' :
       `<p>${redo.map(escapeHtml).join(', ')}</p>`);
+
+  // Answer-key entries with no matching student answer — listed but not
+  // counted in the score and not in the redo list.
+  const notInAttempt = Array.isArray(report.not_in_attempt) ? report.not_in_attempt : [];
+  if (notAttemptedEl) {
+    if (notInAttempt.length === 0) {
+      notAttemptedEl.innerHTML = '';
+      notAttemptedEl.style.display = 'none';
+    } else {
+      notAttemptedEl.style.display = '';
+      const showSec = notInAttempt.some((r) => r.section);
+      notAttemptedEl.innerHTML =
+        `<h2>Not included in this attempt (${notInAttempt.length})</h2>` +
+        `<p class="muted small">These questions appear on the answer key but were not found on the completed pages, so they are not counted in the score.</p>` +
+        `<table><thead><tr>
+            <th>Q</th>${showSec ? '<th>Section</th>' : ''}<th>Expected</th><th>Answer page</th>
+          </tr></thead><tbody>${
+          notInAttempt.map((r) => `<tr>
+            <td>${escapeHtml(questionLabel(r))}</td>
+            ${showSec ? `<td>${escapeHtml(r.section || '')}</td>` : ''}
+            <td>${escapeHtml(r.expected_answer || '')}</td>
+            <td>${r.answer_page ? `p.${escapeHtml(r.answer_page)}` : '<span class="muted">—</span>'}</td>
+          </tr>`).join('')
+        }</tbody></table>`;
+    }
+  }
 
   // Only show the section column when at least one row actually has a section.
   const showSection = results.some((r) => r.section);
