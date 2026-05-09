@@ -143,7 +143,52 @@ function normalizeMultiParts(answers) {
     }
   }
 
-  return order.map((ck) => byKey.get(ck));
+  const dedup = order.map((ck) => byKey.get(ck));
+
+  // SECOND PASS — auto-group entries whose question_number has a
+  // parenthesised subpart suffix (e.g. "19(i)" + "19(ii)") into a
+  // single multi-part record keyed by the base ("19"). The student
+  // extraction often emits these as separate flat entries even when
+  // the prompt asks for the grouped form; without this pass, the
+  // matcher pairs them positionally with the answer key's "19(i)"
+  // and "19(ii)" entries and the AI compare never sees them as one
+  // pool. This rule does NOT touch suffixes WITHOUT parens like
+  // "5a" / "5b" — those are typically distinct sub-questions.
+  const baseGroups = new Map();   // composite-key-of-base -> group entry
+  const survivors = [];
+
+  for (const entry of dedup) {
+    if (entry.is_multi_part === true && Array.isArray(entry.parts)) {
+      survivors.push(entry);
+      continue;
+    }
+    const sub = parseParenSubpart(entry.question_number);
+    if (!sub) {
+      survivors.push(entry);
+      continue;
+    }
+    const baseCk = compositeKey(entry.section || '', sub.base);
+    if (!baseGroups.has(baseCk)) {
+      baseGroups.set(baseCk, {
+        global_question_index: entry.global_question_index,
+        section: entry.section || '',
+        question_number: sub.base,
+        page: entry.page,
+        is_multi_part: true,
+        order_matters: false,  // safe default for list-answer slots
+        parts: [],
+      });
+    }
+    const group = baseGroups.get(baseCk);
+    group.parts.push({
+      part: sub.part,
+      answer_type: entry.answer_type || 'text',
+      answer: entry.answer ?? '',
+      confidence: typeof entry.confidence === 'number' ? entry.confidence : null,
+    });
+  }
+
+  return [...survivors, ...baseGroups.values()];
 }
 
 // Convert a flat entry in-place into a multi-part one (one part holding
@@ -166,13 +211,38 @@ function ensureMultiPart(entry) {
 }
 
 function buildDisplayQuestion(a) {
-  if (a.display_question) return String(a.display_question);
-  const q = a.question_number ? String(a.question_number) : '';
-  const s = a.section ? String(a.section) : '';
-  if (s && q) return /^Q/i.test(q) ? `${s} ${q}` : `${s} Q${q}`;
-  if (q) return /^Q/i.test(q) ? q : `Q${q}`;
+  // Always rebuild from question_number / section. The AI's
+  // display_question is unreliable — it sometimes returns the full
+  // question text ("In paragraph 3, what two things..."), which is
+  // useless as a label. We only fall back to display_question if it
+  // exists AND looks short and label-like (no spaces > a couple).
+  const q = a.question_number ? String(a.question_number).trim() : '';
+  const s = a.section ? String(a.section).trim() : '';
+  if (q) {
+    const qLabel = /^Q/i.test(q) ? q : `Q${q}`;
+    return s ? `${s} ${qLabel}` : qLabel;
+  }
+  if (a.display_question) {
+    const dq = String(a.display_question).trim();
+    if (dq && dq.length <= 24 && !/\?/.test(dq)) return dq;
+  }
   if (a.global_question_index != null) return `Q${a.global_question_index}`;
   return '';
+}
+
+// Detect a parenthesised subpart suffix like "19(i)", "5(ii)",
+// "Q19(iii)". Returns { base, part } when present, else null. We
+// deliberately don't match suffixes WITHOUT parens like "5a" / "5b"
+// — those are typically distinct sub-questions on Singapore primary
+// papers, not list-answer slots, and should remain as separate pairs.
+function parseParenSubpart(qnumber) {
+  const s = String(qnumber || '').trim();
+  const m = s.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+  if (!m) return null;
+  const base = m[1].trim();
+  const part = m[2].trim();
+  if (!base || !part) return null;
+  return { base, part };
 }
 
 // matchExtractions(studentBatchResults, answerKeyResults)

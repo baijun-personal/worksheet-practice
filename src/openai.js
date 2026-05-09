@@ -190,6 +190,8 @@ There are TWO different kinds of subparts. Use the right schema for each:
 
 Never duplicate the same "question_number" label without a subpart suffix. If you produce two entries with the same composite key, the later one will silently overwrite the earlier; use the multi-part form (A) instead.
 
+"display_question" is a SHORT label only — values like "Q17", "Q19", or "Section A Q1". Do NOT put the full question text into display_question; it's used as a heading in the report, not as the question prompt itself.
+
 For each answer, set "answer_type" to one of:
 - "text": short or long handwritten text answer.
 - "choice": MCQ option letter ("A", "B") or option number ("3"). For choice questions, if the selected option's text is visible next to the option number/letter, include both in "answer", e.g. "3 (scooped)" or "B (the dolphin jumped)". This helps later comparison when the answer key extraction may carry the option text instead of the number.
@@ -252,6 +254,8 @@ For LIST-ANSWER questions (single stem with several expected items, e.g. "Name t
 For DISTINCT sub-questions where each subpart has its own question text (e.g. Q5a and Q5b are independent), output SEPARATE flat entries with question_number "5a" and "5b". Do NOT group these.
 
 Never produce two entries with the same composite key (section + question_number) — use the multi-part form when there are multiple expected items for the same printed question.
+
+"display_question" is a SHORT label only — e.g. "Q17", "Q19". Do NOT put the full question text or expected-answer text into display_question.
 
 Note: answer-key pages may not always show full question wording; if order_matters is unclear from the answer key alone, leave order_matters: false (the student-side extraction will set it correctly).
 
