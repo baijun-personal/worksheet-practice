@@ -27,12 +27,21 @@ const ALLOWED_ORIGINS = [
 
 const UPSTREAM = 'https://api.openai.com/v1/chat/completions';
 
-function corsHeaders(origin) {
+function corsHeaders(request) {
+  const origin = request.headers.get('Origin') || '';
   const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+  // Echo whatever the browser asks to send during preflight (e.g.
+  // 'content-type, x-proxy-token' lower-cased). HTTP header-name
+  // matching is case-insensitive in spec, but echoing avoids edge
+  // cases in stricter implementations. The token is still the
+  // security boundary; CORS is just a politeness check.
+  const requestedHeaders =
+    request.headers.get('Access-Control-Request-Headers') ||
+    'Content-Type, X-Proxy-Token';
   return {
     'Access-Control-Allow-Origin': allowed,
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, X-Proxy-Token',
+    'Access-Control-Allow-Headers': requestedHeaders,
     'Access-Control-Max-Age': '86400',
     Vary: 'Origin',
   };
@@ -47,19 +56,34 @@ function jsonResponse(obj, status, cors) {
 
 export default {
   async fetch(request, env) {
-    const origin = request.headers.get('Origin') || '';
-    const cors = corsHeaders(origin);
+    const cors = corsHeaders(request);
 
-    // CORS preflight
+    // 1. CORS preflight FIRST — handle before any token check, before
+    //    method-allow check, before anything that could throw. The
+    //    browser sends OPTIONS without X-Proxy-Token by design, so the
+    //    Worker must never require it on this path.
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: cors });
+    }
+
+    // 2. GET — friendly status response so you can verify the Worker
+    //    is reachable just by visiting the URL in a browser tab.
+    //    Reveals nothing sensitive.
+    if (request.method === 'GET') {
+      return jsonResponse({
+        ok: true,
+        message: 'Worker is up. Send a POST with your OpenAI chat/completions body and an X-Proxy-Token header.',
+        upstream: UPSTREAM,
+      }, 200, cors);
     }
 
     if (request.method !== 'POST') {
       return jsonResponse({ error: 'Method not allowed. Use POST.' }, 405, cors);
     }
 
-    // Auth: required token
+    // 3. Auth — required token. Note: every error response below also
+    //    includes the same CORS headers, so the browser can read the
+    //    error body instead of seeing a generic CORS failure.
     const token = request.headers.get('X-Proxy-Token') || '';
     if (!env.PROXY_TOKEN) {
       return jsonResponse(
@@ -78,9 +102,9 @@ export default {
       );
     }
 
-    // Read the body and forward it as-is to OpenAI. We don't parse or
-    // mutate it — fewer surprises if OpenAI adds new fields, and it
-    // keeps the Worker stateless.
+    // 4. Forward the JSON body verbatim. We don't parse or mutate it
+    //    — fewer surprises if OpenAI adds new fields, and it keeps
+    //    the Worker stateless.
     let body;
     try {
       body = await request.text();
