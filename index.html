@@ -96,6 +96,17 @@
           <input id="test-mode" type="checkbox" />
           Test mode: only mark the first 2 question pages
         </label>
+        <fieldset style="border:1px solid var(--border); border-radius:6px; padding:8px 12px; margin-top:12px">
+          <legend class="muted small">Cost estimate (verify against
+            <a href="https://openai.com/api/pricing/" target="_blank" rel="noopener">openai.com/api/pricing</a>)
+          </legend>
+          <label>Input price (USD per 1M tokens)
+            <input id="price-in" type="number" min="0" step="0.01" />
+          </label>
+          <label>Output price (USD per 1M tokens)
+            <input id="price-out" type="number" min="0" step="0.01" />
+          </label>
+        </fieldset>
       </details>
 
       <div class="actions">
@@ -150,6 +161,7 @@
     <section id="stage-report" class="stage" hidden>
       <h1>Marking report</h1>
       <div id="report-summary" class="card"></div>
+      <div id="report-cost" class="card"></div>
       <div id="report-wrong" class="card"></div>
       <div id="report-uncertain" class="card"></div>
       <div id="report-weak" class="card"></div>

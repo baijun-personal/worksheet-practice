@@ -5,7 +5,7 @@ import { KNOWN_STATUSES } from './openai.js';
 
 export function renderReport(report, mountNodes) {
   const {
-    summaryEl, wrongEl, uncertainEl, weakEl, redoEl, tableEl, rawEl,
+    summaryEl, costEl, wrongEl, uncertainEl, weakEl, redoEl, tableEl, rawEl,
   } = mountNodes;
 
   const summary = report.paper_summary || {};
@@ -19,6 +19,11 @@ export function renderReport(report, mountNodes) {
     <p>${escapeHtml(summary.overall_comment || '')}</p>
     <p class="muted small">Items flagged for parent review: ${Number(summary.needs_parent_review_count) || 0}</p>
   `;
+
+  if (costEl) {
+    costEl.innerHTML = report.app_usage ? renderCostCard(report.app_usage) : '';
+    costEl.style.display = report.app_usage ? '' : 'none';
+  }
 
   const results = Array.isArray(report.question_results) ? report.question_results : [];
 
@@ -63,6 +68,44 @@ export function renderReport(report, mountNodes) {
     }</tbody></table>`;
 
   rawEl.textContent = JSON.stringify(report, null, 2);
+}
+
+function renderCostCard(u) {
+  const t = u.totals || {};
+  const fmtTokens = (n) => Number(n || 0).toLocaleString();
+  const fmtUsd = (n) => '$' + (Number(n) || 0).toFixed(4);
+  const batchRows = (u.batches || []).map((b) => `
+    <tr>
+      <td>${escapeHtml(b.index + 1)}</td>
+      <td>${escapeHtml((b.pages || []).join(', '))}</td>
+      <td>${fmtTokens(b.usage?.prompt_tokens)}</td>
+      <td>${fmtTokens(b.usage?.completion_tokens)}</td>
+      <td>${fmtTokens(b.usage?.total_tokens)}</td>
+    </tr>`).join('');
+  return `
+    <h2>Cost &amp; usage <span class="muted small">(estimate)</span></h2>
+    <p><strong>Estimated total: ${fmtUsd(u.estimated_cost_usd)}</strong>
+       <span class="muted small">
+         (input ${fmtUsd(u.estimated_input_cost_usd)} + output ${fmtUsd(u.estimated_output_cost_usd)})
+       </span></p>
+    <p class="muted small">
+      Model: ${escapeHtml(u.model || '—')} —
+      rates used: input $${(u.price_in_per_m_tokens ?? 0).toFixed(2)}/1M,
+      output $${(u.price_out_per_m_tokens ?? 0).toFixed(2)}/1M.
+      Verify against <a href="https://openai.com/api/pricing/" target="_blank" rel="noopener">openai.com/api/pricing</a>.
+      The authoritative cost is on the OpenAI dashboard.
+    </p>
+    <p class="muted small">
+      Total tokens: input ${fmtTokens(t.prompt_tokens)} +
+      output ${fmtTokens(t.completion_tokens)} =
+      ${fmtTokens(t.total_tokens)}.
+    </p>
+    <details>
+      <summary class="muted small">Per-batch breakdown</summary>
+      <table style="margin-top:8px"><thead><tr>
+        <th>Batch</th><th>Pages</th><th>Input</th><th>Output</th><th>Total</th>
+      </tr></thead><tbody>${batchRows}</tbody></table>
+    </details>`;
 }
 
 function renderWarningBanner(w) {
@@ -208,6 +251,31 @@ export async function exportReportPdf(report, meta) {
   if (s.subject) drawText(`Subject: ${s.subject}`);
   if (s.overall_comment) drawText(s.overall_comment);
   y -= 4;
+
+  if (report.app_usage) {
+    const u = report.app_usage;
+    const t = u.totals || {};
+    drawText('Cost & usage (estimate)', { bold: true, size: 14 });
+    drawText(
+      `Estimated total: $${(u.estimated_cost_usd ?? 0).toFixed(4)} ` +
+      `(input $${(u.estimated_input_cost_usd ?? 0).toFixed(4)} + ` +
+      `output $${(u.estimated_output_cost_usd ?? 0).toFixed(4)})`
+    );
+    drawText(
+      `Model: ${u.model || '—'}. ` +
+      `Rates: input $${(u.price_in_per_m_tokens ?? 0).toFixed(2)}/1M, ` +
+      `output $${(u.price_out_per_m_tokens ?? 0).toFixed(2)}/1M. ` +
+      `Verify against openai.com/api/pricing.`,
+      { size: 10, color: rgb(0.4, 0.45, 0.5) }
+    );
+    drawText(
+      `Total tokens: input ${(t.prompt_tokens || 0).toLocaleString()} + ` +
+      `output ${(t.completion_tokens || 0).toLocaleString()} = ` +
+      `${(t.total_tokens || 0).toLocaleString()}.`,
+      { size: 10, color: rgb(0.4, 0.45, 0.5) }
+    );
+    y -= 4;
+  }
 
   const results = report.question_results || [];
   const wrong = results.filter(isWrong);

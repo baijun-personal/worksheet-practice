@@ -10,6 +10,12 @@ const DEFAULTS = {
   renderDpi: 150,
   batchSize: 5,
   testMode: false,
+  // USD per 1M tokens. Defaults are gpt-4o-mini rates as commonly published;
+  // users should verify against https://openai.com/api/pricing/ for the
+  // model they actually selected. The cost shown in the report is labelled
+  // "estimated" and is computed from these rates only.
+  priceInPerMTokens: 0.15,
+  priceOutPerMTokens: 0.60,
   passphrase: '', // empty = unlocked; first run sets it
   unlocked: false,
 };

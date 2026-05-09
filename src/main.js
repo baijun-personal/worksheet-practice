@@ -113,6 +113,8 @@ function bindSetupForm() {
   $('render-dpi').value = String(state.settings.renderDpi || 150);
   $('batch-size').value = String(state.settings.batchSize || 5);
   $('test-mode').checked = !!state.settings.testMode;
+  $('price-in').value = String(state.settings.priceInPerMTokens ?? 0.15);
+  $('price-out').value = String(state.settings.priceOutPerMTokens ?? 0.60);
 
   $('pdf-input').addEventListener('change', onPdfPicked);
   $('start-practice-btn').addEventListener('click', onStartPractice);
@@ -123,6 +125,8 @@ function bindSetupForm() {
     ['openai-model', 'openaiModel', (v) => v.trim() || 'gpt-4o-mini'],
     ['render-dpi', 'renderDpi', (v) => parseInt(v, 10) || 150],
     ['batch-size', 'batchSize', (v) => Math.max(1, parseInt(v, 10) || 5)],
+    ['price-in', 'priceInPerMTokens', (v) => Math.max(0, parseFloat(v) || 0)],
+    ['price-out', 'priceOutPerMTokens', (v) => Math.max(0, parseFloat(v) || 0)],
   ]) {
     $(id).addEventListener('change', () => {
       state.settings = saveSettings({ [key]: parser($(id).value) });
@@ -203,6 +207,8 @@ async function onStartPractice() {
     renderDpi: parseInt($('render-dpi').value, 10) || 150,
     batchSize: Math.max(1, parseInt($('batch-size').value, 10) || 5),
     testMode: $('test-mode').checked,
+    priceInPerMTokens: Math.max(0, parseFloat($('price-in').value) || 0),
+    priceOutPerMTokens: Math.max(0, parseFloat($('price-out').value) || 0),
   });
 
   const subject = $('meta-subject').value.trim();
@@ -464,6 +470,7 @@ async function onSubmit() {
   });
 
   const batchResults = [];
+  const batchUsages = [];             // [{ index, pages, usage }]
   const failedBatches = [];           // [{ index, pages, error }]
   let cancelledAfterIndex = null;     // index reached when user clicked stop
   for (let i = 0; i < batches.length; i++) {
@@ -492,6 +499,13 @@ async function onSubmit() {
         level: state.attempt.level,
       });
       batchResults.push(res.parsed);
+      if (res.usage) {
+        batchUsages.push({
+          index: i,
+          pages: batches[i].map((p) => p.pageNumber),
+          usage: res.usage,
+        });
+      }
       li.classList.add('done');
       li.textContent = `Batch ${i + 1}: pages ${batches[i].map((p) => p.pageNumber).join(', ')} — done`;
     } catch (e) {
@@ -529,6 +543,29 @@ async function onSubmit() {
       stopped_skipped_count: skippedCount,
     };
   }
+
+  // Compute totals + an estimated USD cost from configured per-1M-token rates.
+  const totals = batchUsages.reduce((acc, b) => {
+    const u = b.usage || {};
+    acc.prompt_tokens += Number(u.prompt_tokens) || 0;
+    acc.completion_tokens += Number(u.completion_tokens) || 0;
+    acc.total_tokens += Number(u.total_tokens) || 0;
+    return acc;
+  }, { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 });
+  const priceIn = Number(state.settings.priceInPerMTokens) || 0;
+  const priceOut = Number(state.settings.priceOutPerMTokens) || 0;
+  const inputCost = (totals.prompt_tokens / 1_000_000) * priceIn;
+  const outputCost = (totals.completion_tokens / 1_000_000) * priceOut;
+  merged.app_usage = {
+    model: state.settings.openaiModel,
+    batches: batchUsages,
+    totals,
+    price_in_per_m_tokens: priceIn,
+    price_out_per_m_tokens: priceOut,
+    estimated_cost_usd: +(inputCost + outputCost).toFixed(4),
+    estimated_input_cost_usd: +inputCost.toFixed(4),
+    estimated_output_cost_usd: +outputCost.toFixed(4),
+  };
 
   state.reportJson = merged;
   state.attempt.reportJson = merged;
@@ -569,6 +606,7 @@ function showReport(merged) {
   setStage('report');
   renderReport(merged, {
     summaryEl: $('report-summary'),
+    costEl: $('report-cost'),
     wrongEl: $('report-wrong'),
     uncertainEl: $('report-uncertain'),
     weakEl: $('report-weak'),
