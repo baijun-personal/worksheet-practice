@@ -8,16 +8,13 @@ export function renderReport(report, mountNodes) {
     summaryEl, costEl, wrongEl, uncertainEl, weakEl, redoEl, tableEl, rawEl,
   } = mountNodes;
 
-  const summary = report.paper_summary || {};
+  const summary = report.summary || {};
   const warnings = report.app_warnings || null;
   summaryEl.innerHTML = `
     ${warnings ? renderWarningBanner(warnings) : ''}
     <h2>Summary</h2>
-    <p><strong>Estimated score:</strong> ${escapeHtml(summary.estimated_score || '—')}
-       <span class="muted small">(confidence: ${escapeHtml(summary.score_confidence || 'low')})</span></p>
-    <p><strong>Subject:</strong> ${escapeHtml(summary.subject || '—')}</p>
-    <p>${escapeHtml(summary.overall_comment || '')}</p>
-    <p class="muted small">Items flagged for parent review: ${Number(summary.needs_parent_review_count) || 0}</p>
+    <p><strong>Estimated score:</strong> ${escapeHtml(summary.estimated_score || '—')}</p>
+    <p>${escapeHtml(summary.comment || '')}</p>
   `;
 
   if (costEl) {
@@ -25,45 +22,37 @@ export function renderReport(report, mountNodes) {
     costEl.style.display = report.app_usage ? '' : 'none';
   }
 
-  const results = Array.isArray(report.question_results) ? report.question_results : [];
+  const results = Array.isArray(report.questions) ? report.questions : [];
 
-  const wrong = results.filter((r) => isWrong(r));
-  wrongEl.innerHTML = `<h2>Wrong (${wrong.length})</h2>` +
+  const wrong = results.filter(isWrong);
+  wrongEl.innerHTML = `<h2>Incorrect (${wrong.length})</h2>` +
     (wrong.length === 0 ? '<p class="muted">None.</p>' : `<ul>${wrong.map(qBullet).join('')}</ul>`);
 
-  const uncertain = results.filter((r) => isUncertain(r));
-  uncertainEl.innerHTML = `<h2>Uncertain or needs parent review (${uncertain.length})</h2>` +
+  const uncertain = results.filter(isUncertain);
+  uncertainEl.innerHTML = `<h2>Unclear (${uncertain.length})</h2>` +
     (uncertain.length === 0 ? '<p class="muted">None.</p>' : `<ul>${uncertain.map(qBullet).join('')}</ul>`);
 
-  const weak = Array.isArray(report.weak_knowledge_points) ? report.weak_knowledge_points : [];
-  weakEl.innerHTML = `<h2>Weak knowledge points</h2>` +
+  const weak = Array.isArray(report.weak_points) ? report.weak_points : [];
+  weakEl.innerHTML = `<h2>Weak points</h2>` +
     (weak.length === 0 ? '<p class="muted">No clear pattern detected.</p>' :
-      `<ul>${weak.map((w) => `
-        <li><strong>${escapeHtml(w.knowledge_point || '')}</strong> —
-            ${escapeHtml(w.comment || '')}
-            <span class="muted small">(see ${(w.evidence_questions || []).map(escapeHtml).join(', ')})</span>
-        </li>`).join('')}</ul>`);
+      `<ul>${weak.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>`);
 
-  const redo = Array.isArray(report.redo_suggestions) ? report.redo_suggestions : [];
+  const redo = Array.isArray(report.redo) ? report.redo : [];
   redoEl.innerHTML = `<h2>Suggested redo</h2>` +
     (redo.length === 0 ? '<p class="muted">None.</p>' :
       `<p>${redo.map(escapeHtml).join(', ')}</p>`);
 
   tableEl.innerHTML = `<h2>All questions (${results.length})</h2>` +
     `<table><thead><tr>
-        <th>Q</th><th>Status</th><th>Student</th><th>Expected</th><th>Pages</th><th>Conf</th><th>Comment / evidence</th><th>Topic</th>
+        <th>Q</th><th>Status</th><th>Student</th><th>Expected</th><th>Pages</th><th>Comment</th>
       </tr></thead><tbody>${
       results.map((r) => `<tr>
-        <td>${escapeHtml(r.question_number || '')}</td>
-        <td>${statusTag(r.marking_status)}</td>
+        <td>${escapeHtml(r.question || '')}</td>
+        <td>${statusTag(r.status)}</td>
         <td>${escapeHtml(r.student_answer || '')}</td>
         <td>${escapeHtml(r.expected_answer || '')}</td>
         <td>${formatPageRefs(r)}</td>
-        <td>${formatConfidence(r.confidence)}</td>
-        <td>${escapeHtml(r.comment || '')}${
-          r.evidence_note ? `<div class="muted small">${escapeHtml(r.evidence_note)}</div>` : ''
-        }</td>
-        <td>${escapeHtml(r.knowledge_point || '')}</td>
+        <td>${escapeHtml(r.comment || '')}</td>
       </tr>`).join('')
     }</tbody></table>`;
 
@@ -138,53 +127,41 @@ function renderWarningBanner(w) {
 }
 
 function formatPageRefs(r) {
-  const a = r.completed_page_number;
-  const b = r.answer_sheet_page_number;
-  if (a == null && b == null) return '<span class="muted">—</span>';
-  const aStr = a != null ? `completed p.${escapeHtml(a)}` : '';
-  const bStr = b != null ? `answer p.${escapeHtml(b)}` : '';
+  const a = r.completed_page;
+  const b = r.answer_page;
+  const hasA = a != null && a !== 0 && a !== '';
+  const hasB = b != null && b !== 0 && b !== '';
+  if (!hasA && !hasB) return '<span class="muted">—</span>';
+  const aStr = hasA ? `completed p.${escapeHtml(a)}` : '';
+  const bStr = hasB ? `answer p.${escapeHtml(b)}` : '';
   return [aStr, bStr].filter(Boolean).join('<br>');
 }
 
-function isWrong(r) {
-  return r.marking_status === 'wrong_high_confidence' || r.marking_status === 'probably_wrong';
-}
-function isUncertain(r) {
-  return r.parent_review_needed === true ||
-    r.marking_status === 'needs_parent_review' ||
-    r.marking_status === 'unable_to_determine';
-}
+function isWrong(r)     { return r.status === 'incorrect'; }
+function isUncertain(r) { return r.status === 'unclear'; }
 
 function qBullet(r) {
   const pageBits = [];
-  if (r.completed_page_number != null) pageBits.push(`completed p.${r.completed_page_number}`);
-  if (r.answer_sheet_page_number != null) pageBits.push(`answer p.${r.answer_sheet_page_number}`);
+  if (r.completed_page) pageBits.push(`completed p.${r.completed_page}`);
+  if (r.answer_page)    pageBits.push(`answer p.${r.answer_page}`);
   const pageStr = pageBits.length ? ` <span class="muted small">[${escapeHtml(pageBits.join(', '))}]</span>` : '';
   return `<li>
-    <strong>Q${escapeHtml(r.question_number || '')}</strong>
-    ${statusTag(r.marking_status)}${pageStr}
+    <strong>Q${escapeHtml(r.question || '')}</strong>
+    ${statusTag(r.status)}${pageStr}
     — student: <em>${escapeHtml(r.student_answer || '')}</em>,
     expected: <em>${escapeHtml(r.expected_answer || '')}</em>
     ${r.comment ? `<div class="muted small">${escapeHtml(r.comment)}</div>` : ''}
-    ${r.evidence_note ? `<div class="muted small">${escapeHtml(r.evidence_note)}</div>` : ''}
   </li>`;
 }
 
 function statusTag(status) {
   const known = KNOWN_STATUSES.includes(status);
   let cls = 'unsure';
-  if (status === 'correct_high_confidence' || status === 'probably_correct') cls = 'correct';
-  else if (status === 'wrong_high_confidence' || status === 'probably_wrong') cls = 'wrong';
-  else if (status === 'needs_parent_review' || status === 'unable_to_determine') cls = 'review';
-  const label = (status || 'unknown').replace(/_/g, ' ');
+  if (status === 'correct') cls = 'correct';
+  else if (status === 'incorrect') cls = 'wrong';
+  else if (status === 'unclear') cls = 'review';
+  const label = status || 'unknown';
   return `<span class="tag ${cls}" title="${known ? '' : 'Unrecognized status'}">${escapeHtml(label)}</span>`;
-}
-
-function formatConfidence(c) {
-  if (c == null) return '—';
-  const n = Number(c);
-  if (!isFinite(n)) return escapeHtml(String(c));
-  return n.toFixed(2);
 }
 
 function escapeHtml(s) {
@@ -257,11 +234,10 @@ export async function exportReportPdf(report, meta) {
     y -= 6;
   }
 
-  const s = report.paper_summary || {};
+  const s = report.summary || {};
   drawText('Summary', { bold: true, size: 14 });
-  drawText(`Estimated score: ${s.estimated_score || '—'}  (confidence: ${s.score_confidence || 'low'})`);
-  if (s.subject) drawText(`Subject: ${s.subject}`);
-  if (s.overall_comment) drawText(s.overall_comment);
+  drawText(`Estimated score: ${s.estimated_score || '—'}`);
+  if (s.comment) drawText(s.comment);
   y -= 4;
 
   if (report.app_usage) {
@@ -293,62 +269,47 @@ export async function exportReportPdf(report, meta) {
     y -= 4;
   }
 
-  const results = report.question_results || [];
+  const results = report.questions || [];
   const wrong = results.filter(isWrong);
   if (wrong.length) {
-    drawText(`Wrong (${wrong.length})`, { bold: true, size: 14 });
+    drawText(`Incorrect (${wrong.length})`, { bold: true, size: 14 });
     for (const r of wrong) {
-      drawText(`Q${r.question_number}: student "${r.student_answer || ''}" vs expected "${r.expected_answer || ''}"`);
+      drawText(`Q${r.question}: student "${r.student_answer || ''}" vs expected "${r.expected_answer || ''}"`);
       if (r.comment) drawText(`  ${r.comment}`, { size: 10, color: rgb(0.4, 0.45, 0.5) });
     }
   }
 
   const uncertain = results.filter(isUncertain);
   if (uncertain.length) {
-    drawText(`Needs parent review (${uncertain.length})`, { bold: true, size: 14 });
+    drawText(`Unclear (${uncertain.length})`, { bold: true, size: 14 });
     for (const r of uncertain) {
-      drawText(`Q${r.question_number}: ${r.comment || ''}`);
+      drawText(`Q${r.question}: ${r.comment || ''}`);
     }
   }
 
-  const weak = report.weak_knowledge_points || [];
+  const weak = report.weak_points || [];
   if (weak.length) {
-    drawText('Weak knowledge points', { bold: true, size: 14 });
-    for (const w of weak) {
-      drawText(`- ${w.knowledge_point}: ${w.comment || ''}`);
-    }
+    drawText('Weak points', { bold: true, size: 14 });
+    for (const w of weak) drawText(`- ${w}`);
   }
 
-  const redo = report.redo_suggestions || [];
+  const redo = report.redo || [];
   if (redo.length) {
     drawText('Suggested redo', { bold: true, size: 14 });
     drawText(redo.join(', '));
   }
 
-  const checklist = report.parent_review_checklist || [];
-  if (checklist.length) {
-    drawText('Parent review checklist', { bold: true, size: 14 });
-    for (const item of checklist) drawText(`- ${item}`);
-  }
-
   drawText('All questions', { bold: true, size: 14 });
   for (const r of results) {
     const pageBits = [];
-    if (r.completed_page_number != null) pageBits.push(`completed p.${r.completed_page_number}`);
-    if (r.answer_sheet_page_number != null) pageBits.push(`answer p.${r.answer_sheet_page_number}`);
+    if (r.completed_page) pageBits.push(`completed p.${r.completed_page}`);
+    if (r.answer_page)    pageBits.push(`answer p.${r.answer_page}`);
     const pageSuffix = pageBits.length ? ` [${pageBits.join(', ')}]` : '';
     drawText(
-      `Q${r.question_number} [${(r.marking_status || '').replace(/_/g, ' ')}]${pageSuffix}: ` +
+      `Q${r.question} [${r.status || 'unknown'}]${pageSuffix}: ` +
       `student "${r.student_answer || ''}" / expected "${r.expected_answer || ''}"`
     );
     if (r.comment) drawText(`  ${r.comment}`, { size: 10, color: rgb(0.4, 0.45, 0.5) });
-    if (r.evidence_note) drawText(`  ${r.evidence_note}`, { size: 9, color: rgb(0.45, 0.5, 0.55) });
-  }
-
-  const limitations = report.limitations || [];
-  if (limitations.length) {
-    drawText('Limitations', { bold: true, size: 14 });
-    for (const l of limitations) drawText(`- ${l}`);
   }
 
   const bytes = await doc.save();
