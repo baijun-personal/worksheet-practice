@@ -186,10 +186,25 @@
         <span id="autosave-indicator-practice" class="autosave" aria-live="polite">saved</span>
         <button id="exit-fullscreen-btn" type="button" title="Exit full-screen practice mode">Exit fullscreen</button>
       </div>
-      <div id="page-stage" class="page-stage">
-        <div id="page-wrap" class="page-wrap">
-          <canvas id="pdf-canvas" class="pdf-canvas"></canvas>
-          <canvas id="ink-canvas" class="ink-canvas"></canvas>
+      <div id="page-stage-frame">
+        <div id="page-stage" class="page-stage">
+          <div id="page-wrap" class="page-wrap">
+            <canvas id="pdf-canvas" class="pdf-canvas"></canvas>
+            <canvas id="ink-canvas" class="ink-canvas"></canvas>
+          </div>
+        </div>
+        <!-- Visible scroll rails for tablet use, shown only in immersive mode -->
+        <div id="scroll-rail-v" class="scroll-rail scroll-rail-v" hidden>
+          <div id="scroll-thumb-v" class="scroll-thumb"></div>
+        </div>
+        <div id="scroll-rail-h" class="scroll-rail scroll-rail-h" hidden>
+          <div id="scroll-thumb-h" class="scroll-thumb"></div>
+        </div>
+        <!-- Bottom page-nav bar — bigger touch targets for tablet -->
+        <div id="page-nav-bar">
+          <button id="page-nav-prev" type="button">‹ Previous</button>
+          <span id="page-nav-indicator">Page – / –</span>
+          <button id="page-nav-next" type="button">Next ›</button>
         </div>
       </div>
     </section>

@@ -140,6 +140,7 @@ async function enterFullscreenPractice() {
   if (state.stage === 'practice' && state.attempt) {
     setTimeout(() => loadCurrentPage(), 50);
   }
+  setTimeout(refreshScrollRails, 100);
 }
 
 async function exitFullscreenPractice() {
@@ -153,6 +154,7 @@ async function exitFullscreenPractice() {
   if (state.stage === 'practice' && state.attempt) {
     setTimeout(() => loadCurrentPage(), 50);
   }
+  setTimeout(refreshScrollRails, 100);
 }
 
 // --- Init -----------------------------------------------------------------
@@ -185,7 +187,137 @@ async function init() {
   bindPracticeUI();
   bindMarkingUI();
   bindReportUI();
+  setupScrollRails();
   $('reset-btn').addEventListener('click', resetApp);
+}
+
+// --- Custom scroll rails for #page-stage --------------------------------
+// Native iPadOS scrollbars are auto-hidden, which makes scrolling the
+// worksheet hard to discover and hard to control on tablet. We render
+// our own vertical (and conditionally horizontal) rails inside
+// #page-stage-frame so the parent always sees a draggable thumb.
+// CSS keeps the rails hidden outside immersive mode.
+function setupScrollRails() {
+  const stage = $('page-stage');
+  const railV = $('scroll-rail-v');
+  const thumbV = $('scroll-thumb-v');
+  const railH = $('scroll-rail-h');
+  const thumbH = $('scroll-thumb-h');
+  if (!stage || !railV || !thumbV || !railH || !thumbH) return;
+
+  function update() {
+    // Vertical
+    if (stage.scrollHeight > stage.clientHeight + 1) {
+      railV.hidden = false;
+      const railLen = railV.clientHeight;
+      const ratio = stage.clientHeight / stage.scrollHeight;
+      const thumbLen = Math.max(44, Math.round(railLen * ratio));
+      const maxScroll = stage.scrollHeight - stage.clientHeight;
+      const top = maxScroll > 0
+        ? Math.round((stage.scrollTop / maxScroll) * (railLen - thumbLen))
+        : 0;
+      thumbV.style.height = `${thumbLen}px`;
+      thumbV.style.top = `${top}px`;
+    } else {
+      railV.hidden = true;
+    }
+    // Horizontal — only shown when worksheet actually overflows horizontally.
+    if (stage.scrollWidth > stage.clientWidth + 1) {
+      railH.hidden = false;
+      const railLen = railH.clientWidth;
+      const ratio = stage.clientWidth / stage.scrollWidth;
+      const thumbLen = Math.max(44, Math.round(railLen * ratio));
+      const maxScroll = stage.scrollWidth - stage.clientWidth;
+      const left = maxScroll > 0
+        ? Math.round((stage.scrollLeft / maxScroll) * (railLen - thumbLen))
+        : 0;
+      thumbH.style.width = `${thumbLen}px`;
+      thumbH.style.left = `${left}px`;
+    } else {
+      railH.hidden = true;
+    }
+  }
+
+  function attachDrag(rail, thumb, axis) {
+    let dragging = false;
+    let startPointer = 0;
+    let startScroll = 0;
+
+    thumb.addEventListener('pointerdown', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      dragging = true;
+      startPointer = axis === 'y' ? ev.clientY : ev.clientX;
+      startScroll = axis === 'y' ? stage.scrollTop : stage.scrollLeft;
+      thumb.setPointerCapture(ev.pointerId);
+    });
+    thumb.addEventListener('pointermove', (ev) => {
+      if (!dragging) return;
+      ev.preventDefault();
+      const railLen = axis === 'y' ? rail.clientHeight : rail.clientWidth;
+      const thumbLen = axis === 'y' ? thumb.clientHeight : thumb.clientWidth;
+      const maxScroll = axis === 'y'
+        ? stage.scrollHeight - stage.clientHeight
+        : stage.scrollWidth - stage.clientWidth;
+      const trackLen = railLen - thumbLen;
+      if (trackLen <= 0 || maxScroll <= 0) return;
+      const delta = (axis === 'y' ? ev.clientY : ev.clientX) - startPointer;
+      const newScroll = Math.max(0, Math.min(maxScroll, startScroll + delta * (maxScroll / trackLen)));
+      if (axis === 'y') stage.scrollTop = newScroll; else stage.scrollLeft = newScroll;
+    });
+    const release = (ev) => {
+      if (!dragging) return;
+      dragging = false;
+      try { thumb.releasePointerCapture(ev.pointerId); } catch {}
+    };
+    thumb.addEventListener('pointerup', release);
+    thumb.addEventListener('pointercancel', release);
+
+    // Tap on the rail (not on the thumb) jumps scroll to that ratio.
+    rail.addEventListener('pointerdown', (ev) => {
+      if (ev.target !== rail) return;
+      const rect = rail.getBoundingClientRect();
+      const ratio = axis === 'y'
+        ? (ev.clientY - rect.top) / rect.height
+        : (ev.clientX - rect.left) / rect.width;
+      const maxScroll = axis === 'y'
+        ? stage.scrollHeight - stage.clientHeight
+        : stage.scrollWidth - stage.clientWidth;
+      const target = Math.max(0, Math.min(maxScroll, ratio * maxScroll));
+      if (axis === 'y') stage.scrollTop = target; else stage.scrollLeft = target;
+    });
+  }
+
+  attachDrag(railV, thumbV, 'y');
+  attachDrag(railH, thumbH, 'x');
+
+  stage.addEventListener('scroll', update, { passive: true });
+  window.addEventListener('resize', update);
+  if (typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver(update);
+    ro.observe(stage);
+    // page-wrap (the inner content) is what actually changes size when a
+    // new page renders or zoom changes. ResizeObserver on the scroll
+    // container doesn't fire on its content's box change, so observe
+    // the wrap too.
+    const wrap = $('page-wrap');
+    if (wrap) ro.observe(wrap);
+  }
+  // First sync once layout settles, plus expose update() so other places
+  // (loadCurrentPage, fullscreen toggles) can trigger it explicitly.
+  setTimeout(update, 50);
+  state._updateScrollRails = update;
+}
+
+function refreshScrollRails() {
+  if (typeof state._updateScrollRails === 'function') state._updateScrollRails();
+}
+
+function resetStageScroll() {
+  const stage = $('page-stage');
+  if (!stage) return;
+  stage.scrollTop = 0;
+  stage.scrollLeft = 0;
 }
 
 function resetApp() {
@@ -654,6 +786,8 @@ function bindPracticeUI() {
   $('zoom-fit-btn').addEventListener('click', () => setZoom(1));
   $('prev-page-btn').addEventListener('click', () => navigateBy(-1));
   $('next-page-btn').addEventListener('click', () => navigateBy(1));
+  $('page-nav-prev').addEventListener('click', () => navigateBy(-1));
+  $('page-nav-next').addEventListener('click', () => navigateBy(1));
   $('submit-btn').addEventListener('click', onSubmit);
   $('back-to-setup-btn').addEventListener('click', onBackToSetup);
   $('exit-fullscreen-btn').addEventListener('click', () => exitFullscreenPractice());
@@ -686,7 +820,7 @@ function setZoom(z) {
   loadCurrentPage();
 }
 
-function navigateBy(dir) {
+async function navigateBy(dir) {
   if (!state.attempt) return;
   const qp = state.attempt.questionPages;
   const idx = qp.indexOf(state.currentPage);
@@ -695,7 +829,10 @@ function navigateBy(dir) {
     state.currentPage = next;
     state.attempt.currentPage = next;
     putAttempt(state.attempt);
-    loadCurrentPage();
+    await loadCurrentPage();
+    // Always land at the top-left of the new page so the user doesn't
+    // start the next page mid-scroll from the previous one.
+    resetStageScroll();
   }
 }
 
@@ -776,12 +913,19 @@ async function loadCurrentPage() {
     },
   });
 
-  // Page indicator
+  // Page indicator — mirrored to the bottom nav bar in immersive mode.
   const qp = state.attempt.questionPages;
   const idx = qp.indexOf(state.currentPage);
   $('page-indicator').textContent = `${idx + 1} / ${qp.length} (PDF p.${state.currentPage})`;
   $('prev-page-btn').disabled = idx <= 0;
   $('next-page-btn').disabled = idx >= qp.length - 1;
+  const navIndicator = $('page-nav-indicator');
+  if (navIndicator) navIndicator.textContent = `Page ${idx + 1} / ${qp.length}`;
+  $('page-nav-prev').disabled = idx <= 0;
+  $('page-nav-next').disabled = idx >= qp.length - 1;
+
+  // The rendered page just changed size; re-sync the custom scroll rails.
+  refreshScrollRails();
 }
 
 async function onUndo() {

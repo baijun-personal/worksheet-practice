@@ -272,3 +272,130 @@ body.app-immersive #autosave-indicator-practice.error { color: var(--error); }
 /* In immersive mode, hide the in-toolbar Setup button — the parent
    wanted "API/model settings" out of the way during writing. */
 body.app-immersive #back-to-setup-btn { display: none; }
+
+/* Toolbar prev/next/indicator are tiny and far from the writing area.
+   In immersive mode the bigger bottom-of-screen #page-nav-bar takes
+   over, so hide the toolbar versions. */
+body.app-immersive #prev-page-btn,
+body.app-immersive #next-page-btn,
+body.app-immersive #page-indicator { display: none; }
+
+/* ---------- Page-stage frame: scroll rails + bottom nav bar ---------- */
+/* The frame wraps #page-stage so we can absolutely-position the rails and
+   the bottom nav over it without disturbing the existing flex centering
+   of the worksheet inside #page-stage. */
+#page-stage-frame { position: relative; }
+
+/* Outside immersive mode, the rails and bottom nav stay hidden — native
+   scrolling and the toolbar buttons are fine on desktop. */
+.scroll-rail { display: none; }
+#page-nav-bar { display: none; }
+
+body.app-immersive #page-stage-frame {
+  position: relative;
+  height: calc(100vh - 56px);   /* viewport minus the practice toolbar */
+  overflow: hidden;
+}
+body.app-immersive #page-stage {
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+  /* Leave room on the right for the vertical rail and at the bottom for
+     the page-nav bar so worksheet content can scroll past them. */
+  padding-right: 36px;
+  padding-bottom: 80px;
+}
+
+/* Vertical rail: fixed against the right edge of the frame. */
+body.app-immersive .scroll-rail-v {
+  display: block;
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 64px;       /* leave room for the bottom nav bar */
+  width: 28px;
+  background: rgba(255, 255, 255, 0.08);
+  border-left: 1px solid rgba(255, 255, 255, 0.18);
+  z-index: 5;
+  touch-action: none;
+}
+/* Horizontal rail: only shown by JS when scrollWidth > clientWidth. */
+body.app-immersive .scroll-rail-h {
+  position: absolute;
+  left: 0;
+  right: 28px;        /* don't overlap the vertical rail */
+  bottom: 64px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.08);
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  z-index: 5;
+  touch-action: none;
+}
+body.app-immersive .scroll-rail-h[hidden] { display: none; }
+body.app-immersive .scroll-rail-v[hidden] { display: none; }
+
+/* Thumbs: rounded, dark, finger-sized, draggable. */
+.scroll-rail-v .scroll-thumb {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 0;
+  height: 60px;
+  min-height: 44px;
+  background: rgba(255, 255, 255, 0.65);
+  border-radius: 10px;
+  cursor: grab;
+  touch-action: none;
+}
+.scroll-rail-h .scroll-thumb {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 0;
+  width: 60px;
+  min-width: 44px;
+  background: rgba(255, 255, 255, 0.65);
+  border-radius: 10px;
+  cursor: grab;
+  touch-action: none;
+}
+.scroll-thumb:active { cursor: grabbing; background: rgba(255, 255, 255, 0.85); }
+
+/* Bottom page-nav bar: large prev/next + page indicator. */
+body.app-immersive #page-nav-bar {
+  display: flex;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 64px;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  padding: 8px 16px;
+  background: rgba(0, 0, 0, 0.85);
+  color: white;
+  z-index: 6;
+  font-size: 16px;
+}
+body.app-immersive #page-nav-bar button {
+  background: white;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 16px;
+  padding: 12px 18px;
+  min-width: 120px;
+  min-height: 48px;
+  cursor: pointer;
+}
+body.app-immersive #page-nav-bar button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+body.app-immersive #page-nav-indicator {
+  min-width: 110px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: white;
+}
