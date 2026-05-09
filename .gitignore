@@ -14,6 +14,8 @@ node_modules/
 
 # Never commit these — runtime artifacts or secrets
 *.pdf
+# Built-in worksheet PDFs are bundled with the app.
+!public/worksheets/*.pdf
 *.env
 .env.*
 secrets.json
