@@ -33,21 +33,31 @@ export function renderReport(report, mountNodes) {
     (uncertain.length === 0 ? '<p class="muted">None.</p>' : `<ul>${uncertain.map(qBullet).join('')}</ul>`);
 
   const weak = Array.isArray(report.weak_points) ? report.weak_points : [];
-  weakEl.innerHTML = `<h2>Weak points</h2>` +
-    (weak.length === 0 ? '<p class="muted">No clear pattern detected.</p>' :
-      `<ul>${weak.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>`);
+  // Hide the weak-points card entirely when there's nothing specific to say,
+  // rather than printing a generic "no clear pattern" line.
+  if (weak.length === 0) {
+    weakEl.innerHTML = '';
+    weakEl.style.display = 'none';
+  } else {
+    weakEl.style.display = '';
+    weakEl.innerHTML = `<h2>Weak points</h2>` +
+      `<ul>${weak.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>`;
+  }
 
   const redo = Array.isArray(report.redo) ? report.redo : [];
   redoEl.innerHTML = `<h2>Suggested redo</h2>` +
     (redo.length === 0 ? '<p class="muted">None.</p>' :
       `<p>${redo.map(escapeHtml).join(', ')}</p>`);
 
+  // Only show the section column when at least one row actually has a section.
+  const showSection = results.some((r) => r.section);
   tableEl.innerHTML = `<h2>All questions (${results.length})</h2>` +
     `<table><thead><tr>
-        <th>Q</th><th>Status</th><th>Student</th><th>Expected</th><th>Pages</th><th>Comment</th>
+        <th>Q</th>${showSection ? '<th>Section</th>' : ''}<th>Status</th><th>Student</th><th>Expected</th><th>Pages</th><th>Comment</th>
       </tr></thead><tbody>${
       results.map((r) => `<tr>
-        <td>${escapeHtml(r.question || '')}</td>
+        <td>${escapeHtml(questionLabel(r))}</td>
+        ${showSection ? `<td>${escapeHtml(r.section || '')}</td>` : ''}
         <td>${statusTag(r.status)}</td>
         <td>${escapeHtml(r.student_answer || '')}</td>
         <td>${escapeHtml(r.expected_answer || '')}</td>
@@ -57,6 +67,21 @@ export function renderReport(report, mountNodes) {
     }</tbody></table>`;
 
   rawEl.textContent = JSON.stringify(report, null, 2);
+}
+
+// Build a safe display label for a question. Prefers the AI-extracted
+// display_question; otherwise composes one from section + question_number,
+// adding a "Q" prefix only when the value doesn't already start with one
+// (fixes the "QQ1" UI bug where the renderer was double-prefixing).
+function questionLabel(r) {
+  if (r.display_question) return String(r.display_question);
+  const q = r.question != null ? String(r.question) : '';
+  const sec = r.section ? String(r.section) : '';
+  const qDisplay = q
+    ? (/^Q/i.test(q) ? q : `Q${q}`)
+    : '';
+  if (sec && qDisplay) return `${sec} ${qDisplay}`;
+  return qDisplay || sec || '';
 }
 
 function renderCostCard(u) {
@@ -146,7 +171,7 @@ function qBullet(r) {
   if (r.answer_page)    pageBits.push(`answer p.${r.answer_page}`);
   const pageStr = pageBits.length ? ` <span class="muted small">[${escapeHtml(pageBits.join(', '))}]</span>` : '';
   return `<li>
-    <strong>Q${escapeHtml(r.question || '')}</strong>
+    <strong>${escapeHtml(questionLabel(r))}</strong>
     ${statusTag(r.status)}${pageStr}
     — student: <em>${escapeHtml(r.student_answer || '')}</em>,
     expected: <em>${escapeHtml(r.expected_answer || '')}</em>

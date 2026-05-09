@@ -1,10 +1,16 @@
-// OpenAI vision call. Uses chat/completions with image_url parts.
-// The system prompt and user prompt include the color-convention sentence
-// verbatim — see design doc "Prompt contract".
+// OpenAI vision calls. Uses chat/completions with image_url parts.
+//
+// Marking is split into two extractions plus a code-side comparison:
+//   - extractStudentAnswers(): completed worksheet pages only.
+//   - extractAnswerKey():      answer sheet pages only.
+//   - compareExtractions() in compare.js merges the two structured outputs.
+// Keeping the two reads isolated stops the answer key from biasing how the
+// model reads the student's handwriting (observed failure mode: model
+// "reads" a 1 as a 4 because the key expected 4).
 //
 // Model is configurable via MODEL_PRESETS below; default "gpt-5.4-mini".
 // Verify against current OpenAI model list when iterating; the model name
-// and pricing are config fields, not hardcoded into the marking call.
+// and pricing are config fields, not hardcoded.
 
 const ENDPOINT = 'https://api.openai.com/v1/chat/completions';
 
@@ -67,82 +73,96 @@ export function presetForModel(model) {
   return MODEL_PRESETS.find((p) => p.id === model) || null;
 }
 
-const SYSTEM_PROMPT = `You are marking a child's worksheet.
+// Final-report status values the report UI knows how to render.
+export const KNOWN_STATUSES = ['correct', 'incorrect', 'unclear'];
 
-Use the answer sheet pages to mark the completed worksheet pages.
+const STUDENT_PROMPT = `Extract the child's answers from these completed worksheet pages.
 
-The printed worksheet is black. The child's answers are blue. Read only the blue answers, then compare with the answer sheet.
+The printed worksheet is black. The child's answers are blue. Read only the blue answers.
 
-Mark every visible question. Do not use printed page numbers, score boxes, marks, or footer numbers as answers. For tick-box questions, count only boxes clearly ticked in blue. For open-ended writing, mark only if the answer key gives a clear answer; otherwise use unclear.
+Do not mark. Do not compare with an answer key. Do not use printed page numbers, score boxes, marks, or footer numbers as answers.
+
+If a worksheet has multiple sections, capture the section label (e.g. "Section A - Vocabulary"). Use the printed/local question_number as it appears (e.g. "1", "5a"). Use the page number from the image label.
+
+If an answer is unreadable, set "answer" to "unclear" and a low confidence.
 
 Return JSON only:
 {
-  "summary": {
-    "estimated_score": "",
-    "comment": ""
-  },
-  "questions": [
+  "answers": [
     {
-      "question": "",
-      "completed_page": 0,
-      "answer_page": 0,
-      "student_answer": "",
-      "expected_answer": "",
-      "status": "correct | incorrect | unclear",
-      "comment": ""
+      "global_question_index": 1,
+      "section": "",
+      "question_number": "",
+      "display_question": "",
+      "page": 0,
+      "answer": "",
+      "confidence": 0
     }
-  ],
-  "redo": [],
-  "weak_points": []
+  ]
 }`;
 
-// Status values the report UI knows how to render.
-export const KNOWN_STATUSES = ['correct', 'incorrect', 'unclear'];
+const ANSWER_KEY_PROMPT = `Extract the expected answers from these answer sheet pages.
 
-export async function markBatch({
+If a worksheet has multiple sections, capture the section label. Use the printed/local question_number as it appears. Use the page number from the image label.
+
+Return JSON only:
+{
+  "answers": [
+    {
+      "global_question_index": 1,
+      "section": "",
+      "question_number": "",
+      "display_question": "",
+      "page": 0,
+      "answer": "",
+      "confidence": 0
+    }
+  ]
+}`;
+
+export async function extractStudentAnswers({
   apiKey,
   model,
   completedPageImages, // [{ pageNumber, dataUrl, fourup?, includedPageNumbers? }]
+  signal,
+}) {
+  const content = [];
+  for (const p of completedPageImages) {
+    const label = (p.fourup && Array.isArray(p.includedPageNumbers))
+      ? `Completed 4-up image: pages ${p.includedPageNumbers.join(', ')} arranged 2x2 and labelled in the image.`
+      : `Completed page ${p.pageNumber}`;
+    content.push({ type: 'text', text: label });
+    content.push({ type: 'image_url', image_url: { url: p.dataUrl, detail: 'high' } });
+  }
+  return chatJson({ apiKey, model, system: STUDENT_PROMPT, content, signal });
+}
+
+export async function extractAnswerKey({
+  apiKey,
+  model,
   answerPageImages,    // [{ pageNumber, dataUrl }]
   signal,
 }) {
-  if (!apiKey) throw new Error('OpenAI API key not set');
-  if (!model) throw new Error('Model not set');
-
-  // User message: short image labels and images only. All marking rules
-  // live in SYSTEM_PROMPT.
   const content = [];
-  for (const p of completedPageImages) {
-    let label;
-    if (p.fourup && Array.isArray(p.includedPageNumbers)) {
-      label = `Completed 4-up image: pages ${p.includedPageNumbers.join(', ')} arranged 2x2 and labelled in the image.`;
-    } else {
-      label = `Completed page ${p.pageNumber}`;
-    }
-    content.push({ type: 'text', text: label });
-    content.push({
-      type: 'image_url',
-      image_url: { url: p.dataUrl, detail: 'high' },
-    });
-  }
   for (const p of answerPageImages) {
     content.push({ type: 'text', text: `Answer page ${p.pageNumber}` });
-    content.push({
-      type: 'image_url',
-      image_url: { url: p.dataUrl, detail: 'high' },
-    });
+    content.push({ type: 'image_url', image_url: { url: p.dataUrl, detail: 'high' } });
   }
+  return chatJson({ apiKey, model, system: ANSWER_KEY_PROMPT, content, signal });
+}
 
+async function chatJson({ apiKey, model, system, content, signal }) {
+  if (!apiKey) throw new Error('OpenAI API key not set');
+  if (!model) throw new Error('Model not set');
   const body = {
     model,
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: system },
       { role: 'user', content },
     ],
     response_format: { type: 'json_object' },
     temperature: 0,
   };
-
   const resp = await fetch(ENDPOINT, {
     method: 'POST',
     headers: {
@@ -166,52 +186,6 @@ export async function markBatch({
     throw new Error('OpenAI response was not valid JSON: ' + text.slice(0, 200));
   }
   return { parsed, raw: json, usage: json.usage };
-}
-
-// Merge per-batch JSONs into a single report using the simplified schema:
-//   { summary: { estimated_score, comment }, questions, redo, weak_points }
-export function mergeReports(batchReports) {
-  const merged = {
-    summary: { estimated_score: '', comment: '' },
-    questions: [],
-    redo: [],
-    weak_points: [],
-  };
-  const seenRedo = new Set();
-  const seenWeak = new Set();
-  for (const r of batchReports) {
-    if (!r) continue;
-    if (r.summary?.comment) {
-      merged.summary.comment += (merged.summary.comment ? ' ' : '') + r.summary.comment;
-    }
-    if (Array.isArray(r.questions)) merged.questions.push(...r.questions);
-    if (Array.isArray(r.redo)) {
-      for (const q of r.redo) {
-        const k = String(q).trim().toLowerCase();
-        if (!k || seenRedo.has(k)) continue;
-        seenRedo.add(k); merged.redo.push(q);
-      }
-    }
-    if (Array.isArray(r.weak_points)) {
-      for (const w of r.weak_points) {
-        const k = String(w).trim().toLowerCase();
-        if (!k || seenWeak.has(k)) continue;
-        seenWeak.add(k); merged.weak_points.push(w);
-      }
-    }
-  }
-  // If every batch reported an "X/Y" estimated score, sum them.
-  let scoreNum = 0, scoreDen = 0, allParseable = true;
-  for (const r of batchReports) {
-    const s = r?.summary?.estimated_score || '';
-    const m = String(s).match(/(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)/);
-    if (m) { scoreNum += parseFloat(m[1]); scoreDen += parseFloat(m[2]); } else { allParseable = false; }
-  }
-  if (allParseable && scoreDen > 0) {
-    const trimmed = (n) => Number.isInteger(n) ? n.toString() : n.toFixed(1);
-    merged.summary.estimated_score = `${trimmed(scoreNum)}/${trimmed(scoreDen)}`;
-  }
-  return merged;
 }
 
 export function chunkPages(pages, size) {

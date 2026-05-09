@@ -10,7 +10,8 @@ import {
 import { loadPdfFromBlob, renderPageToCanvas } from './pdfRender.js';
 import { attachInkController, redrawAll } from './draw.js';
 import { flattenQuestionPage, renderAnswerPage, colorContentRatio } from './flatten.js';
-import { markBatch, mergeReports, chunkPages, MODEL_PRESETS, DEFAULT_MODEL, presetForModel } from './openai.js';
+import { extractStudentAnswers, extractAnswerKey, MODEL_PRESETS, DEFAULT_MODEL, presetForModel } from './openai.js';
+import { compareExtractions } from './compare.js';
 import { renderReport, exportReportPdf, exportCompletedAttemptPdf } from './report.js';
 import { loadCatalog, fetchBuiltinPdf, builtinAttemptId } from './builtin.js';
 import { composeFourUpA4, chunkInto } from './fourup.js';
@@ -857,92 +858,132 @@ async function onSubmit() {
     }
   }
 
+  // Build a unified list of "tasks" the marking loop will run, in order:
+  //   - one task per Stage-1 student-answer batch
+  //   - one task for the Stage-2 answer-key extraction (if there are answer pages)
+  // Each task tracks its kind, label, request payload, and result holder.
+  const tasks = batches.map((b, i) => ({
+    kind: 'student',
+    index: i,
+    label: `Student answers, pages ${b.plannedPages.join(', ')}`,
+    completed: b.completed,
+    plannedPages: b.plannedPages,
+  }));
+  if (answerImages.length > 0) {
+    tasks.push({
+      kind: 'answer_key',
+      index: tasks.length,
+      label: `Answer key, pages ${aPages.join(', ')}`,
+      answer: answerImages,
+      plannedPages: [...aPages],
+    });
+  }
+
   const batchListEl = $('batch-list');
-  batches.forEach((b, i) => {
+  tasks.forEach((t, i) => {
     const li = document.createElement('li');
     li.id = `batch-${i}`;
-    li.textContent = `Request ${i + 1}: pages ${b.plannedPages.join(', ')} — pending`;
+    li.textContent = `Request ${i + 1}: ${t.label} — pending`;
     batchListEl.appendChild(li);
   });
 
-  const batchResults = [];
-  const batchUsages = [];             // [{ index, pages, usage }]
-  const failedBatches = [];           // [{ index, pages, error }]
+  const studentResults = [];
+  const keyResults = [];
+  const taskUsages = [];              // [{ index, kind, pages, usage }]
+  const failedTasks = [];             // [{ index, kind, pages, error }]
   let cancelledAfterIndex = null;     // index reached when user clicked stop
-  for (let i = 0; i < batches.length; i++) {
+
+  for (let i = 0; i < tasks.length; i++) {
     if (state.cancelMarking) {
       cancelledAfterIndex = i;
-      // Mark remaining batches as skipped in the UI list
-      for (let j = i; j < batches.length; j++) {
+      for (let j = i; j < tasks.length; j++) {
         const li = $(`batch-${j}`);
         if (li && !li.classList.contains('done') && !li.classList.contains('failed')) {
-          li.textContent = `Request ${j + 1}: pages ${batches[j].plannedPages.join(', ')} — skipped (stopped)`;
+          li.textContent = `Request ${j + 1}: ${tasks[j].label} — skipped (stopped)`;
           li.classList.add('failed');
         }
       }
       break;
     }
+    const t = tasks[i];
     const li = $(`batch-${i}`);
-    li.textContent = `Request ${i + 1}: pages ${batches[i].plannedPages.join(', ')} — sending…`;
-    $('marking-status').textContent = `Marking request ${i + 1} of ${batches.length}…`;
+    li.textContent = `Request ${i + 1}: ${t.label} — sending…`;
+    $('marking-status').textContent = `Marking request ${i + 1} of ${tasks.length}…`;
     try {
-      const res = await markBatch({
-        apiKey: state.settings.openaiKey,
-        model: state.settings.openaiModel,
-        completedPageImages: batches[i].completed,
-        answerPageImages: batches[i].answer,
-        subject: state.attempt.subject,
-        level: state.attempt.level,
-      });
-      batchResults.push(res.parsed);
+      let res;
+      if (t.kind === 'student') {
+        res = await extractStudentAnswers({
+          apiKey: state.settings.openaiKey,
+          model: state.settings.openaiModel,
+          completedPageImages: t.completed,
+        });
+        studentResults.push(res.parsed);
+      } else {
+        res = await extractAnswerKey({
+          apiKey: state.settings.openaiKey,
+          model: state.settings.openaiModel,
+          answerPageImages: t.answer,
+        });
+        keyResults.push(res.parsed);
+      }
       if (res.usage) {
-        batchUsages.push({
+        taskUsages.push({
           index: i,
-          pages: batches[i].plannedPages,
+          kind: t.kind,
+          pages: t.plannedPages,
           usage: res.usage,
         });
       }
       li.classList.add('done');
-      li.textContent = `Request ${i + 1}: pages ${batches[i].plannedPages.join(', ')} — done`;
+      li.textContent = `Request ${i + 1}: ${t.label} — done`;
     } catch (e) {
-      console.error('Batch failed', e);
+      console.error('Task failed', e);
       li.classList.add('failed');
       li.textContent = `Request ${i + 1}: failed — ${e.message}`;
       const retry = confirm(`Request ${i + 1} failed:\n${e.message}\n\nRetry?`);
       if (retry) { i--; continue; }
-      failedBatches.push({
+      failedTasks.push({
         index: i,
-        pages: batches[i].plannedPages,
+        kind: t.kind,
+        pages: t.plannedPages,
         error: e.message,
       });
-      // Fall through with partial batches; merged report will show what we have.
+      // Fall through with what we have.
     }
   }
 
-  if (batchResults.length === 0) {
-    $('marking-status').textContent = 'No batches succeeded.';
+  if (studentResults.length === 0) {
+    $('marking-status').textContent = 'No student-answer extractions succeeded; cannot produce a report.';
     return;
   }
 
-  const merged = mergeReports(batchResults);
+  // Stage 3: compare in code.
+  const merged = compareExtractions(studentResults, keyResults);
 
   const stopped = cancelledAfterIndex != null;
-  const skippedCount = stopped ? batches.length - cancelledAfterIndex : 0;
-  if (failedBatches.length > 0 || stopped) {
+  const skippedCount = stopped ? tasks.length - cancelledAfterIndex : 0;
+  if (failedTasks.length > 0 || stopped) {
     merged.app_warnings = {
       incomplete: true,
-      batches_total: batches.length,
-      batches_completed: batchResults.length,
-      failed_batches: failedBatches,
+      batches_total: tasks.length,
+      batches_completed: tasks.length - failedTasks.length - skippedCount,
+      failed_batches: failedTasks.map((t) => ({
+        index: t.index,
+        pages: t.pages,
+        error: `${t.kind === 'answer_key' ? 'Answer key' : 'Student answers'}: ${t.error}`,
+      })),
       stopped_by_user: stopped,
       stopped_skipped_count: skippedCount,
+      missing_answer_key: keyResults.length === 0 && answerImages.length > 0,
     };
   }
+  if (keyResults.length === 0 && answerImages.length === 0) {
+    merged.summary.comment = (merged.summary.comment ? merged.summary.comment + ' ' : '') +
+      'No answer pages were specified, so questions are listed but not compared. Open Setup → Pages to add an Answer pages range and submit again.';
+  }
 
-  // Compute totals + an estimated USD cost from configured per-1M-token rates.
-  // Split prompt_tokens into cached vs uncached using OpenAI's
-  // prompt_tokens_details.cached_tokens (older models report 0).
-  const totals = batchUsages.reduce((acc, b) => {
+  // Cost / usage — sum across all tasks (Stage 1 batches + Stage 2 answer-key call).
+  const totals = taskUsages.reduce((acc, b) => {
     const u = b.usage || {};
     const prompt = Number(u.prompt_tokens) || 0;
     const cached = Number(u.prompt_tokens_details?.cached_tokens) || 0;
@@ -962,7 +1003,7 @@ async function onSubmit() {
   const outputCost = (totals.completion_tokens / 1_000_000) * priceOut;
   merged.app_usage = {
     model: state.settings.openaiModel,
-    batches: batchUsages,
+    batches: taskUsages,
     totals,
     price_in_per_m_tokens: priceIn,
     price_cached_in_per_m_tokens: priceCachedIn,
@@ -974,9 +1015,15 @@ async function onSubmit() {
     estimated_output_cost_usd: +outputCost.toFixed(4),
   };
 
+  // Stash the raw extractions so the parent can inspect via "Show raw JSON".
+  merged.app_extractions = {
+    student: studentResults,
+    answer_key: keyResults,
+  };
+
   state.reportJson = merged;
   state.attempt.reportJson = merged;
-  state.attempt.status = (failedBatches.length > 0 || stopped) ? 'partially_marked' : 'marked';
+  state.attempt.status = (failedTasks.length > 0 || stopped) ? 'partially_marked' : 'marked';
   await putAttempt(state.attempt);
 
   showReport(merged);
@@ -1017,18 +1064,42 @@ function bindReportUI() {
     el.hidden = !el.hidden;
     $('toggle-raw-json').textContent = el.hidden ? 'Show raw JSON' : 'Hide raw JSON';
   });
-  $('download-report-pdf').addEventListener('click', async () => {
+  $('download-report-pdf').addEventListener('click', async (ev) => {
     if (!state.reportJson) return;
-    const blob = await exportReportPdf(state.reportJson, { pdfName: state.attempt?.pdfName });
-    triggerDownload(blob, fileBaseName(state.attempt?.pdfName) + '-report.pdf');
+    const btn = ev.currentTarget;
+    const prev = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Generating PDF…';
+    try {
+      const blob = await exportReportPdf(state.reportJson, { pdfName: state.attempt?.pdfName });
+      triggerDownload(blob, fileBaseName(state.attempt?.pdfName) + '-report.pdf');
+    } catch (e) {
+      console.error('Report PDF export failed', e);
+      alert('Report PDF export failed: ' + (e?.message || e));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prev;
+    }
   });
-  $('download-attempt-pdf').addEventListener('click', async () => {
+  $('download-attempt-pdf').addEventListener('click', async (ev) => {
     if (!state.flattenedCompletedPages) {
       alert('Completed pages are only available right after marking.');
       return;
     }
-    const blob = await exportCompletedAttemptPdf(state.flattenedCompletedPages);
-    triggerDownload(blob, fileBaseName(state.attempt?.pdfName) + '-completed.pdf');
+    const btn = ev.currentTarget;
+    const prev = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Generating PDF…';
+    try {
+      const blob = await exportCompletedAttemptPdf(state.flattenedCompletedPages);
+      triggerDownload(blob, fileBaseName(state.attempt?.pdfName) + '-completed.pdf');
+    } catch (e) {
+      console.error('Attempt PDF export failed', e);
+      alert('Attempt PDF export failed: ' + (e?.message || e));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prev;
+    }
   });
 }
 
