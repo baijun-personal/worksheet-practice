@@ -9,7 +9,9 @@ export function renderReport(report, mountNodes) {
   } = mountNodes;
 
   const summary = report.paper_summary || {};
+  const warnings = report.app_warnings || null;
   summaryEl.innerHTML = `
+    ${warnings ? renderWarningBanner(warnings) : ''}
     <h2>Summary</h2>
     <p><strong>Estimated score:</strong> ${escapeHtml(summary.estimated_score || '—')}
        <span class="muted small">(confidence: ${escapeHtml(summary.score_confidence || 'low')})</span></p>
@@ -44,20 +46,49 @@ export function renderReport(report, mountNodes) {
 
   tableEl.innerHTML = `<h2>All questions (${results.length})</h2>` +
     `<table><thead><tr>
-        <th>Q</th><th>Status</th><th>Student</th><th>Expected</th><th>Conf</th><th>Comment</th><th>Topic</th>
+        <th>Q</th><th>Status</th><th>Student</th><th>Expected</th><th>Pages</th><th>Conf</th><th>Comment / evidence</th><th>Topic</th>
       </tr></thead><tbody>${
       results.map((r) => `<tr>
         <td>${escapeHtml(r.question_number || '')}</td>
         <td>${statusTag(r.marking_status)}</td>
         <td>${escapeHtml(r.student_answer || '')}</td>
         <td>${escapeHtml(r.expected_answer || '')}</td>
+        <td>${formatPageRefs(r)}</td>
         <td>${formatConfidence(r.confidence)}</td>
-        <td>${escapeHtml(r.comment || '')}</td>
+        <td>${escapeHtml(r.comment || '')}${
+          r.evidence_note ? `<div class="muted small">${escapeHtml(r.evidence_note)}</div>` : ''
+        }</td>
         <td>${escapeHtml(r.knowledge_point || '')}</td>
       </tr>`).join('')
     }</tbody></table>`;
 
   rawEl.textContent = JSON.stringify(report, null, 2);
+}
+
+function renderWarningBanner(w) {
+  const lines = [];
+  if (w.stopped_by_user) {
+    lines.push(`Marking was stopped after batch ${w.batches_completed} of ${w.batches_total}. ${w.stopped_skipped_count} batch(es) were skipped.`);
+  }
+  if (Array.isArray(w.failed_batches) && w.failed_batches.length > 0) {
+    const failed = w.failed_batches
+      .map((b) => `batch ${b.index + 1} (pages ${b.pages.join(', ')})`)
+      .join(', ');
+    lines.push(`Failed and skipped: ${failed}.`);
+  }
+  lines.push(`This report is incomplete: only ${w.batches_completed} of ${w.batches_total} batches were marked.`);
+  return `<div class="warning" style="margin-bottom:12px">
+    <strong>Warning:</strong> ${lines.map(escapeHtml).join(' ')}
+  </div>`;
+}
+
+function formatPageRefs(r) {
+  const a = r.completed_page_number;
+  const b = r.answer_sheet_page_number;
+  if (a == null && b == null) return '<span class="muted">—</span>';
+  const aStr = a != null ? `completed p.${escapeHtml(a)}` : '';
+  const bStr = b != null ? `answer p.${escapeHtml(b)}` : '';
+  return [aStr, bStr].filter(Boolean).join('<br>');
 }
 
 function isWrong(r) {
@@ -70,12 +101,17 @@ function isUncertain(r) {
 }
 
 function qBullet(r) {
+  const pageBits = [];
+  if (r.completed_page_number != null) pageBits.push(`completed p.${r.completed_page_number}`);
+  if (r.answer_sheet_page_number != null) pageBits.push(`answer p.${r.answer_sheet_page_number}`);
+  const pageStr = pageBits.length ? ` <span class="muted small">[${escapeHtml(pageBits.join(', '))}]</span>` : '';
   return `<li>
     <strong>Q${escapeHtml(r.question_number || '')}</strong>
-    ${statusTag(r.marking_status)}
+    ${statusTag(r.marking_status)}${pageStr}
     — student: <em>${escapeHtml(r.student_answer || '')}</em>,
     expected: <em>${escapeHtml(r.expected_answer || '')}</em>
     ${r.comment ? `<div class="muted small">${escapeHtml(r.comment)}</div>` : ''}
+    ${r.evidence_note ? `<div class="muted small">${escapeHtml(r.evidence_note)}</div>` : ''}
   </li>`;
 }
 
@@ -146,6 +182,26 @@ export async function exportReportPdf(report, meta) {
   drawText(`Generated: ${new Date().toLocaleString()}`, { size: 10, color: rgb(0.4, 0.45, 0.5) });
   y -= 8;
 
+  if (report.app_warnings) {
+    const w = report.app_warnings;
+    drawText('WARNING: report is incomplete', { bold: true, size: 13, color: rgb(0.6, 0.1, 0.1) });
+    drawText(
+      `Only ${w.batches_completed} of ${w.batches_total} batches were marked.`,
+      { color: rgb(0.4, 0.1, 0.1) }
+    );
+    if (w.stopped_by_user) {
+      drawText(`Marking was stopped by the user; ${w.stopped_skipped_count} batch(es) were skipped.`,
+        { color: rgb(0.4, 0.1, 0.1) });
+    }
+    if (Array.isArray(w.failed_batches) && w.failed_batches.length > 0) {
+      for (const fb of w.failed_batches) {
+        drawText(`Failed batch ${fb.index + 1} (pages ${fb.pages.join(', ')}): ${fb.error}`,
+          { color: rgb(0.4, 0.1, 0.1) });
+      }
+    }
+    y -= 6;
+  }
+
   const s = report.paper_summary || {};
   drawText('Summary', { bold: true, size: 14 });
   drawText(`Estimated score: ${s.estimated_score || '—'}  (confidence: ${s.score_confidence || 'low'})`);
@@ -193,11 +249,16 @@ export async function exportReportPdf(report, meta) {
 
   drawText('All questions', { bold: true, size: 14 });
   for (const r of results) {
+    const pageBits = [];
+    if (r.completed_page_number != null) pageBits.push(`completed p.${r.completed_page_number}`);
+    if (r.answer_sheet_page_number != null) pageBits.push(`answer p.${r.answer_sheet_page_number}`);
+    const pageSuffix = pageBits.length ? ` [${pageBits.join(', ')}]` : '';
     drawText(
-      `Q${r.question_number} [${(r.marking_status || '').replace(/_/g, ' ')}]: ` +
+      `Q${r.question_number} [${(r.marking_status || '').replace(/_/g, ' ')}]${pageSuffix}: ` +
       `student "${r.student_answer || ''}" / expected "${r.expected_answer || ''}"`
     );
     if (r.comment) drawText(`  ${r.comment}`, { size: 10, color: rgb(0.4, 0.45, 0.5) });
+    if (r.evidence_note) drawText(`  ${r.evidence_note}`, { size: 9, color: rgb(0.45, 0.5, 0.55) });
   }
 
   const limitations = report.limitations || [];

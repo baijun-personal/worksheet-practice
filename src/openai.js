@@ -50,10 +50,27 @@ const USER_PROMPT_PREFIX = [
   '- If the answer is unreadable, do not guess.',
   '- For multi-part questions, use labels like Q5a, Q5b.',
   '',
+  'Each image part is preceded by a short text label naming the PDF page it shows',
+  '(e.g. "Completed worksheet page PDF p.3" or "Answer sheet page PDF p.22").',
+  'Use those page numbers when populating completed_page_number and answer_sheet_page_number',
+  'so the parent can verify the AI was reading the right page.',
+  '',
   'JSON shape (use exactly these keys):',
   '{',
   '  "paper_summary": { "subject": string, "estimated_score": string, "score_confidence": string, "overall_comment": string, "needs_parent_review_count": number },',
-  '  "question_results": [ { "question_number": string, "student_answer": string, "expected_answer": string, "marking_status": string, "confidence": number, "comment": string, "knowledge_point": string, "parent_review_needed": boolean } ],',
+  '  "question_results": [ {',
+  '    "question_number": string,',
+  '    "completed_page_number": number,         // PDF page number (1-based) of the completed worksheet page where the student answer appears; null if unknown',
+  '    "answer_sheet_page_number": number,      // PDF page number (1-based) of the answer sheet page that supplied the expected answer; null if unknown',
+  '    "student_answer": string,',
+  '    "expected_answer": string,',
+  '    "marking_status": string,',
+  '    "confidence": number,',
+  '    "comment": string,',
+  '    "knowledge_point": string,',
+  '    "parent_review_needed": boolean,',
+  '    "evidence_note": string                  // one short sentence saying which page each value was read from, e.g. "Student answer was read from completed page 3; expected answer found on answer sheet page 22."',
+  '  } ],',
   '  "weak_knowledge_points": [ { "knowledge_point": string, "evidence_questions": string[], "comment": string } ],',
   '  "redo_suggestions": string[],',
   '  "parent_review_checklist": string[],',
@@ -94,14 +111,18 @@ export async function markBatch({
     'Mark only questions visible in these completed pages.',
   ].join('\n');
 
+  // Interleave a short label before each image so the model can map answers
+  // to specific PDF page numbers reliably.
   const content = [{ type: 'text', text: userText }];
   for (const p of completedPageImages) {
+    content.push({ type: 'text', text: `Completed worksheet page PDF p.${p.pageNumber}` });
     content.push({
       type: 'image_url',
       image_url: { url: p.dataUrl, detail: 'high' },
     });
   }
   for (const p of answerPageImages) {
+    content.push({ type: 'text', text: `Answer sheet page PDF p.${p.pageNumber}` });
     content.push({
       type: 'image_url',
       image_url: { url: p.dataUrl, detail: 'high' },

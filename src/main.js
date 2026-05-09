@@ -464,8 +464,21 @@ async function onSubmit() {
   });
 
   const batchResults = [];
+  const failedBatches = [];           // [{ index, pages, error }]
+  let cancelledAfterIndex = null;     // index reached when user clicked stop
   for (let i = 0; i < batches.length; i++) {
-    if (state.cancelMarking) return abortMarking('Cancelled');
+    if (state.cancelMarking) {
+      cancelledAfterIndex = i;
+      // Mark remaining batches as skipped in the UI list
+      for (let j = i; j < batches.length; j++) {
+        const li = $(`batch-${j}`);
+        if (li && !li.classList.contains('done') && !li.classList.contains('failed')) {
+          li.textContent = `Batch ${j + 1}: pages ${batches[j].map((p) => p.pageNumber).join(', ')} — skipped (stopped)`;
+          li.classList.add('failed');
+        }
+      }
+      break;
+    }
     const li = $(`batch-${i}`);
     li.textContent = `Batch ${i + 1}: pages ${batches[i].map((p) => p.pageNumber).join(', ')} — sending…`;
     $('marking-status').textContent = `Marking batch ${i + 1} of ${batches.length}…`;
@@ -487,6 +500,11 @@ async function onSubmit() {
       li.textContent = `Batch ${i + 1}: failed — ${e.message}`;
       const retry = confirm(`Batch ${i + 1} failed:\n${e.message}\n\nRetry?`);
       if (retry) { i--; continue; }
+      failedBatches.push({
+        index: i,
+        pages: batches[i].map((p) => p.pageNumber),
+        error: e.message,
+      });
       // Fall through with partial batches; merged report will show what we have.
     }
   }
@@ -498,9 +516,23 @@ async function onSubmit() {
 
   const merged = mergeReports(batchResults);
   if (state.attempt.subject) merged.paper_summary.subject = state.attempt.subject;
+
+  const stopped = cancelledAfterIndex != null;
+  const skippedCount = stopped ? batches.length - cancelledAfterIndex : 0;
+  if (failedBatches.length > 0 || stopped) {
+    merged.app_warnings = {
+      incomplete: true,
+      batches_total: batches.length,
+      batches_completed: batchResults.length,
+      failed_batches: failedBatches,
+      stopped_by_user: stopped,
+      stopped_skipped_count: skippedCount,
+    };
+  }
+
   state.reportJson = merged;
   state.attempt.reportJson = merged;
-  state.attempt.status = 'marked';
+  state.attempt.status = (failedBatches.length > 0 || stopped) ? 'partially_marked' : 'marked';
   await putAttempt(state.attempt);
 
   showReport(merged);
