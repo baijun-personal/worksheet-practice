@@ -74,36 +74,48 @@ function renderCostCard(u) {
   const t = u.totals || {};
   const fmtTokens = (n) => Number(n || 0).toLocaleString();
   const fmtUsd = (n) => '$' + (Number(n) || 0).toFixed(4);
-  const batchRows = (u.batches || []).map((b) => `
+  const fmtRate = (n) => '$' + (Number(n) || 0).toFixed(3);
+  const batchRows = (u.batches || []).map((b) => {
+    const cached = Number(b.usage?.prompt_tokens_details?.cached_tokens) || 0;
+    const prompt = Number(b.usage?.prompt_tokens) || 0;
+    const uncached = Math.max(0, prompt - cached);
+    return `
     <tr>
       <td>${escapeHtml(b.index + 1)}</td>
       <td>${escapeHtml((b.pages || []).join(', '))}</td>
-      <td>${fmtTokens(b.usage?.prompt_tokens)}</td>
+      <td>${fmtTokens(uncached)}</td>
+      <td>${fmtTokens(cached)}</td>
       <td>${fmtTokens(b.usage?.completion_tokens)}</td>
       <td>${fmtTokens(b.usage?.total_tokens)}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
   return `
     <h2>Cost &amp; usage <span class="muted small">(estimate)</span></h2>
     <p><strong>Estimated total: ${fmtUsd(u.estimated_cost_usd)}</strong>
        <span class="muted small">
-         (input ${fmtUsd(u.estimated_input_cost_usd)} + output ${fmtUsd(u.estimated_output_cost_usd)})
+         (input ${fmtUsd(u.estimated_input_cost_usd)}
+         = uncached ${fmtUsd(u.estimated_uncached_input_cost_usd)}
+         + cached ${fmtUsd(u.estimated_cached_input_cost_usd)};
+         output ${fmtUsd(u.estimated_output_cost_usd)})
        </span></p>
     <p class="muted small">
       Model: ${escapeHtml(u.model || '—')} —
-      rates used: input $${(u.price_in_per_m_tokens ?? 0).toFixed(2)}/1M,
-      output $${(u.price_out_per_m_tokens ?? 0).toFixed(2)}/1M.
+      rates used: input ${fmtRate(u.price_in_per_m_tokens)}/1M,
+      cached input ${fmtRate(u.price_cached_in_per_m_tokens)}/1M,
+      output ${fmtRate(u.price_out_per_m_tokens)}/1M.
       Verify against <a href="https://openai.com/api/pricing/" target="_blank" rel="noopener">openai.com/api/pricing</a>.
       The authoritative cost is on the OpenAI dashboard.
     </p>
     <p class="muted small">
-      Total tokens: input ${fmtTokens(t.prompt_tokens)} +
+      Total tokens: input ${fmtTokens(t.prompt_tokens)}
+      (of which cached ${fmtTokens(t.cached_input_tokens)}) +
       output ${fmtTokens(t.completion_tokens)} =
       ${fmtTokens(t.total_tokens)}.
     </p>
     <details>
       <summary class="muted small">Per-batch breakdown</summary>
       <table style="margin-top:8px"><thead><tr>
-        <th>Batch</th><th>Pages</th><th>Input</th><th>Output</th><th>Total</th>
+        <th>Batch</th><th>Pages</th><th>Uncached in</th><th>Cached in</th><th>Output</th><th>Total</th>
       </tr></thead><tbody>${batchRows}</tbody></table>
     </details>`;
 }
@@ -257,19 +269,23 @@ export async function exportReportPdf(report, meta) {
     const t = u.totals || {};
     drawText('Cost & usage (estimate)', { bold: true, size: 14 });
     drawText(
-      `Estimated total: $${(u.estimated_cost_usd ?? 0).toFixed(4)} ` +
-      `(input $${(u.estimated_input_cost_usd ?? 0).toFixed(4)} + ` +
+      `Estimated total: $${(u.estimated_cost_usd ?? 0).toFixed(4)}  ` +
+      `(input $${(u.estimated_input_cost_usd ?? 0).toFixed(4)} ` +
+      `= uncached $${(u.estimated_uncached_input_cost_usd ?? 0).toFixed(4)} ` +
+      `+ cached $${(u.estimated_cached_input_cost_usd ?? 0).toFixed(4)}; ` +
       `output $${(u.estimated_output_cost_usd ?? 0).toFixed(4)})`
     );
     drawText(
       `Model: ${u.model || '—'}. ` +
-      `Rates: input $${(u.price_in_per_m_tokens ?? 0).toFixed(2)}/1M, ` +
-      `output $${(u.price_out_per_m_tokens ?? 0).toFixed(2)}/1M. ` +
+      `Rates: input $${(u.price_in_per_m_tokens ?? 0).toFixed(3)}/1M, ` +
+      `cached input $${(u.price_cached_in_per_m_tokens ?? 0).toFixed(3)}/1M, ` +
+      `output $${(u.price_out_per_m_tokens ?? 0).toFixed(3)}/1M. ` +
       `Verify against openai.com/api/pricing.`,
       { size: 10, color: rgb(0.4, 0.45, 0.5) }
     );
     drawText(
-      `Total tokens: input ${(t.prompt_tokens || 0).toLocaleString()} + ` +
+      `Total tokens: input ${(t.prompt_tokens || 0).toLocaleString()} ` +
+      `(of which cached ${(t.cached_input_tokens || 0).toLocaleString()}) + ` +
       `output ${(t.completion_tokens || 0).toLocaleString()} = ` +
       `${(t.total_tokens || 0).toLocaleString()}.`,
       { size: 10, color: rgb(0.4, 0.45, 0.5) }

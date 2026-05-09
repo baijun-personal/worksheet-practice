@@ -9,25 +9,54 @@
 const ENDPOINT = 'https://api.openai.com/v1/chat/completions';
 
 // Model presets shown in the Setup → Advanced settings dropdown.
-// Default prices are placeholders — verify on https://openai.com/api/pricing/
+// Prices are USD per 1M tokens. Verify on https://openai.com/api/pricing/
 // before relying on the cost estimate. Edit them in the form to override.
+//
+// "Cached input" applies when prompt_tokens_details.cached_tokens > 0
+// (OpenAI prompt cache hit). Repeated answer-page images across batches
+// are exactly the kind of repeat content that benefits, so cost reporting
+// splits prompt tokens into cached vs. uncached.
 export const MODEL_PRESETS = [
   {
+    id: 'gpt-4o-mini',
+    label: 'gpt-4o-mini — cheapest legacy test',
+    priceInPerMTokens: 0.15,
+    priceCachedInPerMTokens: 0.075,
+    priceOutPerMTokens: 0.60,
+  },
+  {
+    id: 'gpt-4.1-mini',
+    label: 'gpt-4.1-mini — cheap comparison',
+    priceInPerMTokens: 0.40,
+    priceCachedInPerMTokens: 0.10,
+    priceOutPerMTokens: 1.60,
+  },
+  {
+    id: 'gpt-5.4-nano',
+    label: 'gpt-5.4-nano — cheap GPT-5.4 class',
+    priceInPerMTokens: 0.20,
+    priceCachedInPerMTokens: 0.02,
+    priceOutPerMTokens: 1.25,
+  },
+  {
     id: 'gpt-5.4-mini',
-    label: 'gpt-5.4-mini — default, balanced',
-    priceInPerMTokens: 0.25,
-    priceOutPerMTokens: 1.00,
+    label: 'gpt-5.4-mini — balanced default',
+    priceInPerMTokens: 0.75,
+    priceCachedInPerMTokens: 0.075,
+    priceOutPerMTokens: 4.50,
   },
   {
     id: 'gpt-5.4',
     label: 'gpt-5.4 — higher accuracy',
     priceInPerMTokens: 2.50,
-    priceOutPerMTokens: 10.00,
+    priceCachedInPerMTokens: 0.25,
+    priceOutPerMTokens: 15.00,
   },
   {
     id: 'gpt-5.5',
     label: 'gpt-5.5 — best benchmark, expensive',
-    priceInPerMTokens: 10.00,
+    priceInPerMTokens: 5.00,
+    priceCachedInPerMTokens: 0.50,
     priceOutPerMTokens: 30.00,
   },
 ];

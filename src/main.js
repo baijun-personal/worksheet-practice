@@ -124,8 +124,9 @@ function bindSetupForm() {
   $('render-dpi').value = String(state.settings.renderDpi || 150);
   $('batch-size').value = String(state.settings.batchSize || 5);
   $('test-mode').checked = !!state.settings.testMode;
-  $('price-in').value = String(state.settings.priceInPerMTokens ?? 0.25);
-  $('price-out').value = String(state.settings.priceOutPerMTokens ?? 1.00);
+  $('price-in').value = String(state.settings.priceInPerMTokens ?? 0.75);
+  $('price-cached-in').value = String(state.settings.priceCachedInPerMTokens ?? 0.075);
+  $('price-out').value = String(state.settings.priceOutPerMTokens ?? 4.50);
   $('marking-mode').value = state.settings.markingMode || 'auto';
 
   $('pdf-input').addEventListener('change', onPdfPicked);
@@ -147,6 +148,7 @@ function bindSetupForm() {
     ['render-dpi', 'renderDpi', (v) => parseInt(v, 10) || 150],
     ['batch-size', 'batchSize', (v) => Math.max(1, parseInt(v, 10) || 5)],
     ['price-in', 'priceInPerMTokens', (v) => Math.max(0, parseFloat(v) || 0)],
+    ['price-cached-in', 'priceCachedInPerMTokens', (v) => Math.max(0, parseFloat(v) || 0)],
     ['price-out', 'priceOutPerMTokens', (v) => Math.max(0, parseFloat(v) || 0)],
     ['marking-mode', 'markingMode', (v) => v || 'auto'],
   ]) {
@@ -204,10 +206,12 @@ function onModelPresetChange() {
   $('openai-model-custom-wrap').hidden = true;
   $('openai-model').value = preset.id;
   $('price-in').value = String(preset.priceInPerMTokens);
+  $('price-cached-in').value = String(preset.priceCachedInPerMTokens);
   $('price-out').value = String(preset.priceOutPerMTokens);
   state.settings = saveSettings({
     openaiModel: preset.id,
     priceInPerMTokens: preset.priceInPerMTokens,
+    priceCachedInPerMTokens: preset.priceCachedInPerMTokens,
     priceOutPerMTokens: preset.priceOutPerMTokens,
   });
 }
@@ -408,6 +412,7 @@ async function onStartPractice() {
     batchSize: Math.max(1, parseInt($('batch-size').value, 10) || 5),
     testMode: $('test-mode').checked,
     priceInPerMTokens: Math.max(0, parseFloat($('price-in').value) || 0),
+    priceCachedInPerMTokens: Math.max(0, parseFloat($('price-cached-in').value) || 0),
     priceOutPerMTokens: Math.max(0, parseFloat($('price-out').value) || 0),
     markingMode: $('marking-mode').value || 'auto',
   });
@@ -826,25 +831,37 @@ async function onSubmit() {
   }
 
   // Compute totals + an estimated USD cost from configured per-1M-token rates.
+  // Split prompt_tokens into cached vs uncached using OpenAI's
+  // prompt_tokens_details.cached_tokens (older models report 0).
   const totals = batchUsages.reduce((acc, b) => {
     const u = b.usage || {};
-    acc.prompt_tokens += Number(u.prompt_tokens) || 0;
+    const prompt = Number(u.prompt_tokens) || 0;
+    const cached = Number(u.prompt_tokens_details?.cached_tokens) || 0;
+    acc.prompt_tokens += prompt;
+    acc.cached_input_tokens += cached;
+    acc.uncached_input_tokens += Math.max(0, prompt - cached);
     acc.completion_tokens += Number(u.completion_tokens) || 0;
     acc.total_tokens += Number(u.total_tokens) || 0;
     return acc;
-  }, { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 });
+  }, { prompt_tokens: 0, cached_input_tokens: 0, uncached_input_tokens: 0, completion_tokens: 0, total_tokens: 0 });
   const priceIn = Number(state.settings.priceInPerMTokens) || 0;
+  const priceCachedIn = Number(state.settings.priceCachedInPerMTokens) || 0;
   const priceOut = Number(state.settings.priceOutPerMTokens) || 0;
-  const inputCost = (totals.prompt_tokens / 1_000_000) * priceIn;
+  const uncachedInputCost = (totals.uncached_input_tokens / 1_000_000) * priceIn;
+  const cachedInputCost = (totals.cached_input_tokens / 1_000_000) * priceCachedIn;
+  const inputCost = uncachedInputCost + cachedInputCost;
   const outputCost = (totals.completion_tokens / 1_000_000) * priceOut;
   merged.app_usage = {
     model: state.settings.openaiModel,
     batches: batchUsages,
     totals,
     price_in_per_m_tokens: priceIn,
+    price_cached_in_per_m_tokens: priceCachedIn,
     price_out_per_m_tokens: priceOut,
     estimated_cost_usd: +(inputCost + outputCost).toFixed(4),
     estimated_input_cost_usd: +inputCost.toFixed(4),
+    estimated_uncached_input_cost_usd: +uncachedInputCost.toFixed(4),
+    estimated_cached_input_cost_usd: +cachedInputCost.toFixed(4),
     estimated_output_cost_usd: +outputCost.toFixed(4),
   };
 

@@ -10,12 +10,14 @@ const DEFAULTS = {
   renderDpi: 150,
   batchSize: 5,
   testMode: false,
-  // USD per 1M tokens. Defaults match the gpt-5.4-mini preset and are
-  // placeholders only — verify against https://openai.com/api/pricing/ for
-  // the model actually selected. The cost shown in the report is labelled
-  // "estimated" and is computed from these rates only.
-  priceInPerMTokens: 0.25,
-  priceOutPerMTokens: 1.00,
+  // USD per 1M tokens. Defaults match the gpt-5.4-mini preset; verify
+  // against https://openai.com/api/pricing/ for the model actually selected.
+  // The cost shown in the report is labelled "estimated" and is computed
+  // from these rates only. Cached input applies when the OpenAI prompt
+  // cache hits (repeat answer-page images, repeat system prompt).
+  priceInPerMTokens: 0.75,
+  priceCachedInPerMTokens: 0.075,
+  priceOutPerMTokens: 4.50,
   // Marking mode: how completed pages are grouped before sending to OpenAI.
   // - "auto"            → single combined (≤4 question pages) or batch4_fullpage (>4)
   // - "single_fullpage" → one request, all completed pages as separate full-page images
