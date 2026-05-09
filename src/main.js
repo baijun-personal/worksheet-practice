@@ -925,7 +925,6 @@ async function onSubmit() {
   }
 
   const merged = mergeReports(batchResults);
-  if (state.attempt.subject) merged.paper_summary.subject = state.attempt.subject;
 
   const stopped = cancelledAfterIndex != null;
   const skippedCount = stopped ? batches.length - cancelledAfterIndex : 0;
