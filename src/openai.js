@@ -113,8 +113,36 @@ Each item in "items" is EITHER:
 
 For multi-part items:
   • If order_matters: true — compare each student part against the expected part with the SAME "part" label, or by index when labels are missing.
-  • If order_matters: false — POOL MATCH. Each student part may match any expected_part by meaning. Each expected_part is matched at most once. A student part is correct if it semantically matches some unused expected_part; otherwise incorrect.
+  • If order_matters: false — POOL MATCH. The student may have written list items in any order, so do NOT assume student_parts[i] should be compared with expected_parts[i]. Walk each student part and look for ANY expected_part (regardless of part label or index) whose meaning matches. Each expected_part may be matched at most once across the whole question. A student part is correct if some unused expected_part means the same; otherwise incorrect.
   • For each student part, set "matched_expected" to the expected text it matched (or "" / null if none).
+
+WORKED EXAMPLE — pool match (order_matters: false):
+
+  Input item:
+    {
+      "question": "Q19",
+      "is_multi_part": true,
+      "order_matters": false,
+      "student_parts":  [{"part":"i","answer":"No"}, {"part":"ii","answer":"stay alert"}],
+      "expected_parts": [{"part":"i","answer":"To be alert"}, {"part":"ii","answer":"Avoid eye contact with them"}]
+    }
+
+  Reasoning:
+    - "No" doesn't mean "To be alert" or "Avoid eye contact with them" → incorrect.
+    - "stay alert" means the same as "To be alert" → correct, even though the student wrote it as part (ii) and the matching expected is at part (i). Position is irrelevant when order_matters is false.
+
+  Correct output:
+    {
+      "question": "Q19",
+      "is_multi_part": true,
+      "parts": [
+        {"part":"i",  "student_answer":"No",         "matched_expected":"",            "status":"incorrect", "comment":"'No' does not match any expected item."},
+        {"part":"ii", "student_answer":"stay alert", "matched_expected":"To be alert", "status":"correct",   "comment":"Same meaning as 'To be alert' (matched across positions because order_matters is false)."}
+      ]
+    }
+
+  WRONG output (do not produce this):
+    parts where part:'ii' is paired with expected_parts[1] "Avoid eye contact with them" just because they share index 1. Pool matching means "stay alert" can match "To be alert" at any position.
 
 Status rules (apply to flat rows AND to each part of multi-part rows):
 - correct: same answer or same meaning (paraphrases, equivalent forms, equivalent units, minor formatting differences are correct).
