@@ -14,6 +14,32 @@
 
 const ENDPOINT = 'https://api.openai.com/v1/chat/completions';
 
+// Pluggable transport. In "direct" mode the browser POSTs to api.openai.com
+// with the user's OpenAI key in Authorization. In "proxy" mode the browser
+// POSTs to a Cloudflare Worker (URL + token configured per-device) that
+// adds the real OpenAI key server-side. See relay/cloudflare-worker.js.
+function buildRequest({ apiMode, apiKey, proxyEndpoint, proxyToken }) {
+  if (apiMode === 'proxy') {
+    if (!proxyEndpoint) throw new Error('Proxy URL not set');
+    if (!proxyToken) throw new Error('Proxy token not set');
+    return {
+      url: proxyEndpoint,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Proxy-Token': proxyToken,
+      },
+    };
+  }
+  if (!apiKey) throw new Error('OpenAI API key not set');
+  return {
+    url: ENDPOINT,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+  };
+}
+
 // Model presets shown in the Setup → Advanced settings dropdown.
 // Prices are USD per 1M tokens. Verify on https://openai.com/api/pricing/
 // before relying on the cost estimate. Edit them in the form to override.
@@ -125,6 +151,9 @@ export async function extractStudentAnswers({
   model,
   completedPageImages, // [{ pageNumber, dataUrl, fourup?, includedPageNumbers? }]
   signal,
+  apiMode,
+  proxyEndpoint,
+  proxyToken,
 }) {
   const content = [];
   for (const p of completedPageImages) {
@@ -134,7 +163,7 @@ export async function extractStudentAnswers({
     content.push({ type: 'text', text: label });
     content.push({ type: 'image_url', image_url: { url: p.dataUrl, detail: 'high' } });
   }
-  return chatJson({ apiKey, model, system: STUDENT_PROMPT, content, signal });
+  return chatJson({ apiKey, model, system: STUDENT_PROMPT, content, signal, apiMode, proxyEndpoint, proxyToken });
 }
 
 export async function extractAnswerKey({
@@ -142,18 +171,21 @@ export async function extractAnswerKey({
   model,
   answerPageImages,    // [{ pageNumber, dataUrl }]
   signal,
+  apiMode,
+  proxyEndpoint,
+  proxyToken,
 }) {
   const content = [];
   for (const p of answerPageImages) {
     content.push({ type: 'text', text: `Answer page ${p.pageNumber}` });
     content.push({ type: 'image_url', image_url: { url: p.dataUrl, detail: 'high' } });
   }
-  return chatJson({ apiKey, model, system: ANSWER_KEY_PROMPT, content, signal });
+  return chatJson({ apiKey, model, system: ANSWER_KEY_PROMPT, content, signal, apiMode, proxyEndpoint, proxyToken });
 }
 
-async function chatJson({ apiKey, model, system, content, signal }) {
-  if (!apiKey) throw new Error('OpenAI API key not set');
+async function chatJson({ apiKey, model, system, content, signal, apiMode, proxyEndpoint, proxyToken }) {
   if (!model) throw new Error('Model not set');
+  const { url, headers } = buildRequest({ apiMode, apiKey, proxyEndpoint, proxyToken });
   const body = {
     model,
     messages: [
@@ -165,28 +197,24 @@ async function chatJson({ apiKey, model, system, content, signal }) {
   };
   let resp;
   try {
-    resp = await fetch(ENDPOINT, {
+    resp = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
+      headers,
       body: JSON.stringify(body),
       signal,
     });
   } catch (e) {
     // fetch() throws a TypeError BEFORE any response when the network
-    // layer rejects the request — most often because a parental-control
-    // / family-filter / DNS block on the device prevents reaching
-    // api.openai.com. Other causes: no internet, OS-level firewall,
-    // adblocker on the device. Surface a hint so the parent doesn't
-    // have to open DevTools to diagnose.
+    // layer rejects the request — common causes: device-level filter,
+    // CORS preflight blocked, OS firewall, adblocker, OOM on a low-RAM
+    // device, or no internet. Surface a hint with the actual URL we
+    // were trying to hit so the parent can audit it in a browser tab.
     if (e && (e.name === 'TypeError' || /failed to fetch|network/i.test(e.message || ''))) {
       throw new Error(
-        `Could not reach api.openai.com. Check whether this device's ` +
-        `network or parental-control filter is blocking that domain ` +
-        `(visit https://api.openai.com in a new tab — if it doesn't ` +
-        `load, the filter is the cause). Original error: ${e.message}`
+        `Could not reach ${url}. Check whether this device's network ` +
+        `or parental-control filter is blocking that URL (open it in a ` +
+        `new tab — if it doesn't load, the network is the cause). ` +
+        `Original error: ${e.message}`
       );
     }
     throw e;

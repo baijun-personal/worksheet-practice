@@ -368,6 +368,14 @@ function bindSetupForm() {
   $('price-cached-in').value = String(state.settings.priceCachedInPerMTokens ?? 0.075);
   $('price-out').value = String(state.settings.priceOutPerMTokens ?? 4.50);
   $('marking-mode').value = state.settings.markingMode || 'auto';
+  // API mode + proxy fields
+  const apiMode = state.settings.apiMode || 'direct';
+  for (const r of document.querySelectorAll('input[name="api-mode"]')) {
+    r.checked = (r.value === apiMode);
+  }
+  $('proxy-endpoint').value = state.settings.proxyEndpoint || '';
+  $('proxy-token').value = state.settings.proxyToken || '';
+  applyApiModeVisibility(apiMode);
 
   $('pdf-input').addEventListener('change', onPdfPicked);
   $('start-practice-btn').addEventListener('click', onStartPractice);
@@ -400,12 +408,29 @@ function bindSetupForm() {
     state.settings = saveSettings({ testMode: $('test-mode').checked });
   });
 
+  // API mode toggle + proxy fields
+  for (const r of document.querySelectorAll('input[name="api-mode"]')) {
+    r.addEventListener('change', () => {
+      const v = r.checked ? r.value : null;
+      if (!v) return;
+      state.settings = saveSettings({ apiMode: v });
+      applyApiModeVisibility(v);
+    });
+  }
+  $('proxy-endpoint').addEventListener('change', () => {
+    state.settings = saveSettings({ proxyEndpoint: $('proxy-endpoint').value.trim() });
+  });
+  $('proxy-token').addEventListener('change', () => {
+    state.settings = saveSettings({ proxyToken: $('proxy-token').value });
+  });
+
   populateBuiltinCatalog();
   applySourceVisibility();
 
   // Diagnostics
   $('diag-text-btn').addEventListener('click', () => runDiagnostic('text'));
   $('diag-image-btn').addEventListener('click', () => runDiagnostic('image'));
+  $('diag-page-btn').addEventListener('click', () => runDiagnostic('page'));
 }
 
 // --- Diagnostics: minimal OpenAI requests for narrowing down marking errors.
@@ -415,21 +440,50 @@ function bindSetupForm() {
 
 const OPENAI_DEFAULT_ENDPOINT = 'https://api.openai.com/v1/chat/completions';
 
+function buildDiagTransport() {
+  const apiMode = state.settings.apiMode || 'direct';
+  const model = state.settings.openaiModel || DEFAULT_MODEL;
+  if (apiMode === 'proxy') {
+    if (!state.settings.proxyEndpoint) return { error: 'Proxy URL not set in Setup → Advanced settings.' };
+    if (!state.settings.proxyToken) return { error: 'Proxy token not set in Setup → Advanced settings.' };
+    return {
+      apiMode,
+      model,
+      url: state.settings.proxyEndpoint,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Proxy-Token': state.settings.proxyToken,
+      },
+    };
+  }
+  if (!state.settings.openaiKey) return { error: 'No OpenAI API key set. Paste it in Setup → Advanced settings → API key first.' };
+  return {
+    apiMode,
+    model,
+    url: OPENAI_DEFAULT_ENDPOINT,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${state.settings.openaiKey}`,
+    },
+  };
+}
+
 async function runDiagnostic(kind) {
   const out = $('diag-output');
   out.hidden = false;
-  const apiKey = state.settings.openaiKey;
-  const model = state.settings.openaiModel || DEFAULT_MODEL;
-  const endpoint = state.settings.openaiEndpoint || OPENAI_DEFAULT_ENDPOINT;
-  if (!apiKey) {
-    out.textContent = 'No OpenAI API key set. Paste it in Setup → Advanced settings → API key first.';
-    return;
-  }
-  out.textContent = `Preparing ${kind === 'image' ? 'tiny-image' : 'text-only'} request…`;
+  const t = buildDiagTransport();
+  if (t.error) { out.textContent = t.error; return; }
+
+  const testLabel =
+    kind === 'image' ? 'tiny-image' :
+    kind === 'page'  ? 'first-worksheet-page' :
+    'text-only';
+
+  out.textContent = `Preparing ${testLabel} request…`;
 
   let messages;
   if (kind === 'image') {
-    // 300x300 canvas: white background + black "test" — encoded as data URL.
+    // 300x300 canvas: white background + black "test" text.
     const canvas = document.createElement('canvas');
     canvas.width = 300;
     canvas.height = 300;
@@ -448,13 +502,44 @@ async function runDiagnostic(kind) {
         { type: 'image_url', image_url: { url: dataUrl, detail: 'low' } },
       ],
     }];
-    out.textContent += `\nGenerated test image: ${dataUrl.length} chars (~${Math.round(dataUrl.length / 1024)} KB).`;
+  } else if (kind === 'page') {
+    if (!state.pdf) {
+      out.textContent =
+        'No worksheet PDF is loaded. Pick a built-in worksheet or upload a PDF in Setup first, then run this test.';
+      return;
+    }
+    out.textContent = 'Rendering first worksheet page…';
+    const dpi = state.settings.renderDpi || 150;
+    let dataUrl;
+    try {
+      const strokes = state.attempt
+        ? await getStrokesForPage(state.attempt.id, state.attempt.questionPages?.[0] ?? 1)
+        : [];
+      const pageNum = state.attempt?.questionPages?.[0] ?? 1;
+      dataUrl = await flattenQuestionPage(state.pdf, pageNum, strokes, dpi);
+    } catch (e) {
+      out.textContent = JSON.stringify({
+        test: testLabel,
+        success: false,
+        stage: 'page rendering failed before any request',
+        errorName: e?.name || '',
+        errorMessage: e?.message || '',
+      }, null, 2);
+      return;
+    }
+    messages = [{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Briefly describe this worksheet page in 1 sentence and return JSON only: {"ok":true,"description":""}' },
+        { type: 'image_url', image_url: { url: dataUrl, detail: 'high' } },
+      ],
+    }];
   } else {
     messages = [{ role: 'user', content: 'Return JSON only: {"ok":true}' }];
   }
 
   const body = {
-    model,
+    model: t.model,
     messages,
     response_format: { type: 'json_object' },
     temperature: 0,
@@ -462,30 +547,26 @@ async function runDiagnostic(kind) {
   const bodyStr = JSON.stringify(body);
 
   out.textContent = JSON.stringify({
-    test: kind === 'image' ? 'tiny-image' : 'text-only',
-    endpoint,
-    model,
+    test: testLabel,
+    apiMode: t.apiMode,
+    endpoint: t.url,
+    model: t.model,
     requestBytes: bodyStr.length,
+    requestKB: Math.round(bodyStr.length / 1024),
     status: 'sending…',
   }, null, 2);
 
   const start = performance.now();
   let resp;
   try {
-    resp = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: bodyStr,
-    });
+    resp = await fetch(t.url, { method: 'POST', headers: t.headers, body: bodyStr });
   } catch (e) {
     const isNetwork = e?.name === 'TypeError' || /failed to fetch|network/i.test(e?.message || '');
     out.textContent = JSON.stringify({
-      test: kind === 'image' ? 'tiny-image' : 'text-only',
-      endpoint,
-      model,
+      test: testLabel,
+      apiMode: t.apiMode,
+      endpoint: t.url,
+      model: t.model,
       requestBytes: bodyStr.length,
       success: false,
       stage: 'fetch threw before any response',
@@ -494,7 +575,7 @@ async function runDiagnostic(kind) {
       errorMessage: e?.message || '',
       isBrowserOrNetworkError: isNetwork,
       hint: isNetwork
-        ? 'Browser/network error before any HTTP exchange. Causes: device-level content/family filter, ad-blocker DNS, CORS preflight blocked, OS-level firewall, OOM during fetch on low-memory devices, or no internet.'
+        ? `Browser/network error before any HTTP exchange. Try opening ${t.url} in a new tab — if it doesn't load, the device's network is blocking it. Other causes: CORS preflight blocked, OS firewall, ad-blocker, OOM on a low-memory tablet.`
         : 'Unexpected error type — copy errorName/errorMessage above when reporting.',
     }, null, 2);
     return;
@@ -503,17 +584,17 @@ async function runDiagnostic(kind) {
   const elapsedMs = Math.round(performance.now() - start);
   let text = '';
   let readErr = null;
-  try {
-    text = await resp.text();
-  } catch (e) { readErr = e; }
+  try { text = await resp.text(); } catch (e) { readErr = e; }
   let parsed = null;
   try { parsed = text ? JSON.parse(text) : null; } catch {}
 
   out.textContent = JSON.stringify({
-    test: kind === 'image' ? 'tiny-image' : 'text-only',
-    endpoint,
-    model,
+    test: testLabel,
+    apiMode: t.apiMode,
+    endpoint: t.url,
+    model: t.model,
     requestBytes: bodyStr.length,
+    requestKB: Math.round(bodyStr.length / 1024),
     success: resp.ok,
     httpStatus: resp.status,
     httpStatusText: resp.statusText,
@@ -641,6 +722,22 @@ function onSourceChange() {
   $('builtin-status').textContent = '';
   $('pdf-input').value = '';
   $('builtin-select').value = '';
+}
+
+function applyApiModeVisibility(mode) {
+  const proxy = mode === 'proxy';
+  $('proxy-fields').hidden = !proxy;
+  // The OpenAI API key field stays visible in both modes (user can keep
+  // it stashed for later) but is no longer required when proxy is on.
+  // Update the help text accordingly.
+  const helpEl = $('api-mode-help');
+  if (helpEl) {
+    helpEl.textContent = proxy
+      ? 'Proxy mode: requests go to the Worker URL with X-Proxy-Token. The OpenAI API key field below is unused; the real key lives in the Worker.'
+      : 'Direct mode: browser calls api.openai.com directly with the API key below. Proxy: browser calls a Worker that holds the OpenAI key server-side (use this when the device blocks api.openai.com).';
+  }
+  const keyWrap = $('openai-key-wrap');
+  if (keyWrap) keyWrap.style.opacity = proxy ? '0.55' : '';
 }
 
 function applySourceVisibility() {
@@ -801,6 +898,9 @@ async function onStartPractice() {
     priceCachedInPerMTokens: Math.max(0, parseFloat($('price-cached-in').value) || 0),
     priceOutPerMTokens: Math.max(0, parseFloat($('price-out').value) || 0),
     markingMode: $('marking-mode').value || 'auto',
+    apiMode: (document.querySelector('input[name="api-mode"]:checked')?.value) || 'direct',
+    proxyEndpoint: $('proxy-endpoint').value.trim(),
+    proxyToken: $('proxy-token').value,
   });
 
   const subject = $('meta-subject').value.trim();
@@ -1083,7 +1183,15 @@ function bindMarkingUI() {
 
 async function onSubmit() {
   if (!state.attempt) return;
-  if (!state.settings.openaiKey) {
+  // In direct mode we need the OpenAI key here; in proxy mode the
+  // Worker holds the key, but we need the proxy URL + token.
+  const apiMode = state.settings.apiMode || 'direct';
+  if (apiMode === 'proxy') {
+    if (!state.settings.proxyEndpoint || !state.settings.proxyToken) {
+      alert('Proxy mode is selected but the Proxy URL or token is empty. Set them in Setup → Advanced settings.');
+      return;
+    }
+  } else if (!state.settings.openaiKey) {
     alert('No OpenAI API key set. Add one in Setup → Advanced settings before submitting.');
     return;
   }
@@ -1234,17 +1342,22 @@ async function onSubmit() {
     $('marking-status').textContent = `Marking request ${i + 1} of ${tasks.length}…`;
     try {
       let res;
+      const transport = {
+        apiKey: state.settings.openaiKey,
+        model: state.settings.openaiModel,
+        apiMode: state.settings.apiMode || 'direct',
+        proxyEndpoint: state.settings.proxyEndpoint,
+        proxyToken: state.settings.proxyToken,
+      };
       if (t.kind === 'student') {
         res = await extractStudentAnswers({
-          apiKey: state.settings.openaiKey,
-          model: state.settings.openaiModel,
+          ...transport,
           completedPageImages: t.completed,
         });
         studentResults.push(res.parsed);
       } else {
         res = await extractAnswerKey({
-          apiKey: state.settings.openaiKey,
-          model: state.settings.openaiModel,
+          ...transport,
           answerPageImages: t.answer,
         });
         keyResults.push(res.parsed);

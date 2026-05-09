@@ -102,7 +102,38 @@
 
       <details class="card">
         <summary><h2 style="display:inline">Advanced settings</h2></summary>
-        <label>OpenAI API key (stored only in this browser)
+        <fieldset style="border:1px solid var(--border); border-radius:6px; padding:8px 12px; margin-bottom:8px">
+          <legend class="muted small">API mode</legend>
+          <div role="radiogroup" aria-label="API mode" style="display:flex; gap:16px">
+            <label class="checkbox">
+              <input type="radio" name="api-mode" value="direct" />
+              Direct OpenAI
+            </label>
+            <label class="checkbox">
+              <input type="radio" name="api-mode" value="proxy" />
+              Proxy (Cloudflare Worker)
+            </label>
+          </div>
+          <p class="muted small" id="api-mode-help">
+            Direct: browser calls api.openai.com directly with the API key below.
+            Proxy: browser calls a Cloudflare Worker that holds the OpenAI key server-side
+            (use this when the device's network blocks api.openai.com).
+          </p>
+        </fieldset>
+        <div id="proxy-fields" hidden>
+          <label>Proxy URL
+            <input id="proxy-endpoint" type="url" placeholder="https://worksheet-openai-proxy.jbjsg1.workers.dev" />
+          </label>
+          <label>Proxy token (X-Proxy-Token header)
+            <input id="proxy-token" type="password" autocomplete="off" />
+          </label>
+          <p class="muted small">
+            Worker code lives at <code>relay/cloudflare-worker.js</code> in the repo.
+            Both values are kept only in this browser's localStorage; they are never
+            committed.
+          </p>
+        </div>
+        <label id="openai-key-wrap">OpenAI API key (stored only in this browser)
           <input id="openai-key" type="password" autocomplete="off" placeholder="sk-..." />
         </label>
         <label>Model
@@ -162,8 +193,9 @@
           key and selected model.
         </p>
         <div class="actions">
-          <button id="diag-text-btn" type="button">Test text-only OpenAI request</button>
-          <button id="diag-image-btn" type="button">Test tiny-image OpenAI request</button>
+          <button id="diag-text-btn" type="button">Test text-only request</button>
+          <button id="diag-image-btn" type="button">Test tiny-image request</button>
+          <button id="diag-page-btn" type="button">Test first worksheet page</button>
         </div>
         <pre id="diag-output" class="raw-json" hidden></pre>
       </details>

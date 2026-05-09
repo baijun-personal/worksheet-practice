@@ -24,6 +24,15 @@ const DEFAULTS = {
   // - "batch4_fullpage" → groups of 4 pages, full-page images per page
   // - "batch4_fourup"   → groups of 4 pages, composed into one 4-up A4 image per group
   markingMode: 'auto',
+  // API mode:
+  // - "direct" → browser POSTs to api.openai.com with the OpenAI key.
+  // - "proxy"  → browser POSTs to a Cloudflare Worker (or similar) that
+  //              holds the OpenAI key server-side. Required when the
+  //              child's tablet network can't reliably reach
+  //              api.openai.com (Family Link / family-filter edge cases).
+  apiMode: 'direct',
+  proxyEndpoint: 'https://worksheet-openai-proxy.jbjsg1.workers.dev',
+  proxyToken: '',
   passphrase: '', // empty = unlocked; first run sets it
   unlocked: false,
 };
