@@ -163,15 +163,34 @@ async function chatJson({ apiKey, model, system, content, signal }) {
     response_format: { type: 'json_object' },
     temperature: 0,
   };
-  const resp = await fetch(ENDPOINT, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-    signal,
-  });
+  let resp;
+  try {
+    resp = await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (e) {
+    // fetch() throws a TypeError BEFORE any response when the network
+    // layer rejects the request — most often because a parental-control
+    // / family-filter / DNS block on the device prevents reaching
+    // api.openai.com. Other causes: no internet, OS-level firewall,
+    // adblocker on the device. Surface a hint so the parent doesn't
+    // have to open DevTools to diagnose.
+    if (e && (e.name === 'TypeError' || /failed to fetch|network/i.test(e.message || ''))) {
+      throw new Error(
+        `Could not reach api.openai.com. Check whether this device's ` +
+        `network or parental-control filter is blocking that domain ` +
+        `(visit https://api.openai.com in a new tab — if it doesn't ` +
+        `load, the filter is the cause). Original error: ${e.message}`
+      );
+    }
+    throw e;
+  }
   if (!resp.ok) {
     const errText = await resp.text();
     throw new Error(`OpenAI ${resp.status}: ${errText.slice(0, 400)}`);
