@@ -102,6 +102,36 @@ export function presetForModel(model) {
 // Final-report status values the report UI knows how to render.
 export const KNOWN_STATUSES = ['correct', 'incorrect', 'unclear'];
 
+const COMPARE_PROMPT = `You are marking extracted worksheet answers. No images are provided.
+
+Compare each student answer with the expected answer.
+
+Mark:
+- correct: same answer or same meaning (paraphrases, equivalent forms, equivalent units, minor formatting differences are correct).
+- incorrect: different meaning, wrong choice, irrelevant answer, OR student answer is blank/missing while the expected answer is present.
+- unclear: expected answer is missing, the extracted student answer reads "unclear" or is unreadable, the question matching is uncertain (low match_confidence), or the answer genuinely cannot be judged from the extracted text.
+
+The 'question' field carries the printed question label (e.g. "Q17", "Q19(i)"); preserve it exactly in your output.
+
+Return JSON only:
+{
+  "summary": {
+    "estimated_score": "",
+    "comment": ""
+  },
+  "questions": [
+    {
+      "question": "",
+      "student_answer": "",
+      "expected_answer": "",
+      "status": "correct | incorrect | unclear",
+      "comment": ""
+    }
+  ],
+  "redo": [],
+  "weak_points": []
+}`;
+
 const STUDENT_PROMPT = `Extract the child's answers from these completed worksheet pages.
 
 The printed worksheet is black. The child's answers are blue. Read only the blue answers.
@@ -189,6 +219,38 @@ export async function extractAnswerKey({
     content.push({ type: 'image_url', image_url: { url: p.dataUrl, detail: 'high' } });
   }
   return chatJson({ apiKey, model, system: ANSWER_KEY_PROMPT, content, signal, apiMode, proxyEndpoint, proxyToken });
+}
+
+// Final-stage comparison call. Text-only — no images. Receives the
+// matched (student, expected) pairs from the code-side matcher and
+// returns the final correct/incorrect/unclear judgment per question
+// with semantic understanding (paraphrases / equivalent meaning).
+//
+// pairs: [{ question, student_answer, expected_answer, match_confidence }, ...]
+// Caller should send the full set in one request, not one per row.
+export async function markPairs({
+  apiKey,
+  model,
+  pairs,
+  subject,
+  level,
+  signal,
+  apiMode,
+  proxyEndpoint,
+  proxyToken,
+}) {
+  const payload = {
+    subject: subject || '',
+    level: level || '',
+    items: pairs.map((p) => ({
+      question: p.display_question || p.question,
+      student_answer: p.student_answer || '',
+      expected_answer: p.expected_answer || '',
+      match_confidence: typeof p.match_confidence === 'number' ? p.match_confidence : 1,
+    })),
+  };
+  const content = [{ type: 'text', text: JSON.stringify(payload, null, 2) }];
+  return chatJson({ apiKey, model, system: COMPARE_PROMPT, content, signal, apiMode, proxyEndpoint, proxyToken });
 }
 
 async function chatJson({ apiKey, model, system, content, signal, apiMode, proxyEndpoint, proxyToken }) {

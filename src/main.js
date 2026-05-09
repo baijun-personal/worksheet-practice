@@ -10,8 +10,8 @@ import {
 import { loadPdfFromBlob, renderPageToCanvas } from './pdfRender.js';
 import { attachInkController, redrawAll } from './draw.js';
 import { flattenQuestionPage, renderAnswerPage, colorContentRatio } from './flatten.js';
-import { extractStudentAnswers, extractAnswerKey, MODEL_PRESETS, DEFAULT_MODEL, presetForModel } from './openai.js';
-import { compareExtractions } from './compare.js';
+import { extractStudentAnswers, extractAnswerKey, markPairs, MODEL_PRESETS, DEFAULT_MODEL, presetForModel } from './openai.js';
+import { matchExtractions, buildReportFromAi, scorePairsLocally } from './compare.js';
 import { renderReport, exportReportPdf, exportCompletedAttemptPdf } from './report.js';
 import { loadCatalog, fetchBuiltinPdf, builtinAttemptId } from './builtin.js';
 import { composeFourUpA4, chunkInto } from './fourup.js';
@@ -1218,14 +1218,17 @@ async function onSubmit() {
     batchesPlan = chunkInto(qPages, 4).map((g) => ({ pages: g, composite: 'fullpage' }));
   }
 
-  // Build the request list for the confirmation. Staged pipeline: each
-  // student-extraction request carries ONLY completed worksheet images
-  // (no answer-key images). The answer-key extraction is its own
-  // separate request carrying only answer-page images.
+  // Build the request list for the confirmation. Staged pipeline:
+  //   1. Student-answer extraction request(s) — completed images only.
+  //   2. Answer-key extraction request — answer-page images only (skipped
+  //      if no answer pages are specified).
+  //   3. Final comparison request — text-only (no images), runs only if
+  //      both prior stages produced something to compare.
   const studentRequestImages = batchesPlan.map((b) => (b.composite === 'fourup' ? 1 : b.pages.length));
   const studentRequestCount = batchesPlan.length;
   const answerKeyRequestCount = aPages.length > 0 ? 1 : 0;
-  const totalRequests = studentRequestCount + answerKeyRequestCount;
+  const compareRequestCount = answerKeyRequestCount > 0 ? 1 : 0;
+  const totalRequests = studentRequestCount + answerKeyRequestCount + compareRequestCount;
   const totalStudentImages = studentRequestImages.reduce((a, b) => a + b, 0);
   const totalAnswerImages = aPages.length;
   const totalImages = totalStudentImages + totalAnswerImages;
@@ -1239,13 +1242,16 @@ async function onSubmit() {
   ).join('\n');
   const answerLine = answerKeyRequestCount > 0
     ? `  Request ${studentRequestCount + 1}: Answer key — ${aPages.length} answer page image(s) covering page${aPages.length === 1 ? '' : 's'} ${aPages.join(', ')}`
-    : `  (No answer pages specified — answer-key extraction will be skipped.)`;
+    : `  (No answer pages specified — answer-key extraction and final comparison will be skipped.)`;
+  const compareLine = compareRequestCount > 0
+    ? `  Request ${studentRequestCount + 2}: Final comparison — text-only (no images), one call covering all matched pairs`
+    : '';
   const ok = confirm(
     `Marking mode: ${modeLabel}\n` +
-    `Two-stage pipeline: student answers extracted independently of the answer key.\n` +
+    `Three-stage pipeline: extract student answers → extract answer key → compare in a final text-only call.\n` +
     `About to send ${totalRequests} request(s) to OpenAI ` +
-    `(${totalStudentImages} student image(s) + ${totalAnswerImages} answer page image(s) = ${totalImages} total).\n` +
-    studentLines + '\n' + answerLine +
+    `(${totalStudentImages} student image(s) + ${totalAnswerImages} answer page image(s) = ${totalImages} total images, plus ${compareRequestCount} text-only compare).\n` +
+    [studentLines, answerLine, compareLine].filter(Boolean).join('\n') +
     `\n\nContinue?`
   );
   if (!ok) return;
@@ -1418,16 +1424,87 @@ async function onSubmit() {
     return;
   }
 
-  // Stage 3: compare in code.
-  const merged = compareExtractions(studentResults, keyResults);
+  // Stage 3a: match extracted student answers to answer-key entries
+  // deterministically in code (by section + question_number, with a safe
+  // qnum-only fallback). No global-index fallback — it crosses wires on
+  // subset-page runs.
+  const match = matchExtractions(studentResults, keyResults);
+
+  // Stage 3b: final text-only AI comparison call. Sends only the matched
+  // pairs as JSON (no images), so the model can judge semantic
+  // equivalence ("Stay alert" ≡ "Be alert") without any chance of
+  // re-introducing the answer-key-biased-handwriting failure mode. If
+  // this call fails, we degrade gracefully to local string-equality
+  // scoring so the user still gets a report.
+  let merged;
+  let compareUsedAi = false;
+  let compareError = null;
+  const canRunCompare = match.pairs.length > 0 && match.keysProvided;
+
+  if (canRunCompare) {
+    const compareIndex = tasks.length;
+    const li = document.createElement('li');
+    li.id = `batch-${compareIndex}`;
+    li.textContent = `Request ${compareIndex + 1}: Final comparison — ${match.pairs.length} matched pair(s), text only — sending…`;
+    $('batch-list').appendChild(li);
+    $('marking-status').textContent = `Final comparison (${match.pairs.length} pair(s))…`;
+    while (true) {
+      try {
+        const cmpRes = await markPairs({
+          apiKey: state.settings.openaiKey,
+          model: state.settings.openaiModel,
+          apiMode: state.settings.apiMode || 'direct',
+          proxyEndpoint: state.settings.proxyEndpoint,
+          proxyToken: state.settings.proxyToken,
+          pairs: match.pairs,
+          subject: state.attempt.subject,
+          level: state.attempt.level,
+        });
+        merged = buildReportFromAi(cmpRes.parsed, match);
+        compareUsedAi = true;
+        if (cmpRes.usage) {
+          taskUsages.push({
+            index: compareIndex,
+            kind: 'compare',
+            pages: [],
+            usage: cmpRes.usage,
+          });
+        }
+        li.classList.add('done');
+        li.textContent = `Request ${compareIndex + 1}: Final comparison — done`;
+        break;
+      } catch (e) {
+        console.error('Final comparison failed', e);
+        li.classList.add('failed');
+        li.textContent = `Request ${compareIndex + 1}: Final comparison — failed: ${e.message}`;
+        const retry = confirm(
+          `Final comparison failed:\n${e.message}\n\n` +
+          `OK = retry the comparison call.\n` +
+          `Cancel = fall back to string-equality scoring (paraphrases will be marked incorrect).`
+        );
+        if (retry) {
+          li.classList.remove('failed');
+          li.textContent = `Request ${compareIndex + 1}: Final comparison — sending…`;
+          continue;
+        }
+        compareError = e.message;
+        merged = scorePairsLocally(match);
+        break;
+      }
+    }
+  } else {
+    // No keys → no comparison. Fall back to the local scorer which will
+    // mark all rows 'unclear' with an explanatory comment.
+    merged = scorePairsLocally(match);
+  }
 
   const stopped = cancelledAfterIndex != null;
   const skippedCount = stopped ? tasks.length - cancelledAfterIndex : 0;
-  if (failedTasks.length > 0 || stopped) {
+  if (failedTasks.length > 0 || stopped || compareError) {
     merged.app_warnings = {
       incomplete: true,
-      batches_total: tasks.length,
-      batches_completed: tasks.length - failedTasks.length - skippedCount,
+      batches_total: tasks.length + (canRunCompare ? 1 : 0),
+      batches_completed: (tasks.length - failedTasks.length - skippedCount) + (compareUsedAi ? 1 : 0),
       failed_batches: failedTasks.map((t) => ({
         index: t.index,
         pages: t.pages,
@@ -1436,11 +1513,16 @@ async function onSubmit() {
       stopped_by_user: stopped,
       stopped_skipped_count: skippedCount,
       missing_answer_key: keyResults.length === 0 && answerImages.length > 0,
+      compare_fell_back_to_local: compareError ? true : false,
+      compare_error: compareError || null,
     };
   }
   if (keyResults.length === 0 && answerImages.length === 0) {
     merged.summary.comment = (merged.summary.comment ? merged.summary.comment + ' ' : '') +
       'No answer pages were specified, so questions are listed but not compared. Open Setup → Pages to add an Answer pages range and submit again.';
+  } else if (compareError) {
+    merged.summary.comment = (merged.summary.comment ? merged.summary.comment + ' ' : '') +
+      'Final comparison call failed; results below were scored by local string equality (paraphrased answers may show as incorrect).';
   }
 
   // Cost / usage — sum across all tasks (Stage 1 batches + Stage 2 answer-key call).
