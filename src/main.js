@@ -990,7 +990,14 @@ function abortMarking(reason) {
 function onBackToSetup() {
   // Preserve the attempt; just navigate to Setup with the current values
   // pre-filled so the parent can edit and click Resume practice.
-  fillSetupFormFromAttempt();
+  // Detach the ink controller so the canvas isn't holding pointer capture
+  // when we leave the practice stage.
+  if (state.inkController) { state.inkController.detach(); state.inkController = null; }
+  try {
+    fillSetupFormFromAttempt();
+  } catch (e) {
+    console.error('fillSetupFormFromAttempt failed', e);
+  }
   setStage('setup');
 }
 
