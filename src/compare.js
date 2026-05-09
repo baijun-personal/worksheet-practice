@@ -150,7 +150,9 @@ export function matchExtractions(studentBatchResults, answerKeyResults) {
       answer_page: key?.page ?? null,
       student_answer: s.answer ?? '',
       student_confidence: typeof s.confidence === 'number' ? s.confidence : null,
+      student_type: s.answer_type || '',
       expected_answer: key ? (key.answer ?? '') : '',
+      expected_type: key?.answer_type || '',
       match_confidence: +matchConfidence.toFixed(2),
       match_method: matchMethod,
     });
@@ -243,6 +245,182 @@ export function buildReportFromAi(aiReport, match) {
     not_in_attempt: match.not_in_attempt,
     redo,
     weak_points: Array.isArray(aiReport?.weak_points) ? aiReport.weak_points : [],
+  };
+}
+
+// Pair classification: a pair is visual when either side's
+// answer_type is "drawing" or "diagram_label". "unknown" routes to
+// the text path by default — the text compare call returns "unclear"
+// when it can't decide, which is the safe fallback.
+const VISUAL_TYPE_RE = /^(drawing|diagram_label)$/i;
+export function isVisualType(t) { return VISUAL_TYPE_RE.test(String(t || '')); }
+export function isVisualPair(p) { return isVisualType(p.student_type) || isVisualType(p.expected_type); }
+
+export function partitionPairsByModality(match) {
+  const text = [];
+  const visual = [];
+  for (const p of match.pairs) (isVisualPair(p) ? visual : text).push(p);
+  return { text, visual };
+}
+
+// Final report builder for the staged pipeline.
+//
+// Inputs:
+//   match           — output of matchExtractions().
+//   aiTextReport    — parsed JSON from markPairs() (text compare call) or null.
+//   visualResults   — [{ pair, parsed?, error? }] one per visual pair.
+//
+// Output: same report shape as buildReportFromAi(), but each pair's row
+// gets its status from the appropriate source:
+//   - visual pairs   → matching entry in visualResults
+//   - text pairs     → matching entry in aiTextReport.questions
+//   - text pair with no AI result → local string-equality fallback
+//
+// Visual rows show '[visual answer]' as the student/expected text
+// (with the AI's descriptions and comment recorded in row.comment).
+export function buildFinalReport({ match, aiTextReport, visualResults }) {
+  const visualResultByQ = new Map();
+  for (const v of visualResults || []) {
+    const qn = normalizeQNumber(v.pair?.display_question || v.pair?.question || '');
+    if (qn) visualResultByQ.set(qn, v);
+  }
+
+  const aiQByQ = new Map();
+  if (aiTextReport && Array.isArray(aiTextReport.questions)) {
+    for (const q of aiTextReport.questions) {
+      const qn = normalizeQNumber(q.question || '');
+      if (qn) aiQByQ.set(qn, q);
+    }
+  }
+
+  let correct = 0, incorrect = 0, unclear = 0;
+  const questions = match.pairs.map((p) => {
+    const qn = normalizeQNumber(p.display_question || p.question);
+    const base = {
+      question: p.question,
+      section: p.section,
+      display_question: p.display_question,
+      completed_page: p.completed_page,
+      answer_page: p.answer_page,
+    };
+
+    if (isVisualPair(p)) {
+      const v = visualResultByQ.get(qn);
+      let row;
+      if (v?.parsed) {
+        const status = normalizeStatus(v.parsed.status);
+        const detailBits = [];
+        if (v.parsed.comment) detailBits.push(String(v.parsed.comment));
+        if (v.parsed.student_visual_answer) detailBits.push(`Student: ${v.parsed.student_visual_answer}`);
+        if (v.parsed.expected_visual_answer) detailBits.push(`Expected: ${v.parsed.expected_visual_answer}`);
+        row = {
+          ...base,
+          student_answer: '[visual answer]',
+          expected_answer: '[visual answer]',
+          status,
+          comment: `Visual comparison: ${detailBits.join(' ').trim() || (status === 'correct' ? 'matches.' : 'see report.')}`,
+        };
+      } else {
+        row = {
+          ...base,
+          student_answer: '[visual answer]',
+          expected_answer: '[visual answer]',
+          status: 'unclear',
+          comment: `Visual comparison: ${v?.error || 'not run.'}`,
+        };
+      }
+      if (row.status === 'correct') correct++;
+      else if (row.status === 'incorrect') incorrect++;
+      else unclear++;
+      return row;
+    }
+
+    // Text pair
+    const ai = aiQByQ.get(qn);
+    if (ai) {
+      const status = normalizeStatus(ai.status);
+      if (status === 'correct') correct++;
+      else if (status === 'incorrect') incorrect++;
+      else unclear++;
+      return {
+        ...base,
+        student_answer: ai.student_answer ?? p.student_answer,
+        expected_answer: ai.expected_answer ?? p.expected_answer,
+        status,
+        comment: ai.comment ? String(ai.comment) : '',
+      };
+    }
+
+    // No AI text result for this pair (or AI text call failed) — local fallback.
+    const local = scoreOnePairLocally(p, match.keysProvided);
+    if (local.status === 'correct') correct++;
+    else if (local.status === 'incorrect') incorrect++;
+    else unclear++;
+    return { ...base, ...local };
+  });
+
+  const attempted = correct + incorrect + unclear;
+  const summary = {
+    estimated_score: attempted > 0 && match.keysProvided ? `${correct}/${attempted}` : '',
+    comment: buildSummaryComment({
+      correct, incorrect, unclear, attempted,
+      notInAttempt: match.not_in_attempt,
+      keysProvided: match.keysProvided,
+    }),
+  };
+
+  // Redo: always compute from the merged rows so visual-compare incorrects
+  // are included alongside text-compare incorrects. The AI's text-only
+  // redo list only sees text pairs, so using it directly would silently
+  // drop wrong drawings.
+  const redo = questions
+    .filter((q) => q.status === 'incorrect')
+    .map((q) => q.display_question || q.question)
+    .filter(Boolean);
+
+  return {
+    summary,
+    questions,
+    not_in_attempt: match.not_in_attempt,
+    redo,
+    weak_points: Array.isArray(aiTextReport?.weak_points) ? aiTextReport.weak_points : [],
+  };
+}
+
+// Score a single text pair using string equality. Mirrors the rules in
+// scorePairsLocally() but returns just the per-row diff so buildFinalReport
+// can splice it in.
+function scoreOnePairLocally(p, keysProvided) {
+  const studentAns = p.student_answer || '';
+  const expectedAns = p.expected_answer || '';
+  const isUnreadable = !studentAns || /^unclear$/i.test(studentAns.trim());
+  const studentBlank = !studentAns.trim();
+  let status, comment = '';
+  if (!keysProvided) {
+    status = 'unclear';
+    comment = 'No answer pages provided; compare manually.';
+  } else if (!expectedAns) {
+    status = 'unclear';
+    comment = 'No matching answer-key entry for this question.';
+  } else if (isUnreadable && !studentBlank) {
+    status = 'unclear';
+    comment = 'Student answer was unreadable.';
+  } else if (studentBlank) {
+    status = 'incorrect';
+    comment = 'Student answer was blank.';
+  } else if (typeof p.student_confidence === 'number' && p.student_confidence < 0.4) {
+    status = 'unclear';
+    comment = `Low extraction confidence (${p.student_confidence.toFixed(2)}).`;
+  } else if (normalizeAnswer(studentAns) === normalizeAnswer(expectedAns)) {
+    status = 'correct';
+  } else {
+    status = 'incorrect';
+  }
+  return {
+    student_answer: studentAns,
+    expected_answer: expectedAns,
+    status,
+    comment,
   };
 }
 

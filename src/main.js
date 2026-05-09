@@ -10,8 +10,8 @@ import {
 import { loadPdfFromBlob, renderPageToCanvas } from './pdfRender.js';
 import { attachInkController, redrawAll } from './draw.js';
 import { flattenQuestionPage, renderAnswerPage, colorContentRatio } from './flatten.js';
-import { extractStudentAnswers, extractAnswerKey, markPairs, MODEL_PRESETS, DEFAULT_MODEL, presetForModel } from './openai.js';
-import { matchExtractions, buildReportFromAi, scorePairsLocally } from './compare.js';
+import { extractStudentAnswers, extractAnswerKey, markPairs, compareVisualPair, MODEL_PRESETS, DEFAULT_MODEL, presetForModel } from './openai.js';
+import { matchExtractions, buildFinalReport, partitionPairsByModality } from './compare.js';
 import { renderReport, exportReportPdf, exportCompletedAttemptPdf } from './report.js';
 import { loadCatalog, fetchBuiltinPdf, builtinAttemptId } from './builtin.js';
 import { composeFourUpA4, chunkInto } from './fourup.js';
@@ -1248,10 +1248,14 @@ async function onSubmit() {
     : '';
   const ok = confirm(
     `Marking mode: ${modeLabel}\n` +
-    `Three-stage pipeline: extract student answers → extract answer key → compare in a final text-only call.\n` +
+    `Pipeline: extract student answers → extract answer key → compare ` +
+    `(text-only for written answers; one extra vision call per drawing/diagram question).\n` +
     `About to send ${totalRequests} request(s) to OpenAI ` +
     `(${totalStudentImages} student image(s) + ${totalAnswerImages} answer page image(s) = ${totalImages} total images, plus ${compareRequestCount} text-only compare).\n` +
     [studentLines, answerLine, compareLine].filter(Boolean).join('\n') +
+    (compareRequestCount > 0
+      ? '\n  + 0 or more visual-compare calls — added after extraction for any drawing / diagram questions found.'
+      : '') +
     `\n\nContinue?`
   );
   if (!ok) return;
@@ -1429,74 +1433,117 @@ async function onSubmit() {
   // qnum-only fallback). No global-index fallback — it crosses wires on
   // subset-page runs.
   const match = matchExtractions(studentResults, keyResults);
+  const { text: textPairs, visual: visualPairs } = partitionPairsByModality(match);
 
-  // Stage 3b: final text-only AI comparison call. Sends only the matched
-  // pairs as JSON (no images), so the model can judge semantic
-  // equivalence ("Stay alert" ≡ "Be alert") without any chance of
-  // re-introducing the answer-key-biased-handwriting failure mode. If
-  // this call fails, we degrade gracefully to local string-equality
-  // scoring so the user still gets a report.
-  let merged;
-  let compareUsedAi = false;
+  const transport = {
+    apiKey: state.settings.openaiKey,
+    model: state.settings.openaiModel,
+    apiMode: state.settings.apiMode || 'direct',
+    proxyEndpoint: state.settings.proxyEndpoint,
+    proxyToken: state.settings.proxyToken,
+  };
+
+  // Stage 3b — TEXT compare: one text-only AI call covering text-style
+  // pairs (text/choice/number/tick_box/unknown). Skipped when there are
+  // no text pairs to compare.
+  let aiTextReport = null;
   let compareError = null;
-  const canRunCompare = match.pairs.length > 0 && match.keysProvided;
-
-  if (canRunCompare) {
-    const compareIndex = tasks.length;
+  const canRunTextCompare = textPairs.length > 0 && match.keysProvided;
+  if (canRunTextCompare) {
+    const idx = tasks.length;
     const li = document.createElement('li');
-    li.id = `batch-${compareIndex}`;
-    li.textContent = `Request ${compareIndex + 1}: Final comparison — ${match.pairs.length} matched pair(s), text only — sending…`;
+    li.id = `batch-${idx}`;
+    li.textContent = `Request ${idx + 1}: Text compare — ${textPairs.length} pair(s), text only — sending…`;
     $('batch-list').appendChild(li);
-    $('marking-status').textContent = `Final comparison (${match.pairs.length} pair(s))…`;
+    $('marking-status').textContent = `Text comparison (${textPairs.length} pair(s))…`;
     while (true) {
       try {
         const cmpRes = await markPairs({
-          apiKey: state.settings.openaiKey,
-          model: state.settings.openaiModel,
-          apiMode: state.settings.apiMode || 'direct',
-          proxyEndpoint: state.settings.proxyEndpoint,
-          proxyToken: state.settings.proxyToken,
-          pairs: match.pairs,
+          ...transport,
+          pairs: textPairs,
           subject: state.attempt.subject,
           level: state.attempt.level,
         });
-        merged = buildReportFromAi(cmpRes.parsed, match);
-        compareUsedAi = true;
+        aiTextReport = cmpRes.parsed;
         if (cmpRes.usage) {
-          taskUsages.push({
-            index: compareIndex,
-            kind: 'compare',
-            pages: [],
-            usage: cmpRes.usage,
-          });
+          taskUsages.push({ index: idx, kind: 'compare_text', pages: [], usage: cmpRes.usage });
         }
         li.classList.add('done');
-        li.textContent = `Request ${compareIndex + 1}: Final comparison — done`;
+        li.textContent = `Request ${idx + 1}: Text compare — done`;
         break;
       } catch (e) {
-        console.error('Final comparison failed', e);
+        console.error('Text compare failed', e);
         li.classList.add('failed');
-        li.textContent = `Request ${compareIndex + 1}: Final comparison — failed: ${e.message}`;
+        li.textContent = `Request ${idx + 1}: Text compare — failed: ${e.message}`;
         const retry = confirm(
-          `Final comparison failed:\n${e.message}\n\n` +
-          `OK = retry the comparison call.\n` +
-          `Cancel = fall back to string-equality scoring (paraphrases will be marked incorrect).`
+          `Text comparison failed:\n${e.message}\n\n` +
+          `OK = retry.\nCancel = fall back to local string-equality (paraphrases will be marked incorrect).`
         );
         if (retry) {
           li.classList.remove('failed');
-          li.textContent = `Request ${compareIndex + 1}: Final comparison — sending…`;
+          li.textContent = `Request ${idx + 1}: Text compare — sending…`;
           continue;
         }
         compareError = e.message;
-        merged = scorePairsLocally(match);
         break;
       }
     }
-  } else {
-    // No keys → no comparison. Fall back to the local scorer which will
-    // mark all rows 'unclear' with an explanatory comment.
-    merged = scorePairsLocally(match);
   }
+
+  // Stage 3c — VISUAL compare: one vision call per drawing / diagram
+  // question, comparing the completed page image against the answer-sheet
+  // page image. We use full pages (no crop) for MVP and rely on the
+  // prompt to scope the model's attention to the named question.
+  const visualResults = [];
+  if (visualPairs.length > 0 && match.keysProvided) {
+    const completedByPage = new Map(completedPagesAll.map((p) => [p.pageNumber, p]));
+    const answerByPage = new Map(answerImages.map((p) => [p.pageNumber, p]));
+    let vCount = 0;
+    for (const pair of visualPairs) {
+      if (state.cancelMarking) break;
+      vCount++;
+      const idx = tasks.length + (canRunTextCompare ? 1 : 0) + (vCount - 1);
+      const li = document.createElement('li');
+      li.id = `batch-${idx}`;
+      li.textContent = `Request ${idx + 1}: Visual compare ${pair.display_question || pair.question} — sending…`;
+      $('batch-list').appendChild(li);
+      $('marking-status').textContent = `Visual comparison ${vCount} of ${visualPairs.length} (${pair.display_question || pair.question})…`;
+      const cPageEntry = pair.completed_page ? completedByPage.get(pair.completed_page) : null;
+      const aPageEntry = pair.answer_page ? answerByPage.get(pair.answer_page) : null;
+      if (!cPageEntry || !aPageEntry) {
+        const detail = `completed p.${pair.completed_page ?? '?'}=${!!cPageEntry}, answer p.${pair.answer_page ?? '?'}=${!!aPageEntry}`;
+        visualResults.push({ pair, error: `Page image not available (${detail}).` });
+        li.classList.add('failed');
+        li.textContent = `Request ${idx + 1}: Visual compare ${pair.display_question || pair.question} — skipped (${detail})`;
+        continue;
+      }
+      try {
+        const res = await compareVisualPair({
+          ...transport,
+          pair,
+          completedImageDataUrl: cPageEntry.dataUrl,
+          answerImageDataUrl: aPageEntry.dataUrl,
+        });
+        visualResults.push({ pair, parsed: res.parsed });
+        if (res.usage) {
+          taskUsages.push({ index: idx, kind: 'compare_visual', pages: [pair.completed_page, pair.answer_page], usage: res.usage });
+        }
+        li.classList.add('done');
+        li.textContent = `Request ${idx + 1}: Visual compare ${pair.display_question || pair.question} — done`;
+      } catch (e) {
+        console.error('Visual compare failed', e);
+        visualResults.push({ pair, error: e.message });
+        li.classList.add('failed');
+        li.textContent = `Request ${idx + 1}: Visual compare ${pair.display_question || pair.question} — failed: ${e.message}`;
+      }
+    }
+  }
+
+  // Stage 4 — merge text + visual results into the final report. Local
+  // string-equality fallback is applied to any text pair the AI didn't
+  // grade (used when the text compare call failed).
+  const merged = buildFinalReport({ match, aiTextReport, visualResults });
+  const compareUsedAi = !!aiTextReport;
 
   const stopped = cancelledAfterIndex != null;
   const skippedCount = stopped ? tasks.length - cancelledAfterIndex : 0;

@@ -142,6 +142,17 @@ Preserve the printed question_number EXACTLY as it appears on the page — for e
 
 For questions with subparts (e.g. Q19 with parts (i) and (ii)), output ONE entry per subpart so each can be matched and compared individually. Use question_number values like "19(i)" and "19(ii)" — do not put two answers under a single "19" entry, and do not duplicate the same label without a subpart suffix.
 
+For each answer, set "answer_type" to one of:
+- "text": short or long handwritten text answer.
+- "choice": MCQ option letter ("A", "B") or option number ("3").
+- "number": numeric answer (units optional).
+- "tick_box": the child ticked one or more boxes; "answer" should list which (e.g. "B and D").
+- "drawing": the answer is a drawing or marking (clock hands, shaded fraction, lines, arrows, plotted points, completed diagram, etc.). For "answer", give a short description like "student drew a line from A to B" or "student shaded the right half" — visual judgement happens later.
+- "diagram_label": the child labelled or annotated a diagram visually. Same description style as "drawing".
+- "unknown": cannot determine confidently.
+
+Do NOT force a drawing answer into plain text. If the child's answer is fundamentally visual, set answer_type="drawing" (or "diagram_label") and let the description be brief — the final mark for these is decided by a separate visual comparison stage.
+
 If a worksheet has multiple sections, capture the section label (e.g. "Section A - Vocabulary"). Use the page number from the image label.
 
 If an answer is unreadable, set "answer" to "unclear" and a low confidence.
@@ -155,6 +166,7 @@ Return JSON only:
       "question_number": "",
       "display_question": "",
       "page": 0,
+      "answer_type": "text | choice | number | tick_box | drawing | diagram_label | unknown",
       "answer": "",
       "confidence": 0
     }
@@ -167,6 +179,11 @@ Preserve the printed question_number EXACTLY as it appears (e.g. "17", "5a", "19
 
 For multi-part questions, output ONE entry per subpart with question_number values like "19(i)", "19(ii)" — matching how the student answers will be split — so each subpart can be compared individually.
 
+For each expected answer, set "answer_type" to one of the same values used for the student extraction:
+- "text", "choice", "number", "tick_box", "drawing", "diagram_label", "unknown".
+
+For visual expected answers (drawings, diagrams, shading, lines, plotted points, etc.), set answer_type="drawing" (or "diagram_label") and let "answer" be a short description ("a clock showing 3:15", "the upper half shaded", "lines connecting A→3, B→1"). The final judgement for these is done by visual comparison, not by text equality.
+
 If a worksheet has multiple sections, capture the section label. Use the page number from the image label.
 
 Return JSON only:
@@ -178,6 +195,7 @@ Return JSON only:
       "question_number": "",
       "display_question": "",
       "page": 0,
+      "answer_type": "text | choice | number | tick_box | drawing | diagram_label | unknown",
       "answer": "",
       "confidence": 0
     }
@@ -221,7 +239,65 @@ export async function extractAnswerKey({
   return chatJson({ apiKey, model, system: ANSWER_KEY_PROMPT, content, signal, apiMode, proxyEndpoint, proxyToken });
 }
 
-// Final-stage comparison call. Text-only — no images. Receives the
+const COMPARE_VISUAL_PROMPT = `You are comparing one visual worksheet answer.
+
+Compare only the specified question. Do not mark other questions on the pages.
+
+The printed worksheet is black. The child's answer marks are blue.
+
+Decide whether the child's visual answer matches the expected visual answer on the answer sheet.
+
+Mark:
+- correct: the visual answer matches the expected answer closely enough for practice marking
+- incorrect: the visual answer is clearly wrong or missing
+- unclear: the relevant visual answer cannot be located, is unreadable, or cannot be judged confidently
+
+Return JSON only:
+{
+  "question": "",
+  "status": "correct | incorrect | unclear",
+  "student_visual_answer": "",
+  "expected_visual_answer": "",
+  "comment": ""
+}`;
+
+// One vision API call to judge a single visual question. Receives the
+// completed page image (with the child's blue strokes flattened in) and
+// the answer-sheet page image. The prompt is scoped to the named
+// question; full page images are sent because we don't have crop
+// coordinates yet (MVP).
+export async function compareVisualPair({
+  apiKey,
+  model,
+  pair,                    // { question, display_question, completed_page, answer_page,
+                           //   student_answer, expected_answer, ... }
+  completedImageDataUrl,
+  answerImageDataUrl,
+  signal,
+  apiMode,
+  proxyEndpoint,
+  proxyToken,
+}) {
+  const headerLines = [
+    `Question: ${pair.display_question || pair.question}`,
+    `Completed page: ${pair.completed_page ?? 'unknown'}`,
+    `Answer page: ${pair.answer_page ?? 'unknown'}`,
+  ];
+  if (pair.student_answer) headerLines.push(`Student-answer description from text extraction: ${pair.student_answer}`);
+  if (pair.expected_answer) headerLines.push(`Expected-answer description from text extraction: ${pair.expected_answer}`);
+  const content = [{ type: 'text', text: headerLines.join('\n') }];
+  if (completedImageDataUrl) {
+    content.push({ type: 'text', text: `Completed page ${pair.completed_page ?? ''}` });
+    content.push({ type: 'image_url', image_url: { url: completedImageDataUrl, detail: 'high' } });
+  }
+  if (answerImageDataUrl) {
+    content.push({ type: 'text', text: `Answer page ${pair.answer_page ?? ''}` });
+    content.push({ type: 'image_url', image_url: { url: answerImageDataUrl, detail: 'high' } });
+  }
+  return chatJson({ apiKey, model, system: COMPARE_VISUAL_PROMPT, content, signal, apiMode, proxyEndpoint, proxyToken });
+}
+
+// Final-stage TEXT comparison call. Text-only — no images. Receives the
 // matched (student, expected) pairs from the code-side matcher and
 // returns the final correct/incorrect/unclear judgment per question
 // with semantic understanding (paraphrases / equivalent meaning).
