@@ -10,7 +10,7 @@ const ENDPOINT = 'https://api.openai.com/v1/chat/completions';
 const SYSTEM_PROMPT = [
   'You are an AI worksheet marking assistant for a parent.',
   'This is for practice review, not official grading.',
-  'Use the provided answer sheet images as the primary source of truth.',
+  "Use the provided answer sheet images as the primary source of truth for expected answers, but read the child's visible answer independently before comparing.",
   'The worksheet is printed in black ink on white paper.',
   "The child's handwritten answers appear in blue.",
   "Any blue marks on the page are the child's contribution.",
@@ -49,6 +49,8 @@ const USER_PROMPT_PREFIX = [
   '- If partial credit is uncertain, flag for parent review.',
   '- If the answer is unreadable, do not guess.',
   '- For multi-part questions, use labels like Q5a, Q5b.',
+  '- For tick-box or checkbox questions, first identify only the boxes visibly selected by the child. Do not infer missing ticks from the answer sheet.',
+  '- Count a box as selected only if the blue mark is clearly inside or directly on the box. If a required tick is missing or unclear, do not mark the question correct.',
   '',
   'Each image part is preceded by a short text label naming the PDF page it shows',
   '(e.g. "Completed worksheet page PDF p.3" or "Answer sheet page PDF p.22").',
