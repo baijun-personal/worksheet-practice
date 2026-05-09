@@ -44,8 +44,26 @@ function normalizeKeyPart(s) {
   return String(s == null ? '' : s).trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+// Normalize a printed question-number into a stable matching key.
+//   "Q17"        → "17"
+//   "17"         → "17"
+//   "5a"         → "5a"
+//   "Q19(i)"     → "19i"
+//   "Q 19 (i)"   → "19i"
+//   "Question 5" → "5"
+// Trailing punctuation (./:) is stripped. Parens and whitespace are
+// collapsed so subpart labels match across slight formatting differences.
+function normalizeQNumber(q) {
+  if (q == null) return '';
+  let s = String(q).trim().toLowerCase();
+  s = s.replace(/^q(?:uestion)?\.?\s*/, '');
+  s = s.replace(/[.:]+$/, '');
+  s = s.replace(/[()\s]+/g, '');
+  return s;
+}
+
 function compositeKey(section, qnum) {
-  return `${normalizeKeyPart(section)}|${normalizeKeyPart(qnum)}`;
+  return `${normalizeKeyPart(section)}|${normalizeQNumber(qnum)}`;
 }
 
 function flattenAnswers(stageResults) {
@@ -93,14 +111,27 @@ export function compareExtractions(studentBatchResults, answerKeyResults) {
   const keys = flattenAnswers(answerKeyResults);
 
   // Index answer-key answers for lookup.
+  //   keyByKey   — strict match on section + question_number.
+  //   keyByQNum  — qnum-only fallback, but only used when exactly ONE
+  //                answer-key entry has that qnum. If two sections share
+  //                e.g. "Q1", we record it as ambiguous and refuse the
+  //                fallback so the row goes to "unclear" instead.
+  //
+  // We deliberately do NOT use global_question_index as a fallback. When
+  // the student's pages are a subset of the worksheet (e.g. only Q17–19),
+  // the student's local indexes 1/2/3 would otherwise collide with the
+  // answer key's Q1/Q2/Q3 entries — exactly the bug we're fixing here.
   const keyByKey = new Map();
-  const keyByGlobal = new Map();
+  const keyByQNum = new Map();
+  const keyByQNumAmbiguous = new Set();
   for (const k of keys) {
     if (k.section || k.question_number) {
       keyByKey.set(compositeKey(k.section || '', k.question_number || ''), k);
     }
-    if (k.global_question_index != null) {
-      keyByGlobal.set(Number(k.global_question_index), k);
+    const qn = normalizeQNumber(k.question_number);
+    if (qn) {
+      if (keyByQNum.has(qn)) keyByQNumAmbiguous.add(qn);
+      else keyByQNum.set(qn, k);
     }
   }
 
@@ -113,9 +144,16 @@ export function compareExtractions(studentBatchResults, answerKeyResults) {
   for (const s of students) {
     let key = null;
     const ck = compositeKey(s.section || '', s.question_number || '');
-    if (keyByKey.has(ck)) key = keyByKey.get(ck);
-    else if (s.global_question_index != null && keyByGlobal.has(Number(s.global_question_index))) {
-      key = keyByGlobal.get(Number(s.global_question_index));
+    if (keyByKey.has(ck)) {
+      key = keyByKey.get(ck);
+    } else {
+      // Fallback: qnum-only match, but only when unambiguous across the
+      // whole answer key. (E.g. if the student didn't capture a section
+      // label but the answer key did, this still pairs correctly.)
+      const qn = normalizeQNumber(s.question_number);
+      if (qn && keyByQNum.has(qn) && !keyByQNumAmbiguous.has(qn)) {
+        key = keyByQNum.get(qn);
+      }
     }
     if (key) usedKeyRefs.add(refOf(key));
 

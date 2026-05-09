@@ -108,7 +108,11 @@ The printed worksheet is black. The child's answers are blue. Read only the blue
 
 Do not mark. Do not compare with an answer key. Do not use printed page numbers, score boxes, marks, or footer numbers as answers.
 
-If a worksheet has multiple sections, capture the section label (e.g. "Section A - Vocabulary"). Use the printed/local question_number as it appears (e.g. "1", "5a"). Use the page number from the image label.
+Preserve the printed question_number EXACTLY as it appears on the page — for example "17", "5a", "19(i)". Do not invent, renumber, skip, or replace it with the question text.
+
+For questions with subparts (e.g. Q19 with parts (i) and (ii)), output ONE entry per subpart so each can be matched and compared individually. Use question_number values like "19(i)" and "19(ii)" — do not put two answers under a single "19" entry, and do not duplicate the same label without a subpart suffix.
+
+If a worksheet has multiple sections, capture the section label (e.g. "Section A - Vocabulary"). Use the page number from the image label.
 
 If an answer is unreadable, set "answer" to "unclear" and a low confidence.
 
@@ -129,7 +133,11 @@ Return JSON only:
 
 const ANSWER_KEY_PROMPT = `Extract the expected answers from these answer sheet pages.
 
-If a worksheet has multiple sections, capture the section label. Use the printed/local question_number as it appears. Use the page number from the image label.
+Preserve the printed question_number EXACTLY as it appears (e.g. "17", "5a", "19(i)"). Do not renumber or skip questions.
+
+For multi-part questions, output ONE entry per subpart with question_number values like "19(i)", "19(ii)" — matching how the student answers will be split — so each subpart can be compared individually.
+
+If a worksheet has multiple sections, capture the section label. Use the page number from the image label.
 
 Return JSON only:
 {
