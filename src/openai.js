@@ -181,7 +181,7 @@ There are TWO different kinds of subparts. Use the right schema for each:
         { "part": "i",  "answer_type": "...", "answer": "...", "confidence": 0.9 },
         { "part": "ii", "answer_type": "...", "answer": "...", "confidence": 0.9 }
       ]
-    Use the printed slot label as `part` (e.g. "i", "ii", "a", "b"). If no slot label is printed, use "1", "2", "3"… in the order the child wrote them.
+    Use the printed slot label as the "part" value (e.g. "i", "ii", "a", "b"). If no slot label is printed, use "1", "2", "3"… in the order the child wrote them.
 
     Set order_matters: TRUE only when the question explicitly requires sequence/order/arrangement, e.g. "arrange the events in the correct order", "sequence the steps", "first / next / last", "before / after", "find x, y and z" with named slots.
 
