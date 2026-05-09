@@ -107,18 +107,25 @@ export const KNOWN_STATUSES = ['correct', 'incorrect', 'unclear'];
 
 const COMPARE_PROMPT = `You are marking extracted worksheet answers. No images are provided.
 
-Compare each student answer with the expected answer.
+Each item in "items" is EITHER:
+  (A) FLAT — has student_answer and expected_answer fields. Compare them and return one row.
+  (B) MULTI-PART — has is_multi_part: true with student_parts[] and expected_parts[]. Return ONE row with is_multi_part: true and parts[] containing per-part statuses.
 
-Mark:
+For multi-part items:
+  • If order_matters: true — compare each student part against the expected part with the SAME "part" label, or by index when labels are missing.
+  • If order_matters: false — POOL MATCH. Each student part may match any expected_part by meaning. Each expected_part is matched at most once. A student part is correct if it semantically matches some unused expected_part; otherwise incorrect.
+  • For each student part, set "matched_expected" to the expected text it matched (or "" / null if none).
+
+Status rules (apply to flat rows AND to each part of multi-part rows):
 - correct: same answer or same meaning (paraphrases, equivalent forms, equivalent units, minor formatting differences are correct).
-- incorrect: different meaning, wrong choice, irrelevant answer, OR student answer is blank/missing while the expected answer is present.
-- unclear: expected answer is missing, the extracted student answer reads "unclear" or is unreadable, the question matching is uncertain, or the answer genuinely cannot be judged from the extracted text.
+- incorrect: different meaning, wrong choice, irrelevant answer, OR student answer is blank/missing while expected is present.
+- unclear: expected answer is missing, the student answer reads "unclear" or is unreadable, the question matching is uncertain, or judgement genuinely cannot be made from the extracted text.
 
 Confidence rule: treat match_confidence >= 0.8 as reliable — do not mark an item "unclear" solely because of match_confidence in that range. Only use "unclear" when the answer text itself is missing/unreadable or the comparison genuinely cannot be made.
 
 For MCQ-style answers, "3 (scooped)" should be considered the same as "3" or "scooped" alone — match by either component.
 
-The 'question' field carries the printed question label (e.g. "Q17", "Q19(i)"); preserve it exactly in your output.
+The 'question' field carries the printed question label (e.g. "Q17", "Q19"); preserve it exactly in your output.
 
 Return JSON only:
 {
@@ -127,12 +134,27 @@ Return JSON only:
     "comment": ""
   },
   "questions": [
+    // Flat row:
     {
       "question": "",
       "student_answer": "",
       "expected_answer": "",
       "status": "correct | incorrect | unclear",
       "comment": ""
+    },
+    // Multi-part row:
+    {
+      "question": "",
+      "is_multi_part": true,
+      "parts": [
+        {
+          "part": "",
+          "student_answer": "",
+          "matched_expected": "",
+          "status": "correct | incorrect | unclear",
+          "comment": ""
+        }
+      ]
     }
   ],
   "redo": [],
@@ -147,7 +169,26 @@ Do not mark. Do not compare with an answer key. Do not use printed page numbers,
 
 Preserve the printed question_number EXACTLY as it appears on the page — for example "17", "5a", "19(i)". Do not invent, renumber, skip, or replace it with the question text.
 
-For questions with subparts (e.g. Q19 with parts (i) and (ii)), output ONE entry per subpart so each can be matched and compared individually. Use question_number values like "19(i)" and "19(ii)" — do not put two answers under a single "19" entry, and do not duplicate the same label without a subpart suffix.
+There are TWO different kinds of subparts. Use the right schema for each:
+
+(A) LIST-ANSWER question — single stem asking for several items.
+    Examples: "Name two reasons", "List three examples", "What two things should…", "State two ways to stay safe".
+    Output ONE entry with:
+      question_number: the printed base number (e.g. "19" or "5")
+      is_multi_part: true
+      order_matters: false  (default for list-answer questions)
+      parts: [
+        { "part": "i",  "answer_type": "...", "answer": "...", "confidence": 0.9 },
+        { "part": "ii", "answer_type": "...", "answer": "...", "confidence": 0.9 }
+      ]
+    Use the printed slot label as `part` (e.g. "i", "ii", "a", "b"). If no slot label is printed, use "1", "2", "3"… in the order the child wrote them.
+
+    Set order_matters: TRUE only when the question explicitly requires sequence/order/arrangement, e.g. "arrange the events in the correct order", "sequence the steps", "first / next / last", "before / after", "find x, y and z" with named slots.
+
+(B) DISTINCT SUB-QUESTIONS — each subpart has its own different question text on the page (e.g. Q5a is one question, Q5b is a different question with its own prompt and answer).
+    Output SEPARATE flat entries with question_number "5a" and "5b" — DO NOT group these under a single "5" entry. Each is independent.
+
+Never duplicate the same "question_number" label without a subpart suffix. If you produce two entries with the same composite key, the later one will silently overwrite the earlier; use the multi-part form (A) instead.
 
 For each answer, set "answer_type" to one of:
 - "text": short or long handwritten text answer.
@@ -166,9 +207,11 @@ For 4-up images: each tile has a small dark-grey label "PDF page N — not stude
 
 If an answer is unreadable, set "answer" to "unclear" and a low confidence.
 
-Return JSON only:
+Return JSON only. Each entry is EITHER flat (single answer) OR multi-part:
+
 {
   "answers": [
+    // Flat entry:
     {
       "global_question_index": 1,
       "section": "",
@@ -178,6 +221,20 @@ Return JSON only:
       "answer_type": "text | choice | number | tick_box | drawing | diagram_label | unknown",
       "answer": "",
       "confidence": 0
+    },
+    // Multi-part entry (list-answer / sequence questions):
+    {
+      "global_question_index": 2,
+      "section": "",
+      "question_number": "",
+      "display_question": "",
+      "page": 0,
+      "is_multi_part": true,
+      "order_matters": false,
+      "parts": [
+        { "part": "i",  "answer_type": "text", "answer": "", "confidence": 0 },
+        { "part": "ii", "answer_type": "text", "answer": "", "confidence": 0 }
+      ]
     }
   ]
 }`;
@@ -186,7 +243,17 @@ const ANSWER_KEY_PROMPT = `Extract the expected answers from these answer sheet 
 
 Preserve the printed question_number EXACTLY as it appears (e.g. "17", "5a", "19(i)"). Do not renumber or skip questions.
 
-For multi-part questions, output ONE entry per subpart with question_number values like "19(i)", "19(ii)" — matching how the student answers will be split — so each subpart can be compared individually.
+For LIST-ANSWER questions (single stem with several expected items, e.g. "Name two reasons"), output ONE entry with:
+  question_number: the base printed number (e.g. "19" or "5")
+  is_multi_part: true
+  order_matters: matches the question's requirement (false by default; true only for "arrange in order"/"sequence"/"first/next/last"/"x, y, z" named-slot questions)
+  parts: [{ "part": "i", "answer_type": "...", "answer": "...", "confidence": 0 }, ...]
+
+For DISTINCT sub-questions where each subpart has its own question text (e.g. Q5a and Q5b are independent), output SEPARATE flat entries with question_number "5a" and "5b". Do NOT group these.
+
+Never produce two entries with the same composite key (section + question_number) — use the multi-part form when there are multiple expected items for the same printed question.
+
+Note: answer-key pages may not always show full question wording; if order_matters is unclear from the answer key alone, leave order_matters: false (the student-side extraction will set it correctly).
 
 For each expected answer, set "answer_type" to one of the same values used for the student extraction:
 - "text", "choice", "number", "tick_box", "drawing", "diagram_label", "unknown".
@@ -197,9 +264,11 @@ CLASSIFICATION RULE: if the expected answer cannot be FULLY represented as typed
 
 If a worksheet has multiple sections, capture the section label. Use the page number from the image label.
 
-Return JSON only:
+Return JSON only. Each entry is EITHER flat (single answer) OR multi-part (list-answer / sequence question):
+
 {
   "answers": [
+    // Flat entry:
     {
       "global_question_index": 1,
       "section": "",
@@ -209,6 +278,20 @@ Return JSON only:
       "answer_type": "text | choice | number | tick_box | drawing | diagram_label | unknown",
       "answer": "",
       "confidence": 0
+    },
+    // Multi-part entry:
+    {
+      "global_question_index": 2,
+      "section": "",
+      "question_number": "",
+      "display_question": "",
+      "page": 0,
+      "is_multi_part": true,
+      "order_matters": false,
+      "parts": [
+        { "part": "i",  "answer_type": "text", "answer": "", "confidence": 0 },
+        { "part": "ii", "answer_type": "text", "answer": "", "confidence": 0 }
+      ]
     }
   ]
 }`;
@@ -332,12 +415,28 @@ export async function markPairs({
   const payload = {
     subject: subject || '',
     level: level || '',
-    items: pairs.map((p) => ({
-      question: p.display_question || p.question,
-      student_answer: p.student_answer || '',
-      expected_answer: p.expected_answer || '',
-      match_confidence: typeof p.match_confidence === 'number' ? p.match_confidence : 1,
-    })),
+    items: pairs.map((p) => {
+      const item = {
+        question: p.display_question || p.question,
+        match_confidence: typeof p.match_confidence === 'number' ? p.match_confidence : 1,
+      };
+      if (p.is_multi_part) {
+        item.is_multi_part = true;
+        item.order_matters = !!p.order_matters;
+        item.student_parts = (p.student_parts || []).map((sp) => ({
+          part: sp.part != null ? String(sp.part) : '',
+          answer: sp.answer || '',
+        }));
+        item.expected_parts = (p.expected_parts || []).map((ep) => ({
+          part: ep.part != null ? String(ep.part) : '',
+          answer: ep.answer || '',
+        }));
+      } else {
+        item.student_answer = p.student_answer || '';
+        item.expected_answer = p.expected_answer || '';
+      }
+      return item;
+    }),
   };
   const content = [{ type: 'text', text: JSON.stringify(payload, null, 2) }];
   return chatJson({ apiKey, model, system: COMPARE_PROMPT, content, signal, apiMode, proxyEndpoint, proxyToken });

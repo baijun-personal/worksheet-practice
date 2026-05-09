@@ -13,10 +13,10 @@
 //   3. buildFinalReport(): merge the AI text-compare output and the
 //      per-question visual-compare outputs into the report shape used
 //      by the UI, enriched with local pair metadata (page numbers,
-//      section, display label) the AI doesn't see.
-//   4. scorePairsLocally(): a string-equality scorer used as a fallback
-//      when the AI text-compare call fails — keeps the user moving
-//      even if the call breaks.
+//      section, display label) the AI doesn't see. For multi-part
+//      pairs, flattens to per-part display rows here. Falls back to
+//      string-equality scoring (per-row or per-part) when the AI
+//      compare call didn't grade an item.
 //
 // Why split? The compare prompt previously embedded BOTH semantic
 // reasoning AND image reading in a single OpenAI call, which was the
@@ -78,6 +78,93 @@ function flattenAnswers(stageResults) {
   return out;
 }
 
+// Defensive multi-part normalization. Handles three input shapes from the
+// extraction stage:
+//   1. Already grouped (is_multi_part: true, parts: [...]) — preserved.
+//   2. Single flat entry with a unique composite key — preserved.
+//   3. Multiple flat entries that share the same composite key — silently
+//      a duplicate-key bug (the older code's failure mode for Q19). We
+//      auto-merge them into a multi-part group with order_matters: false
+//      so pool-matching can still produce a sensible result.
+//
+// We deliberately do NOT auto-group separate "5a"/"5b" entries (different
+// composite keys) — those are independent sub-questions on many papers.
+// The extraction prompt is the place that decides between flat-with-suffix
+// and grouped-multi-part; this helper just rescues malformed output.
+function normalizeMultiParts(answers) {
+  const byKey = new Map();
+  const order = [];
+
+  function getOrCreate(ck, source) {
+    if (byKey.has(ck)) return byKey.get(ck);
+    // Shallow clone so we can mutate without touching the model's output.
+    const entry = { ...source };
+    byKey.set(ck, entry);
+    order.push(ck);
+    return entry;
+  }
+
+  function flatToPart(a, autoLabel) {
+    return {
+      part: a.part != null && a.part !== '' ? String(a.part) : autoLabel,
+      answer_type: a.answer_type || 'text',
+      answer: a.answer ?? '',
+      confidence: typeof a.confidence === 'number' ? a.confidence : null,
+    };
+  }
+
+  for (const a of answers) {
+    if (!a) continue;
+    const ck = compositeKey(a.section || '', a.question_number || '');
+
+    if (a.is_multi_part === true && Array.isArray(a.parts)) {
+      const existing = byKey.get(ck);
+      if (!existing) {
+        // Normalize the parts array shape.
+        const cloned = { ...a, parts: a.parts.map((p, i) => flatToPart(p, String(i + 1))) };
+        byKey.set(ck, cloned);
+        order.push(ck);
+      } else {
+        // Same composite was seen earlier (rare). Merge parts together.
+        const merged = ensureMultiPart(existing);
+        for (const p of a.parts) merged.parts.push(flatToPart(p, String(merged.parts.length + 1)));
+      }
+      continue;
+    }
+
+    // Flat entry.
+    const existing = byKey.get(ck);
+    if (!existing) {
+      getOrCreate(ck, a);
+    } else {
+      // Duplicate composite key with flat shape — promote to multi-part.
+      const merged = ensureMultiPart(existing);
+      merged.parts.push(flatToPart(a, String(merged.parts.length + 1)));
+    }
+  }
+
+  return order.map((ck) => byKey.get(ck));
+}
+
+// Convert a flat entry in-place into a multi-part one (one part holding
+// the original answer). Returns the same object so callers can chain.
+function ensureMultiPart(entry) {
+  if (entry.is_multi_part === true && Array.isArray(entry.parts)) return entry;
+  const firstPart = {
+    part: '1',
+    answer_type: entry.answer_type || 'text',
+    answer: entry.answer ?? '',
+    confidence: typeof entry.confidence === 'number' ? entry.confidence : null,
+  };
+  entry.is_multi_part = true;
+  entry.order_matters = false;
+  entry.parts = [firstPart];
+  delete entry.answer;
+  delete entry.answer_type;
+  delete entry.confidence;
+  return entry;
+}
+
 function buildDisplayQuestion(a) {
   if (a.display_question) return String(a.display_question);
   const q = a.question_number ? String(a.question_number) : '';
@@ -102,8 +189,11 @@ function buildDisplayQuestion(a) {
 // because the student's pages are often a subset of the worksheet and
 // local indexes 1/2/3 would collide with the key's Q1/Q2/Q3.
 export function matchExtractions(studentBatchResults, answerKeyResults) {
-  const students = flattenAnswers(studentBatchResults);
-  const keys = flattenAnswers(answerKeyResults);
+  // Pre-normalize so duplicate composite keys auto-merge into multi-part
+  // groups (rather than silently overwriting). After this, each composite
+  // key appears at most once in students/keys.
+  const students = normalizeMultiParts(flattenAnswers(studentBatchResults));
+  const keys = normalizeMultiParts(flattenAnswers(answerKeyResults));
 
   const keyByKey = new Map();
   const keyByKeyAmbiguous = new Set();
@@ -112,9 +202,6 @@ export function matchExtractions(studentBatchResults, answerKeyResults) {
   for (const k of keys) {
     if (k.section || k.question_number) {
       const ck = compositeKey(k.section || '', k.question_number || '');
-      // If the same composite (section + question_number) appears more
-      // than once in the answer key, mark it ambiguous so we don't
-      // silently pair against whichever one happened to land last.
       if (keyByKey.has(ck)) keyByKeyAmbiguous.add(ck);
       else keyByKey.set(ck, k);
     }
@@ -157,17 +244,73 @@ export function matchExtractions(studentBatchResults, answerKeyResults) {
     }
     if (key) usedKeyRefs.add(refOf(key));
 
+    // Determine whether this pair is multi-part. Either side being
+    // multi-part promotes the pair into a multi-part record so the
+    // comparison call can reason over parts coherently.
+    const studentGrouped = s.is_multi_part === true && Array.isArray(s.parts);
+    const keyGrouped = !!key && key.is_multi_part === true && Array.isArray(key.parts);
+    const isMultiPart = studentGrouped || keyGrouped;
+
+    // student-side wording is the more reliable source for order_matters
+    // (the question wording is on the worksheet, not the answer sheet).
+    const orderMatters = studentGrouped
+      ? !!s.order_matters
+      : (keyGrouped ? !!key.order_matters : false);
+
+    const studentParts = studentGrouped
+      ? s.parts.map((p, i) => ({
+          part: p.part != null ? String(p.part) : String(i + 1),
+          answer: p.answer ?? '',
+          answer_type: p.answer_type || 'text',
+          confidence: typeof p.confidence === 'number' ? p.confidence : null,
+        }))
+      : [{
+          part: '1',
+          answer: s.answer ?? '',
+          answer_type: s.answer_type || 'text',
+          confidence: typeof s.confidence === 'number' ? s.confidence : null,
+        }];
+    const expectedParts = keyGrouped
+      ? key.parts.map((p, i) => ({
+          part: p.part != null ? String(p.part) : String(i + 1),
+          answer: p.answer ?? '',
+          answer_type: p.answer_type || 'text',
+          confidence: typeof p.confidence === 'number' ? p.confidence : null,
+        }))
+      : (key
+          ? [{
+              part: '1',
+              answer: key.answer ?? '',
+              answer_type: key.answer_type || 'text',
+              confidence: typeof key.confidence === 'number' ? key.confidence : null,
+            }]
+          : []);
+
     pairs.push({
       question: String(s.question_number || s.global_question_index || ''),
       section: s.section || '',
       display_question: buildDisplayQuestion(s),
       completed_page: s.page ?? null,
       answer_page: key?.page ?? null,
-      student_answer: s.answer ?? '',
-      student_confidence: typeof s.confidence === 'number' ? s.confidence : null,
-      student_type: s.answer_type || '',
-      expected_answer: key ? (key.answer ?? '') : '',
-      expected_type: key?.answer_type || '',
+      // Multi-part fields (always populated; for flat pairs parts has length 1).
+      is_multi_part: isMultiPart,
+      order_matters: orderMatters,
+      student_parts: studentParts,
+      expected_parts: expectedParts,
+      // Flat convenience fields — preserved for the non-grouped flow so
+      // existing readers (markPairs, fallback scoring) work unchanged.
+      // For grouped pairs these are derived for fallback display only.
+      student_answer: studentGrouped
+        ? studentParts.map((p) => p.answer).filter(Boolean).join('; ')
+        : (s.answer ?? ''),
+      student_confidence: studentGrouped
+        ? null
+        : (typeof s.confidence === 'number' ? s.confidence : null),
+      student_type: studentGrouped ? '' : (s.answer_type || ''),
+      expected_answer: keyGrouped
+        ? expectedParts.map((p) => p.answer).filter(Boolean).join('; ')
+        : (key ? (key.answer ?? '') : ''),
+      expected_type: keyGrouped ? '' : (key?.answer_type || ''),
       match_confidence: +matchConfidence.toFixed(2),
       match_method: matchMethod,
     });
@@ -188,13 +331,27 @@ export function matchExtractions(studentBatchResults, answerKeyResults) {
   return { pairs, not_in_attempt: notInAttempt, keysProvided: keys.length > 0 };
 }
 
-// Pair classification: a pair is visual when either side's
-// answer_type is "drawing" or "diagram_label". "unknown" routes to
-// the text path by default — the text compare call returns "unclear"
-// when it can't decide, which is the safe fallback.
+// Pair classification: a pair is visual when any side's answer_type
+// is "drawing" or "diagram_label". "unknown" routes to the text path
+// by default — the text compare call returns "unclear" when it can't
+// decide, which is the safe fallback.
+//
+// For multi-part pairs, ANY part being visual promotes the entire
+// pair to the visual path. This is intentionally coarse: we run one
+// vision call per question rather than mixing text-compare and
+// visual-compare within the same question. Per-part visual handling
+// can be added later if needed.
 const VISUAL_TYPE_RE = /^(drawing|diagram_label)$/i;
 export function isVisualType(t) { return VISUAL_TYPE_RE.test(String(t || '')); }
-export function isVisualPair(p) { return isVisualType(p.student_type) || isVisualType(p.expected_type); }
+export function isVisualPair(p) {
+  if (p.is_multi_part) {
+    const sParts = p.student_parts || [];
+    const eParts = p.expected_parts || [];
+    return sParts.some((sp) => isVisualType(sp.answer_type))
+        || eParts.some((ep) => isVisualType(ep.answer_type));
+  }
+  return isVisualType(p.student_type) || isVisualType(p.expected_type);
+}
 
 export function partitionPairsByModality(match) {
   const text = [];
@@ -235,7 +392,8 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
   }
 
   let correct = 0, incorrect = 0, unclear = 0;
-  const questions = match.pairs.map((p) => {
+  const questions = [];
+  for (const p of match.pairs) {
     const qn = normalizeQNumber(p.display_question || p.question);
     const base = {
       question: p.question,
@@ -245,6 +403,9 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
       answer_page: p.answer_page,
     };
 
+    // Visual path — multi-part visual still produces one row per
+    // question for MVP (per-part visual handling is a future
+    // refinement; the prompt scope is already noisy with full pages).
     if (isVisualPair(p)) {
       const v = visualResultByQ.get(qn);
       let row;
@@ -273,23 +434,40 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
       if (row.status === 'correct') correct++;
       else if (row.status === 'incorrect') incorrect++;
       else unclear++;
-      return row;
+      questions.push(row);
+      continue;
     }
 
-    // Text pair
+    // Text path — multi-part: one row per student part using the AI's
+    // per-part response (or per-part local fallback if AI didn't grade).
+    if (p.is_multi_part) {
+      const ai = aiQByQ.get(qn);
+      const aiParts = ai && Array.isArray(ai.parts) ? ai.parts : null;
+      const partRows = buildMultiPartRows(p, aiParts, match.keysProvided);
+      for (const row of partRows) {
+        if (row.status === 'correct') correct++;
+        else if (row.status === 'incorrect') incorrect++;
+        else unclear++;
+        questions.push(row);
+      }
+      continue;
+    }
+
+    // Flat text pair
     const ai = aiQByQ.get(qn);
     if (ai) {
       const status = normalizeStatus(ai.status);
       if (status === 'correct') correct++;
       else if (status === 'incorrect') incorrect++;
       else unclear++;
-      return {
+      questions.push({
         ...base,
         student_answer: ai.student_answer ?? p.student_answer,
         expected_answer: ai.expected_answer ?? p.expected_answer,
         status,
         comment: ai.comment ? String(ai.comment) : '',
-      };
+      });
+      continue;
     }
 
     // No AI text result for this pair (or AI text call failed) — local fallback.
@@ -297,8 +475,8 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
     if (local.status === 'correct') correct++;
     else if (local.status === 'incorrect') incorrect++;
     else unclear++;
-    return { ...base, ...local };
-  });
+    questions.push({ ...base, ...local });
+  }
 
   const attempted = correct + incorrect + unclear;
   const summary = {
@@ -314,10 +492,21 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
   // are included alongside text-compare incorrects. The AI's text-only
   // redo list only sees text pairs, so using it directly would silently
   // drop wrong drawings.
-  const redo = questions
-    .filter((q) => q.status === 'incorrect')
-    .map((q) => q.display_question || q.question)
-    .filter(Boolean);
+  //
+  // Dedupe by base question — if multiple parts of Q19 are wrong, redo
+  // should show "Q19" once, not "Q19(i)" and "Q19(ii)" separately.
+  const redoSeen = new Set();
+  const redo = [];
+  for (const q of questions) {
+    if (q.status !== 'incorrect') continue;
+    const label = q.display_question || q.question;
+    if (!label) continue;
+    // Strip a trailing "(part)" suffix to compute the base label.
+    const base = label.replace(/\([^)]*\)\s*$/, '').trim() || label;
+    if (redoSeen.has(base)) continue;
+    redoSeen.add(base);
+    redo.push(base);
+  }
 
   return {
     summary,
@@ -328,9 +517,147 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
   };
 }
 
-// Score a single text pair using string equality. Mirrors the rules in
-// scorePairsLocally() but returns just the per-row diff so buildFinalReport
-// can splice it in.
+// Build per-part display rows for a grouped text pair. Walks the
+// student parts in order; for each, picks the AI's per-part status if
+// the AI returned per-part data, otherwise falls back to local pool /
+// positional scoring.
+function buildMultiPartRows(p, aiParts, keysProvided) {
+  const baseDisplay = p.display_question || (p.question ? `Q${p.question}` : '');
+  const baseRow = {
+    question: p.question,
+    section: p.section,
+    display_question: baseDisplay,
+    completed_page: p.completed_page,
+    answer_page: p.answer_page,
+  };
+
+  const rows = [];
+
+  // Index AI parts by 'part' label so we can look up by student part.
+  const aiByPart = new Map();
+  if (Array.isArray(aiParts)) {
+    aiParts.forEach((ap, i) => {
+      const lbl = ap?.part != null ? String(ap.part) : String(i + 1);
+      aiByPart.set(lbl, ap);
+    });
+  }
+
+  // Local fallback: pool / positional matching when AI didn't grade.
+  const localStatuses = aiParts ? null : scorePartsLocally(p, keysProvided);
+
+  (p.student_parts || []).forEach((sp, i) => {
+    const partLabel = sp.part != null ? String(sp.part) : String(i + 1);
+    const display = `${baseDisplay}(${partLabel})`;
+    const ai = aiByPart.get(partLabel) || (Array.isArray(aiParts) ? aiParts[i] : null);
+    if (ai) {
+      const status = normalizeStatus(ai.status);
+      rows.push({
+        ...baseRow,
+        display_question: display,
+        student_answer: ai.student_answer ?? sp.answer ?? '',
+        expected_answer: ai.matched_expected ?? '(see comment)',
+        status,
+        comment: ai.comment ? String(ai.comment) : '',
+      });
+    } else if (localStatuses) {
+      const local = localStatuses[i] || { status: 'unclear', comment: 'Local fallback could not score this part.' };
+      rows.push({
+        ...baseRow,
+        display_question: display,
+        student_answer: sp.answer || '',
+        expected_answer: local.matchedExpected || '',
+        status: local.status,
+        comment: local.comment || '',
+      });
+    } else {
+      rows.push({
+        ...baseRow,
+        display_question: display,
+        student_answer: sp.answer || '',
+        expected_answer: '',
+        status: 'unclear',
+        comment: 'AI compare did not return a per-part status for this part.',
+      });
+    }
+  });
+
+  return rows;
+}
+
+// Local per-part scorer for grouped pairs. Pool-matches when
+// order_matters is false; positional otherwise. Used as a fallback
+// when the AI text-compare call didn't return per-part data.
+function scorePartsLocally(p, keysProvided) {
+  const studentParts = p.student_parts || [];
+  const expectedParts = p.expected_parts || [];
+  const out = new Array(studentParts.length).fill(null);
+
+  if (!keysProvided) {
+    return studentParts.map(() => ({
+      status: 'unclear',
+      comment: 'No answer pages provided; compare manually.',
+      matchedExpected: '',
+    }));
+  }
+  if (expectedParts.length === 0) {
+    return studentParts.map(() => ({
+      status: 'unclear',
+      comment: 'No matching answer-key entry for this question.',
+      matchedExpected: '',
+    }));
+  }
+
+  if (p.order_matters) {
+    // Positional: student[i] vs expected[i].
+    studentParts.forEach((sp, i) => {
+      const ep = expectedParts[i];
+      out[i] = scoreSinglePartLocally(sp, ep);
+    });
+  } else {
+    // Pool: each expected can be matched at most once.
+    const expectedUsed = new Array(expectedParts.length).fill(false);
+    studentParts.forEach((sp, i) => {
+      const studentBlank = !(sp.answer || '').trim();
+      const isUnreadable = sp.answer && /^unclear$/i.test(String(sp.answer).trim());
+      if (studentBlank) {
+        out[i] = { status: 'incorrect', comment: 'Student part was blank.', matchedExpected: '' };
+        return;
+      }
+      if (isUnreadable) {
+        out[i] = { status: 'unclear', comment: 'Student part was unreadable.', matchedExpected: '' };
+        return;
+      }
+      const sNorm = normalizeAnswer(sp.answer || '');
+      let matchIdx = -1;
+      for (let j = 0; j < expectedParts.length; j++) {
+        if (expectedUsed[j]) continue;
+        if (normalizeAnswer(expectedParts[j].answer || '') === sNorm) { matchIdx = j; break; }
+      }
+      if (matchIdx >= 0) {
+        expectedUsed[matchIdx] = true;
+        out[i] = { status: 'correct', comment: '', matchedExpected: expectedParts[matchIdx].answer || '' };
+      } else {
+        out[i] = { status: 'incorrect', comment: 'No matching expected answer.', matchedExpected: '' };
+      }
+    });
+  }
+
+  return out;
+}
+
+function scoreSinglePartLocally(studentPart, expectedPart) {
+  const sa = studentPart?.answer || '';
+  const ea = expectedPart?.answer || '';
+  if (!ea) return { status: 'unclear', comment: 'No matching expected part.', matchedExpected: '' };
+  if (!sa.trim()) return { status: 'incorrect', comment: 'Student part was blank.', matchedExpected: '' };
+  if (/^unclear$/i.test(sa.trim())) return { status: 'unclear', comment: 'Student part was unreadable.', matchedExpected: '' };
+  if (normalizeAnswer(sa) === normalizeAnswer(ea)) return { status: 'correct', comment: '', matchedExpected: ea };
+  return { status: 'incorrect', comment: '', matchedExpected: ea };
+}
+
+// Score a single flat text pair using string equality. Returns just
+// the per-row diff so buildFinalReport can splice it in when the AI
+// text compare call didn't grade this row.
 function scoreOnePairLocally(p, keysProvided) {
   const studentAns = p.student_answer || '';
   const expectedAns = p.expected_answer || '';
@@ -362,78 +689,6 @@ function scoreOnePairLocally(p, keysProvided) {
     expected_answer: expectedAns,
     status,
     comment,
-  };
-}
-
-// Local string-equality scorer — used when the AI compare call fails.
-// Mirrors the shape of buildFinalReport() so the rest of the app
-// doesn't need to know which path produced the result.
-export function scorePairsLocally(match) {
-  const pairs = match.pairs;
-  let correct = 0, incorrect = 0, unclear = 0;
-  const questions = pairs.map((p) => {
-    const studentAns = p.student_answer || '';
-    const expectedAns = p.expected_answer || '';
-    const isUnreadable = !studentAns || /^unclear$/i.test(studentAns.trim());
-    const studentBlank = !studentAns.trim();
-    let status, comment = '';
-    if (!match.keysProvided) {
-      status = 'unclear';
-      comment = 'No answer pages provided; compare manually.';
-    } else if (!expectedAns) {
-      status = 'unclear';
-      comment = 'No matching answer-key entry for this question.';
-    } else if (studentBlank || isUnreadable) {
-      // Per the spec: blank/missing student answer is incorrect when
-      // the expected answer exists; only "unclear" when extraction
-      // explicitly returned 'unclear' (we can't read it).
-      if (isUnreadable && !studentBlank) {
-        status = 'unclear';
-        comment = 'Student answer was unreadable.';
-      } else {
-        status = 'incorrect';
-        comment = 'Student answer was blank.';
-      }
-    } else if (typeof p.student_confidence === 'number' && p.student_confidence < 0.4) {
-      status = 'unclear';
-      comment = `Low extraction confidence (${p.student_confidence.toFixed(2)}).`;
-    } else if (normalizeAnswer(studentAns) === normalizeAnswer(expectedAns)) {
-      status = 'correct';
-    } else {
-      status = 'incorrect';
-    }
-    if (status === 'correct') correct++;
-    else if (status === 'incorrect') incorrect++;
-    else unclear++;
-    return {
-      question: p.question,
-      section: p.section,
-      display_question: p.display_question,
-      completed_page: p.completed_page,
-      answer_page: p.answer_page,
-      student_answer: studentAns,
-      expected_answer: expectedAns,
-      status,
-      comment,
-    };
-  });
-
-  const attempted = correct + incorrect + unclear;
-  const summary = {
-    estimated_score: attempted > 0 && match.keysProvided ? `${correct}/${attempted}` : '',
-    comment: buildSummaryComment({ correct, incorrect, unclear, attempted, notInAttempt: match.not_in_attempt, keysProvided: match.keysProvided }),
-  };
-  const redo = questions
-    .filter((q) => q.status === 'incorrect')
-    .map((q) => q.display_question || q.question)
-    .filter(Boolean);
-
-  return {
-    summary,
-    questions,
-    not_in_attempt: match.not_in_attempt,
-    redo,
-    weak_points: [],
   };
 }
 
