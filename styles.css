@@ -194,6 +194,7 @@ button.tool-btn.active { background: var(--accent); color: white; border-color: 
   justify-content: center;
   z-index: 50;
 }
+.modal[hidden] { display: none; }
 .modal-card {
   background: white;
   border-radius: 8px;
