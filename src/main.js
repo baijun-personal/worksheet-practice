@@ -402,6 +402,128 @@ function bindSetupForm() {
 
   populateBuiltinCatalog();
   applySourceVisibility();
+
+  // Diagnostics
+  $('diag-text-btn').addEventListener('click', () => runDiagnostic('text'));
+  $('diag-image-btn').addEventListener('click', () => runDiagnostic('image'));
+}
+
+// --- Diagnostics: minimal OpenAI requests for narrowing down marking errors.
+// Runs against the current API key, model, and (optional) endpoint override
+// from settings. Output is structured JSON dumped into #diag-output for
+// easy reading + copy-paste.
+
+const OPENAI_DEFAULT_ENDPOINT = 'https://api.openai.com/v1/chat/completions';
+
+async function runDiagnostic(kind) {
+  const out = $('diag-output');
+  out.hidden = false;
+  const apiKey = state.settings.openaiKey;
+  const model = state.settings.openaiModel || DEFAULT_MODEL;
+  const endpoint = state.settings.openaiEndpoint || OPENAI_DEFAULT_ENDPOINT;
+  if (!apiKey) {
+    out.textContent = 'No OpenAI API key set. Paste it in Setup → Advanced settings → API key first.';
+    return;
+  }
+  out.textContent = `Preparing ${kind === 'image' ? 'tiny-image' : 'text-only'} request…`;
+
+  let messages;
+  if (kind === 'image') {
+    // 300x300 canvas: white background + black "test" — encoded as data URL.
+    const canvas = document.createElement('canvas');
+    canvas.width = 300;
+    canvas.height = 300;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, 300, 300);
+    ctx.fillStyle = 'black';
+    ctx.font = 'bold 80px sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('test', 60, 150);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    messages = [{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Read this test image and return JSON only: {"ok":true,"text":""}' },
+        { type: 'image_url', image_url: { url: dataUrl, detail: 'low' } },
+      ],
+    }];
+    out.textContent += `\nGenerated test image: ${dataUrl.length} chars (~${Math.round(dataUrl.length / 1024)} KB).`;
+  } else {
+    messages = [{ role: 'user', content: 'Return JSON only: {"ok":true}' }];
+  }
+
+  const body = {
+    model,
+    messages,
+    response_format: { type: 'json_object' },
+    temperature: 0,
+  };
+  const bodyStr = JSON.stringify(body);
+
+  out.textContent = JSON.stringify({
+    test: kind === 'image' ? 'tiny-image' : 'text-only',
+    endpoint,
+    model,
+    requestBytes: bodyStr.length,
+    status: 'sending…',
+  }, null, 2);
+
+  const start = performance.now();
+  let resp;
+  try {
+    resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: bodyStr,
+    });
+  } catch (e) {
+    const isNetwork = e?.name === 'TypeError' || /failed to fetch|network/i.test(e?.message || '');
+    out.textContent = JSON.stringify({
+      test: kind === 'image' ? 'tiny-image' : 'text-only',
+      endpoint,
+      model,
+      requestBytes: bodyStr.length,
+      success: false,
+      stage: 'fetch threw before any response',
+      elapsedMs: Math.round(performance.now() - start),
+      errorName: e?.name || '',
+      errorMessage: e?.message || '',
+      isBrowserOrNetworkError: isNetwork,
+      hint: isNetwork
+        ? 'Browser/network error before any HTTP exchange. Causes: device-level content/family filter, ad-blocker DNS, CORS preflight blocked, OS-level firewall, OOM during fetch on low-memory devices, or no internet.'
+        : 'Unexpected error type — copy errorName/errorMessage above when reporting.',
+    }, null, 2);
+    return;
+  }
+
+  const elapsedMs = Math.round(performance.now() - start);
+  let text = '';
+  let readErr = null;
+  try {
+    text = await resp.text();
+  } catch (e) { readErr = e; }
+  let parsed = null;
+  try { parsed = text ? JSON.parse(text) : null; } catch {}
+
+  out.textContent = JSON.stringify({
+    test: kind === 'image' ? 'tiny-image' : 'text-only',
+    endpoint,
+    model,
+    requestBytes: bodyStr.length,
+    success: resp.ok,
+    httpStatus: resp.status,
+    httpStatusText: resp.statusText,
+    elapsedMs,
+    responseBytes: text.length,
+    readError: readErr ? `${readErr.name}: ${readErr.message}` : null,
+    modelContent: parsed?.choices?.[0]?.message?.content ?? null,
+    usage: parsed?.usage ?? null,
+    rawSnippet: text.slice(0, 1500),
+  }, null, 2);
 }
 
 function populateModelPresetSelect() {

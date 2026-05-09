@@ -155,6 +155,19 @@
         </fieldset>
       </details>
 
+      <details class="card">
+        <summary><h2 style="display:inline">Diagnostics</h2></summary>
+        <p class="muted small">
+          Run these to narrow down marking failures. Both use your current API
+          key and selected model.
+        </p>
+        <div class="actions">
+          <button id="diag-text-btn" type="button">Test text-only OpenAI request</button>
+          <button id="diag-image-btn" type="button">Test tiny-image OpenAI request</button>
+        </div>
+        <pre id="diag-output" class="raw-json" hidden></pre>
+      </details>
+
       <div class="actions">
         <button id="start-practice-btn" type="button">Start practice</button>
       </div>
