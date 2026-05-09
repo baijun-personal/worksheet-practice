@@ -182,6 +182,32 @@ async function getPdfLib() {
   return pdfLibPromise;
 }
 
+// pdf-lib's StandardFonts only encode WinAnsi (Windows-1252). Any character
+// beyond Latin-1 (CJK, Hebrew, Arabic, etc.) crashes drawText. We sanitize
+// strings before drawing: keep ASCII and Latin-1 + a few common smart
+// punctuation chars; replace anything else with '?'. If a string ends up
+// substantially '?', swap it for a placeholder pointing at the on-screen
+// report so the PDF doesn't fill with gibberish.
+const PDF_SAFE_RE = /[\x09\x0A\x0D\x20-\x7E\xA0-\xFF‘’“”–—€]/;
+
+function pdfSafe(text, ctx) {
+  const s = String(text == null ? '' : text);
+  if (!s) return '';
+  let out = '';
+  let unsafeCount = 0;
+  for (const ch of s) {
+    if (PDF_SAFE_RE.test(ch)) out += ch;
+    else { unsafeCount++; out += '?'; }
+  }
+  if (unsafeCount === 0) return s;
+  if (ctx) ctx.sanitized = true;
+  // If the sanitized result is mostly '?'s (e.g. an all-CJK string), replace
+  // it with a clear placeholder rather than a row of question marks.
+  const meaningful = out.replace(/[?\s\-,.]/g, '');
+  if (meaningful.length === 0) return '[non-Latin text — see on-screen report]';
+  return out;
+}
+
 // Build a simple report PDF: text-only summary plus one page per question.
 export async function exportReportPdf(report, meta) {
   const { PDFDocument, StandardFonts, rgb } = await getPdfLib();
@@ -195,12 +221,17 @@ export async function exportReportPdf(report, meta) {
   let page = doc.addPage([pageWidth, pageHeight]);
   let y = pageHeight - margin;
 
+  // Track whether any text needed sanitization, and if so add a banner at
+  // the very top once the rest of the document is laid out.
+  const ctx = { sanitized: false };
+
   function newPage() { page = doc.addPage([pageWidth, pageHeight]); y = pageHeight - margin; }
   function drawText(text, opts = {}) {
     const fnt = opts.bold ? bold : font;
     const size = opts.size || 11;
     const color = opts.color || rgb(0.08, 0.1, 0.12);
-    const lines = wrap(text, fnt, size, pageWidth - margin * 2);
+    const safe = pdfSafe(text, ctx);
+    const lines = wrap(safe, fnt, size, pageWidth - margin * 2);
     for (const line of lines) {
       if (y < margin + size) newPage();
       page.drawText(line, { x: margin, y, size, font: fnt, color });
@@ -310,6 +341,42 @@ export async function exportReportPdf(report, meta) {
       `student "${r.student_answer || ''}" / expected "${r.expected_answer || ''}"`
     );
     if (r.comment) drawText(`  ${r.comment}`, { size: 10, color: rgb(0.4, 0.45, 0.5) });
+  }
+
+  // If any text needed sanitization, prepend a banner page explaining why
+  // some content reads "[non-Latin text — see on-screen report]" or has
+  // '?' substitutions. The on-screen report and the raw JSON download
+  // carry the full original text.
+  if (ctx.sanitized) {
+    const banner = doc.insertPage(0, [pageWidth, pageHeight]);
+    let by = pageHeight - margin;
+    const drawBannerLine = (text, opts = {}) => {
+      const fnt = opts.bold ? bold : font;
+      const size = opts.size || 11;
+      const color = opts.color || rgb(0.08, 0.1, 0.12);
+      const lines = wrap(pdfSafe(text), fnt, size, pageWidth - margin * 2);
+      for (const line of lines) {
+        banner.drawText(line, { x: margin, y: by, size, font: fnt, color });
+        by -= size * 1.4;
+      }
+      by -= 4;
+    };
+    drawBannerLine('Note', { bold: true, size: 18, color: rgb(0.6, 0.1, 0.1) });
+    drawBannerLine(
+      'This PDF report cannot render some characters from the worksheet ' +
+      '(for example Chinese, Japanese, or other non-Latin text) because ' +
+      'the embedded font only supports Latin characters.'
+    );
+    drawBannerLine(
+      'Where original text was non-Latin, you will see one of:'
+    );
+    drawBannerLine('  - "?" in place of individual characters', { size: 10, color: rgb(0.4, 0.45, 0.5) });
+    drawBannerLine('  - "[non-Latin text — see on-screen report]" for a whole value', { size: 10, color: rgb(0.4, 0.45, 0.5) });
+    by -= 6;
+    drawBannerLine(
+      'For the full text, open the marking report in the app, ' +
+      'or click "Show raw JSON" and copy the JSON below.'
+    );
   }
 
   const bytes = await doc.save();
