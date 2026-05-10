@@ -129,7 +129,13 @@ function shouldRenderMarkersOnPage(paperProfile, pageNumber) {
 //                             //   if no ink — page renders clean
 //     canvas,                 // <canvas> for the page render
 //     markerLayer,            // <div> overlay for markers
-//     onMarkerClick(record),  // called when a marker is tapped
+//     onMarkerClick(record),  // called with the single record
+//                             //   for that marker. compare.js
+//                             //   produces one record per base
+//                             //   question (parts[] inside), so
+//                             //   no grouped-records argument is
+//                             //   passed — see comment in click
+//                             //   handler below.
 //     hostWidth,              // CSS pixels for the rendered page
 //   }
 export async function renderReviewPage(ctx) {
@@ -175,10 +181,19 @@ export async function renderReviewPage(ctx) {
     marker.innerHTML =
       `<span class="review-marker-x">✗</span>` +
       `<span class="review-marker-label">${escapeHtml(labelText)}${escapeHtml(sourceTag)}</span>`;
+    // Pass only the first record. compare.js already collapses
+    // multi-part subparts into one record (parts[] inside), so
+    // each group reliably has one record. groupReviewRecords()
+    // is defensive against an upstream regression that ever
+    // produces two records for the same base question — if that
+    // happened we'd lose visibility into the second one here.
+    // Acceptable trade-off: the popup model is one-record-at-a-
+    // time, and we'd rather know about a regression via missing
+    // record than handle a malformed group structurally.
     marker.addEventListener('click', (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
-      onMarkerClick(first, g.records);
+      onMarkerClick(first);
     });
     markerLayer.appendChild(marker);
   }

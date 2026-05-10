@@ -566,6 +566,13 @@ export async function markPairs({
     pairsOnPage.get(pg).push(p);
   }
   for (const list of pairsOnPage.values()) {
+    // Sort by numeric prefix only. Q5a / Q5b / Q5c will tie on
+    // their leading "5" — we rely on Array.sort being stable
+    // (ES2019+) so they keep the input order, which traces back
+    // through matchExtractions → studentResults flattening →
+    // extraction. The pipeline preserves document order today.
+    // If you ever introduce a re-sort earlier in the pipeline,
+    // make this comparator a full tie-breaker instead.
     list.sort((a, b) => {
       const ka = String(a.display_question || a.question || '');
       const kb = String(b.display_question || b.question || '');
@@ -638,17 +645,20 @@ Style:
   - Match the worksheet's language. English for English / Math / Science / English-language papers; use 简体中文 if the worksheet is in 中文.
   - Age-appropriate for primary school (P1–P6). Short sentences, no jargon, no LaTeX.
   - Do NOT mention the red ✗ or "the marker" or grading workflow — speak directly to the parent / child about the question.
-  - Do NOT repeat the student's answer or the correct answer verbatim — those are already visible above your response. Address the *reason*.
   - Keep it concise. Length depends on request_type (see below).
+  - The "don't repeat the correct answer" rule varies by request type — see each variant.
 `;
 
 const EXPLANATION_VARIANTS = {
   why: `Request type: WHY?
-Explain in 2–4 sentences why the correct answer is what it is, and what the common mistake is here. Be plain-language. Do not produce a bulleted list.`,
+Explain in 2–4 sentences why the correct answer is what it is, and what the common mistake is here. Be plain-language. Do not produce a bulleted list.
+Do NOT repeat the student's answer or the correct answer verbatim — those are already visible to the parent above your response. Address the REASON.`,
   show_steps: `Request type: SHOW STEPS
-List the steps to solve this question, one per line, numbered. Each step is one short sentence. Aim for 3–6 steps. The last step should produce the correct answer (or directly support it for a non-numeric answer). Do not add any preamble or wrap-up.`,
+List the steps to solve this question, one per line, numbered. Each step is one short sentence. Aim for 3–6 steps. The last step should produce or clearly point to the correct answer. Do not add any preamble or wrap-up.
+You MAY state the final answer at the last step — a worked solution that hides its conclusion is unhelpful. Do not pad earlier steps by repeating the student's answer.`,
   give_hint: `Request type: GIVE HINT
-Give 1–2 sentences nudging the child toward the right approach WITHOUT revealing the correct answer. Phrase it as a question or a partial pointer ("Look at the second sentence of the passage…", "What unit does the question ask for?"). The child should still need to do the actual work after reading the hint.`,
+Give 1–2 sentences nudging the child toward the right approach WITHOUT revealing the correct answer. Phrase it as a question or a partial pointer ("Look at the second sentence of the passage…", "What unit does the question ask for?"). The child should still need to do the actual work after reading the hint.
+Do NOT state, paraphrase, or trivially imply the correct answer in any form.`,
 };
 
 export async function requestExplanation({

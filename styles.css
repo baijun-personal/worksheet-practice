@@ -231,8 +231,6 @@ body.app-immersive .build-badge { display: none; }
   max-width: 240px;
   box-shadow: 0 2px 6px rgba(0,0,0,0.1);
 }
-.review-marker.unclear .review-marker-x { color: #b07a00; }
-.review-marker.unclear .review-marker-label { border-color: #b07a00; }
 
 #review-empty-state {
   padding: 40px 20px;

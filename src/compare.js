@@ -744,12 +744,15 @@ function buildReviewRecords({ pairs, questions, aiQByQ }) {
 
 function clampConfidence(v) {
   const n = Number(v);
-  // Default to 0.7 when the AI omits confidence — sits right at
-  // the alerting threshold (>= 0.8 is "reliable" per the prompt,
-  // < 0.5 → needs_human_review). Means an omission shows up in
-  // the low-confidence banner ("verify before relying on the
-  // score") without changing the marking verdict. Earlier
-  // optimistic 1.0 default silently masked omissions.
+  // Default 0.7 when the AI omits confidence: low enough to NOT
+  // count as "reliable" (the prompt's >= 0.8 floor), high enough
+  // to NOT trip needs_human_review (which fires below 0.5). An
+  // omission lands in the middle band — graded but unremarkable.
+  // The low-confidence banner shows ONLY records below 0.5, so
+  // an omitted-confidence record will not appear there. That's
+  // intentional: we don't want noise from missing-but-otherwise-
+  // sensible rows. If the AI starts omitting confidence often
+  // and we want to surface those, lower the default to 0.49.
   if (!Number.isFinite(n)) return 0.7;
   if (n < 0) return 0;
   if (n > 1) return 1;
