@@ -430,8 +430,18 @@ function setupScrollRails() {
   if (!stage || !railV || !thumbV || !railH || !thumbH) return;
 
   function update() {
+    // Use the inner page-wrap (the actual worksheet) to decide
+    // whether scroll is needed, NOT stage.scrollHeight. The stage
+    // gets bottom-padding in immersive mode (room for the page-nav
+    // bar + safe-area), which artificially inflates scrollHeight
+    // even when the worksheet itself fits — making rails appear
+    // for nothing-to-scroll content.
+    const wrap = document.getElementById('page-wrap');
+    const contentH = wrap ? wrap.offsetHeight : stage.scrollHeight;
+    const contentW = wrap ? wrap.offsetWidth  : stage.scrollWidth;
+
     // Vertical
-    if (stage.scrollHeight > stage.clientHeight + 1) {
+    if (contentH > stage.clientHeight + 1) {
       railV.hidden = false;
       const railLen = railV.clientHeight;
       const ratio = stage.clientHeight / stage.scrollHeight;
@@ -446,7 +456,7 @@ function setupScrollRails() {
       railV.hidden = true;
     }
     // Horizontal — only shown when worksheet actually overflows horizontally.
-    if (stage.scrollWidth > stage.clientWidth + 1) {
+    if (contentW > stage.clientWidth + 1) {
       railH.hidden = false;
       const railLen = railH.clientWidth;
       const ratio = stage.clientWidth / stage.scrollWidth;

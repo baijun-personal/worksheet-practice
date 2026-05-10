@@ -377,34 +377,15 @@ body.app-immersive {
    Exit fullscreen button move into the practice toolbar instead. */
 body.app-immersive .topbar { display: none; }
 body.app-immersive #app { padding: 0; max-width: none; margin: 0; }
-/* Pin the practice stage to the visual viewport in immersive mode.
-   With position:fixed there's literally nothing for a scroll
-   gesture to bubble to outside this rectangle, so iPad Safari
-   can't interpret a vertical drag as "show URL bar / leave
-   fullscreen". 100svh stays correct as the URL bar shows/hides. */
-body.app-immersive #stage-practice {
-  padding: 0;
-  position: fixed;
-  inset: 0;
-  width: 100vw;
-  height: 100vh;
-  height: 100svh;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
+body.app-immersive #stage-practice { padding: 0; }
 body.app-immersive .practice-toolbar {
   top: 0;
-  /* Compact toolbar: smaller padding + tight gap + nowrap so the
-     full row stays on one line on standard tablet widths. If the
-     row ever does overflow (small phones rotated), let it scroll
-     horizontally inside the toolbar instead of wrapping to a
-     second row, which would push the worksheet down. */
+  /* Compact toolbar: smaller padding + tight gap. flex-wrap is
+     left at the default (wrap) — buttons are now small enough
+     that the row fits on iPad portrait without forcing a scroll
+     container, which on iPad Safari ate button taps. */
   padding: 6px 10px;
   gap: 6px;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
 }
 body.app-immersive .page-stage {
   min-height: calc(100vh - 56px);
