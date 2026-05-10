@@ -282,7 +282,19 @@ async function forceReloadWithCacheBust() {
 
 // --- Init -----------------------------------------------------------------
 
-document.addEventListener('DOMContentLoaded', init);
+// We're loaded by an async inline bootstrap in index.html that fetches
+// main.js's Last-Modified header before injecting the <script>. By the
+// time this module evaluates, DOMContentLoaded may already have fired —
+// in which case the addEventListener below would never trigger and the
+// app would never initialise. Run init() immediately if the DOM is
+// already past loading; otherwise wait for the event.
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  // Defer one microtask so the rest of this module's top-level statements
+  // (state, els, helpers) are fully initialized before init() runs.
+  Promise.resolve().then(init);
+}
 
 async function init() {
   els.autosave = $('autosave-indicator');
