@@ -155,6 +155,21 @@ For MCQ-style answers, "3 (scooped)" should be considered the same as "3" or "sc
 
 The 'question' field carries the printed question label (e.g. "Q17", "Q19"); preserve it exactly in your output.
 
+REVIEW FIELDS (Phase 1 of Review Mode):
+For ANY row or part where status is "incorrect" or "unclear", additionally produce these fields. They drive a parent-facing review surface that highlights wrong answers on the printed paper image and lets the parent open a popup explaining what went wrong.
+
+  short_display_answer  — a SHORT (≤24 character) form of the correct answer, suitable for inline display next to a marker on the printed page. Examples: "1/4", "B", "scooped", "30 cm", "True". Use the expected_answer as the source; trim explanation text.
+  short_reason          — one short, parent-friendly sentence explaining why the answer is wrong or unclear. Example: "Wrote 4 instead of 1." or "Answer is unreadable."
+  confidence            — a number in [0, 1] reflecting how confident you are in the comparison verdict. Use < 0.5 when something is genuinely ambiguous (e.g. unreadable handwriting, ambiguous question matching, units uncertain).
+  question_start_location — a best-effort page+coordinate hint of where the printed question heading begins. Schema:
+        { "page": <integer>, "x": <0..1>, "y": <0..1> }
+    "page" should be the page number where the student's answer was found (use the page metadata in the input items). "x" is the horizontal position (origin = left edge), "y" is vertical (origin = top edge). You don't see the rendered page, so your coordinate guess is allowed to be approximate — code-side post-processing snaps it to the nearest plausible question heading, so just provide a sensible band:
+       x = 0.06 (questions start near the left margin)
+       y = guess based on the question's printed number among other questions on the same page (e.g. for Q3 on a page with 5 questions, y ≈ 0.4)
+    If the page is unknown, omit the location.
+
+For MULTI-PART rows where some parts are correct and others are incorrect/unclear, attach the row-level review fields ONCE on the row (not per-part). Per-part status / comment / matched_expected stay as before.
+
 Return JSON only:
 {
   "summary": {
@@ -162,15 +177,19 @@ Return JSON only:
     "comment": ""
   },
   "questions": [
-    // Flat row:
+    // Flat row (incorrect or unclear adds review fields):
     {
       "question": "",
       "student_answer": "",
       "expected_answer": "",
       "status": "correct | incorrect | unclear",
-      "comment": ""
+      "comment": "",
+      "short_display_answer": "",
+      "short_reason": "",
+      "confidence": 0,
+      "question_start_location": { "page": 0, "x": 0, "y": 0 }
     },
-    // Multi-part row:
+    // Multi-part row (review fields once at row level when any part is wrong):
     {
       "question": "",
       "is_multi_part": true,
@@ -182,7 +201,11 @@ Return JSON only:
           "status": "correct | incorrect | unclear",
           "comment": ""
         }
-      ]
+      ],
+      "short_display_answer": "",
+      "short_reason": "",
+      "confidence": 0,
+      "question_start_location": { "page": 0, "x": 0, "y": 0 }
     }
   ],
   "redo": [],

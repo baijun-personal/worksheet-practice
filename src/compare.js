@@ -578,13 +578,205 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
     redo.push(base);
   }
 
+  // Review records — Phase 1 of Review Mode. One record per
+  // wrong / unclear question (multi-part rows that share a base
+  // question are grouped into a single record so the page only
+  // gets one marker per question, not one per part).
+  const review_records = buildReviewRecords({
+    pairs: match.pairs,
+    questions,
+    aiQByQ,
+  });
+
   return {
     summary,
     questions,
+    review_records,
     not_in_attempt: match.not_in_attempt,
     redo,
     weak_points: Array.isArray(aiTextReport?.weak_points) ? aiTextReport.weak_points : [],
   };
+}
+
+// ---------- Review records ----------------------------------------------
+//
+// Each record describes ONE wrong-or-unclear printed question, with
+// enough metadata to render a marker on the page and open a popup:
+//
+//   {
+//     question:           printed question label, e.g. "Q19"
+//     section:            optional section name
+//     completed_page:     1-based page number on the source PDF
+//     status:             "incorrect" | "unclear"
+//     parts: [            // empty for flat rows; one entry per
+//                         //   wrong/unclear part for multi-part
+//       {
+//         part: "i",
+//         student_answer, matched_expected, comment, status
+//       }
+//     ],
+//     student_answer:     // top-level for flat rows; omitted for multi-part
+//     expected_answer,
+//     comment,
+//     short_display_answer:    // ≤24 char inline preview (UI may further cap)
+//     short_reason,
+//     confidence:         0..1 numeric
+//     needs_human_review: confidence < 0.5
+//     question_start_location: { page, x, y }   x/y normalized 0..1
+//   }
+//
+// Coordinates: the AI-suggested location (if any) is taken as a hint
+// but always validated; on any out-of-bounds / NaN / page-mismatch
+// value we fall back to a code-side snap based on the question's
+// position among other questions on the same page. The snap puts x at
+// a fixed left-margin band (questions start near the left in every
+// worksheet we've seen) and y proportional to the question's
+// numeric ordering on the page. Fully deterministic.
+function buildReviewRecords({ pairs, questions, aiQByQ }) {
+  // Index pairs by base question for the position-on-page lookup.
+  const pairsByPage = new Map(); // page -> [{ qn, pair }]
+  for (const p of pairs) {
+    const pg = Number(p.completed_page);
+    if (!Number.isFinite(pg)) continue;
+    const qn = normalizeQNumber(p.display_question || p.question || '');
+    if (!qn) continue;
+    if (!pairsByPage.has(pg)) pairsByPage.set(pg, []);
+    pairsByPage.get(pg).push({ qn, pair: p });
+  }
+  // Sort each page's questions by their numeric prefix so y-position
+  // synthesis lines up with reading order.
+  for (const list of pairsByPage.values()) {
+    list.sort((a, b) => qnumNumericPrefix(a.qn) - qnumNumericPrefix(b.qn));
+  }
+
+  // Group flat rows by base question so multi-part subparts that
+  // share a base question (Q19(i), Q19(ii)) become one record.
+  const groups = new Map(); // baseKey -> { row, parts: [] }
+  for (const row of questions) {
+    if (row.status !== 'incorrect' && row.status !== 'unclear') continue;
+    const baseDisplay = row.display_question || row.question || '';
+    const baseKey = baseDisplay.replace(/\s*\([^)]*\)\s*$/, '').trim();
+    const partMatch = baseDisplay.match(/\(([^)]+)\)\s*$/);
+    if (!groups.has(baseKey)) {
+      groups.set(baseKey, { baseKey, baseRow: row, parts: [] });
+    }
+    if (partMatch) {
+      groups.get(baseKey).parts.push({
+        part: partMatch[1].trim(),
+        student_answer: row.student_answer || '',
+        matched_expected: row.expected_answer || '',
+        status: row.status,
+        comment: row.comment || '',
+      });
+    } else {
+      // Flat row — overwrite baseRow with the single source row.
+      groups.get(baseKey).baseRow = row;
+    }
+  }
+
+  const records = [];
+  for (const { baseKey, baseRow, parts } of groups.values()) {
+    const qn = normalizeQNumber(baseKey);
+    const aiRow = aiQByQ.get(qn);
+    const conf = clampConfidence(aiRow?.confidence);
+    const shortAnswer = trimToCap(aiRow?.short_display_answer || baseRow.expected_answer || '', 24);
+    const shortReason = String(aiRow?.short_reason || baseRow.comment || '').trim();
+    const location = synthLocation({
+      aiLocation: aiRow?.question_start_location,
+      page: baseRow.completed_page,
+      qn,
+      pairsByPage,
+    });
+    const status = parts.length > 0 && parts.every((p) => p.status === 'correct')
+      ? 'correct'
+      : (parts.length > 0 ? worstStatusOf(parts) : baseRow.status);
+    if (status === 'correct') continue; // shouldn't happen given the filter, but defensive
+
+    const rec = {
+      question: baseKey,
+      section: baseRow.section || '',
+      completed_page: location?.page ?? baseRow.completed_page ?? null,
+      status,
+      short_display_answer: shortAnswer,
+      short_reason: shortReason,
+      confidence: conf,
+      needs_human_review: conf < 0.5,
+      question_start_location: location,
+    };
+    if (parts.length > 0) {
+      rec.parts = parts;
+    } else {
+      rec.student_answer = baseRow.student_answer || '';
+      rec.expected_answer = baseRow.expected_answer || '';
+      rec.comment = baseRow.comment || '';
+    }
+    records.push(rec);
+  }
+  // Stable sort: by page, then by numeric prefix of question label,
+  // so Previous/Next navigation in the popup walks document order.
+  records.sort((a, b) => {
+    const pa = a.completed_page ?? 9999, pb = b.completed_page ?? 9999;
+    if (pa !== pb) return pa - pb;
+    return qnumNumericPrefix(normalizeQNumber(a.question)) - qnumNumericPrefix(normalizeQNumber(b.question));
+  });
+  return records;
+}
+
+function clampConfidence(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 1; // optimistic default — the row is graded; absence of confidence shouldn't downgrade
+  if (n < 0) return 0;
+  if (n > 1) return 1;
+  return n;
+}
+
+function trimToCap(s, max) {
+  const v = String(s || '').replace(/\s+/g, ' ').trim();
+  if (v.length <= max) return v;
+  return v.slice(0, Math.max(0, max - 1)).trim() + '…';
+}
+
+function worstStatusOf(parts) {
+  // incorrect > unclear > correct. Returns the most-severe.
+  if (parts.some((p) => p.status === 'incorrect')) return 'incorrect';
+  if (parts.some((p) => p.status === 'unclear'))   return 'unclear';
+  return 'correct';
+}
+
+function qnumNumericPrefix(qn) {
+  const m = String(qn || '').match(/^(\d+)/);
+  return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER;
+}
+
+// Validate or synthesize a (page, x, y) for the review marker.
+// AI hints are accepted only when they pass strict validation —
+// page matches the extraction's page (definitive), x and y are
+// finite numbers in [0, 1]. Otherwise we synthesize from the
+// question's ordinal position on the page.
+function synthLocation({ aiLocation, page, qn, pairsByPage }) {
+  const pg = Number(page);
+  if (!Number.isFinite(pg) || pg < 1) return null;
+  const aiX = aiLocation && Number(aiLocation.x);
+  const aiY = aiLocation && Number(aiLocation.y);
+  const aiPage = aiLocation && Number(aiLocation.page);
+  const aiValid =
+    Number.isFinite(aiPage) && aiPage === pg &&
+    Number.isFinite(aiX) && aiX >= 0 && aiX <= 1 &&
+    Number.isFinite(aiY) && aiY >= 0 && aiY <= 1;
+  if (aiValid) {
+    return { page: pg, x: aiX, y: aiY, source: 'ai' };
+  }
+  // Fallback: snap to question's ordinal position on the page.
+  const list = pairsByPage.get(pg) || [];
+  const idx = list.findIndex((e) => e.qn === qn);
+  const total = list.length;
+  // Reserve 5% top + 5% bottom margin; spread questions evenly in between.
+  const top = 0.05;
+  const bottom = 0.95;
+  const y = total > 0 && idx >= 0
+    ? top + ((idx + 0.5) / total) * (bottom - top)
+    : 0.5;
+  return { page: pg, x: 0.06, y, source: 'snap' };
 }
 
 // Build per-part display rows for a grouped text pair. Walks the

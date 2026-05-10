@@ -92,6 +92,48 @@ export function renderReport(report, mountNodes) {
       </tr>`).join('')
     }</tbody></table>`;
 
+  // Phase 1 debug — Review records inspection table. Renders the
+  // raw review_records[] so a developer can sanity-check the
+  // schema (page, x, y, short_display_answer, confidence,
+  // needs_human_review, source). This block is intentionally
+  // minimal styling; it gets replaced by the Review Mode entry
+  // point in Phase 2.
+  const reviewRecords = Array.isArray(report.review_records) ? report.review_records : [];
+  if (reviewRecords.length > 0 && tableEl.parentElement) {
+    const debug = document.createElement('div');
+    debug.className = 'review-records-debug';
+    debug.style.marginTop = '24px';
+    debug.innerHTML = `
+      <details>
+        <summary class="muted small">Review records (${reviewRecords.length}) — debug</summary>
+        <table style="margin-top:8px; font-size:12px"><thead><tr>
+          <th>Q</th><th>Page</th><th>x</th><th>y</th><th>src</th>
+          <th>Short answer</th><th>Reason</th>
+          <th>Conf.</th><th>Review?</th><th>Status</th>
+          <th>Parts</th>
+        </tr></thead><tbody>${reviewRecords.map((r) => {
+          const loc = r.question_start_location || {};
+          const partsCol = Array.isArray(r.parts) && r.parts.length > 0
+            ? r.parts.map((pp) => `${escapeHtml(pp.part)}:${escapeHtml(pp.status)}`).join(', ')
+            : '—';
+          return `<tr>
+            <td>${escapeHtml(r.question)}</td>
+            <td>${loc.page ?? '—'}</td>
+            <td>${loc.x != null ? loc.x.toFixed(3) : '—'}</td>
+            <td>${loc.y != null ? loc.y.toFixed(3) : '—'}</td>
+            <td>${escapeHtml(loc.source || '—')}</td>
+            <td>${escapeHtml(r.short_display_answer || '')}</td>
+            <td>${escapeHtml(r.short_reason || '')}</td>
+            <td>${(r.confidence != null) ? r.confidence.toFixed(2) : '—'}</td>
+            <td>${r.needs_human_review ? '⚠' : ''}</td>
+            <td>${escapeHtml(r.status)}</td>
+            <td>${partsCol}</td>
+          </tr>`;
+        }).join('')}</tbody></table>
+      </details>`;
+    tableEl.parentElement.insertBefore(debug, tableEl.nextSibling);
+  }
+
   rawEl.textContent = JSON.stringify(report, null, 2);
 }
 
