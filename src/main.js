@@ -50,6 +50,30 @@ const els = {};
 
 function $(id) { return document.getElementById(id); }
 
+// Defensive setters used during prefill — safely no-op when an
+// element is absent. Important after schema upgrades where the user
+// may have a stale cached HTML that lacks newly-added inputs: a
+// crash in prefill would otherwise abort bindSetupForm before
+// listeners (incl. Start practice) get registered.
+function setVal(id, value) {
+  const el = document.getElementById(id);
+  if (!el) {
+    console.warn(`setVal: missing element #${id} (stale HTML?)`);
+    return false;
+  }
+  el.value = value;
+  return true;
+}
+function setChecked(id, checked) {
+  const el = document.getElementById(id);
+  if (!el) {
+    console.warn(`setChecked: missing element #${id} (stale HTML?)`);
+    return false;
+  }
+  el.checked = !!checked;
+  return true;
+}
+
 // --- Helpers for shuttling attempt metadata into the setup form ----------
 
 function pageArrayToRange(arr) {
@@ -368,21 +392,24 @@ function bindSetupForm() {
   // (settings.{detection|extraction|textComparison|visualComparison}Model).
   populateTaskModelSelects();
 
-  // Prefill settings inputs.
-  $('openai-key').value = state.settings.openaiKey || '';
-  $('openai-model').value = state.settings.openaiModel || DEFAULT_MODEL;
+  // Prefill settings inputs. Each prefill is guarded so that a single
+  // missing element (e.g. user has a stale cached index.html that
+  // lacks the new per-task model selects) doesn't abort the whole
+  // bindSetupForm and leave Start practice unbound.
+  setVal('openai-key', state.settings.openaiKey || '');
+  setVal('openai-model', state.settings.openaiModel || DEFAULT_MODEL);
   applyModelToControls(state.settings.openaiModel || DEFAULT_MODEL);
-  $('model-detection').value      = state.settings.detectionModel        || state.settings.openaiModel || DEFAULT_MODEL;
-  $('model-extraction').value     = state.settings.extractionModel       || state.settings.openaiModel || DEFAULT_MODEL;
-  $('model-text-compare').value   = state.settings.textComparisonModel   || state.settings.openaiModel || DEFAULT_MODEL;
-  $('model-visual-compare').value = state.settings.visualComparisonModel || state.settings.openaiModel || DEFAULT_MODEL;
-  $('render-dpi').value = String(state.settings.renderDpi || 150);
-  $('batch-size').value = String(state.settings.batchSize || 5);
-  $('test-mode').checked = !!state.settings.testMode;
-  $('price-in').value = String(state.settings.priceInPerMTokens ?? 0.75);
-  $('price-cached-in').value = String(state.settings.priceCachedInPerMTokens ?? 0.075);
-  $('price-out').value = String(state.settings.priceOutPerMTokens ?? 4.50);
-  $('marking-mode').value = state.settings.markingMode || 'auto';
+  setVal('model-detection',      state.settings.detectionModel        || state.settings.openaiModel || DEFAULT_MODEL);
+  setVal('model-extraction',     state.settings.extractionModel       || state.settings.openaiModel || DEFAULT_MODEL);
+  setVal('model-text-compare',   state.settings.textComparisonModel   || state.settings.openaiModel || DEFAULT_MODEL);
+  setVal('model-visual-compare', state.settings.visualComparisonModel || state.settings.openaiModel || DEFAULT_MODEL);
+  setVal('render-dpi', String(state.settings.renderDpi || 150));
+  setVal('batch-size', String(state.settings.batchSize || 5));
+  setChecked('test-mode', !!state.settings.testMode);
+  setVal('price-in', String(state.settings.priceInPerMTokens ?? 0.75));
+  setVal('price-cached-in', String(state.settings.priceCachedInPerMTokens ?? 0.075));
+  setVal('price-out', String(state.settings.priceOutPerMTokens ?? 4.50));
+  setVal('marking-mode', state.settings.markingMode || 'auto');
   // API mode + proxy fields
   const apiMode = state.settings.apiMode || 'direct';
   for (const r of document.querySelectorAll('input[name="api-mode"]')) {
@@ -419,8 +446,13 @@ function bindSetupForm() {
     ['model-text-compare',   'textComparisonModel',   (v) => v.trim() || DEFAULT_MODEL],
     ['model-visual-compare', 'visualComparisonModel', (v) => v.trim() || DEFAULT_MODEL],
   ]) {
-    $(id).addEventListener('change', () => {
-      state.settings = saveSettings({ [key]: parser($(id).value) });
+    const el = document.getElementById(id);
+    if (!el) {
+      console.warn(`bindSetupForm: missing element #${id} (stale HTML?). Skipping listener.`);
+      continue;
+    }
+    el.addEventListener('change', () => {
+      state.settings = saveSettings({ [key]: parser(el.value) });
     });
   }
   $('test-mode').addEventListener('change', () => {
@@ -1369,6 +1401,21 @@ async function onPdfPicked(ev) {
 }
 
 async function onStartPractice() {
+  try {
+    return await onStartPracticeImpl();
+  } catch (e) {
+    console.error('onStartPractice failed:', e);
+    const errEl = $('page-range-error');
+    if (errEl) {
+      errEl.hidden = false;
+      errEl.textContent = 'Could not start practice: ' + (e?.message || String(e));
+    } else {
+      alert('Could not start practice: ' + (e?.message || String(e)));
+    }
+  }
+}
+
+async function onStartPracticeImpl() {
   $('page-range-error').hidden = true;
   if (!state.pdf || !state.pdfBlob) {
     $('page-range-error').hidden = false;

@@ -46,6 +46,19 @@ function openDb() {
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
+    // Fires when another tab is holding the DB open at an older
+    // version and blocking the upgrade. Without this handler the
+    // open() promise hangs forever and the app silently fails (e.g.
+    // Start practice does nothing because putAttempt awaits openDb
+    // which never resolves). Reject with a clear error — callers
+    // (onStartPractice) will surface it in the UI.
+    req.onblocked = () => {
+      const msg =
+        'IndexedDB upgrade is blocked — another tab has this app open at an older version. ' +
+        'Close every other tab/window for this site and reload.';
+      console.error(msg);
+      reject(new Error(msg));
+    };
   });
   return dbPromise;
 }
