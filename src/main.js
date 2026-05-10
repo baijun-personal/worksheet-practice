@@ -15,6 +15,7 @@ import { matchExtractions, buildFinalReport, partitionPairsByModality } from './
 import { renderReport, exportReportPdf, exportCompletedAttemptPdf } from './report.js';
 import { loadCatalog, fetchBuiltinPdf, builtinAttemptId } from './builtin.js';
 import { composeFourUpA4, chunkInto } from './fourup.js';
+import { buildTaskRecord, aggregateTasks, TASK_TYPES } from './cost.js';
 
 const STAGES = ['unlock', 'setup', 'practice', 'marking', 'report'];
 
@@ -1403,14 +1404,16 @@ async function onSubmit() {
         });
         keyResults.push(res.parsed);
       }
-      if (res.usage) {
-        taskUsages.push({
-          index: i,
-          kind: t.kind,
-          pages: t.plannedPages,
-          usage: res.usage,
-        });
-      }
+      taskUsages.push(buildTaskRecord({
+        task_type: t.kind === 'student'
+          ? TASK_TYPES.STUDENT_EXTRACTION
+          : TASK_TYPES.ANSWER_KEY_EXTRACTION,
+        model: transport.model,
+        label: t.label,
+        pages: t.plannedPages,
+        usage: res.usage,
+        settings: state.settings,
+      }));
       li.classList.add('done');
       li.textContent = `Request ${i + 1}: ${t.label} — done`;
     } catch (e) {
@@ -1471,9 +1474,14 @@ async function onSubmit() {
           level: state.attempt.level,
         });
         aiTextReport = cmpRes.parsed;
-        if (cmpRes.usage) {
-          taskUsages.push({ index: idx, kind: 'compare_text', pages: [], usage: cmpRes.usage });
-        }
+        taskUsages.push(buildTaskRecord({
+          task_type: TASK_TYPES.TEXT_COMPARISON,
+          model: transport.model,
+          label: `Text compare — ${textPairs.length} pair(s)`,
+          pages: [],
+          usage: cmpRes.usage,
+          settings: state.settings,
+        }));
         li.classList.add('done');
         li.textContent = `Request ${idx + 1}: Text compare — done`;
         break;
@@ -1531,9 +1539,14 @@ async function onSubmit() {
           answerImageDataUrl: aPageEntry.dataUrl,
         });
         visualResults.push({ pair, parsed: res.parsed });
-        if (res.usage) {
-          taskUsages.push({ index: idx, kind: 'compare_visual', pages: [pair.completed_page, pair.answer_page], usage: res.usage });
-        }
+        taskUsages.push(buildTaskRecord({
+          task_type: TASK_TYPES.VISUAL_COMPARISON,
+          model: transport.model,
+          label: `Visual compare ${pair.display_question || pair.question}`,
+          pages: [pair.completed_page, pair.answer_page].filter((n) => n != null),
+          usage: res.usage,
+          settings: state.settings,
+        }));
         li.classList.add('done');
         li.textContent = `Request ${idx + 1}: Visual compare ${pair.display_question || pair.question} — done`;
       } catch (e) {
@@ -1593,37 +1606,25 @@ async function onSubmit() {
       'Final comparison call failed; results below were scored by local string equality (paraphrased answers may show as incorrect).';
   }
 
-  // Cost / usage — sum across all tasks (Stage 1 batches + Stage 2 answer-key call).
-  const totals = taskUsages.reduce((acc, b) => {
-    const u = b.usage || {};
-    const prompt = Number(u.prompt_tokens) || 0;
-    const cached = Number(u.prompt_tokens_details?.cached_tokens) || 0;
-    acc.prompt_tokens += prompt;
-    acc.cached_input_tokens += cached;
-    acc.uncached_input_tokens += Math.max(0, prompt - cached);
-    acc.completion_tokens += Number(u.completion_tokens) || 0;
-    acc.total_tokens += Number(u.total_tokens) || 0;
-    return acc;
-  }, { prompt_tokens: 0, cached_input_tokens: 0, uncached_input_tokens: 0, completion_tokens: 0, total_tokens: 0 });
-  const priceIn = Number(state.settings.priceInPerMTokens) || 0;
-  const priceCachedIn = Number(state.settings.priceCachedInPerMTokens) || 0;
-  const priceOut = Number(state.settings.priceOutPerMTokens) || 0;
-  const uncachedInputCost = (totals.uncached_input_tokens / 1_000_000) * priceIn;
-  const cachedInputCost = (totals.cached_input_tokens / 1_000_000) * priceCachedIn;
-  const inputCost = uncachedInputCost + cachedInputCost;
-  const outputCost = (totals.completion_tokens / 1_000_000) * priceOut;
+  // Cost / usage — each task carries its own frozen pricing snapshot
+  // (taken at request time via buildTaskRecord), so the total is just
+  // the sum of per-task estimated_cost_usd values. Old reports keep
+  // their original prices regardless of later Setup edits.
+  //
+  // The per-attempt marking report intentionally holds ONLY:
+  //   student_extraction, answer_key_extraction,
+  //   text_comparison, visual_comparison.
+  // Detection cost lives on the paper profile, not here (Stage E).
+  const totals = aggregateTasks(taskUsages);
   merged.app_usage = {
-    model: state.settings.openaiModel,
-    batches: taskUsages,
+    tasks: taskUsages,
     totals,
-    price_in_per_m_tokens: priceIn,
-    price_cached_in_per_m_tokens: priceCachedIn,
-    price_out_per_m_tokens: priceOut,
-    estimated_cost_usd: +(inputCost + outputCost).toFixed(4),
-    estimated_input_cost_usd: +inputCost.toFixed(4),
-    estimated_uncached_input_cost_usd: +uncachedInputCost.toFixed(4),
-    estimated_cached_input_cost_usd: +cachedInputCost.toFixed(4),
-    estimated_output_cost_usd: +outputCost.toFixed(4),
+    estimated_cost_usd: totals.estimated_cost_usd,
+    estimated_input_cost_usd: totals.estimated_input_cost_usd,
+    estimated_uncached_input_cost_usd: totals.estimated_uncached_input_cost_usd,
+    estimated_cached_input_cost_usd: totals.estimated_cached_input_cost_usd,
+    estimated_output_cost_usd: totals.estimated_output_cost_usd,
+    models: totals.models,
   };
 
   // Stash the raw extractions so the parent can inspect via "Show raw JSON".

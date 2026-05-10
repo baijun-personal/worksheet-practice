@@ -111,53 +111,132 @@ function questionLabel(r) {
 }
 
 function renderCostCard(u) {
-  const t = u.totals || {};
   const fmtTokens = (n) => Number(n || 0).toLocaleString();
   const fmtUsd = (n) => '$' + (Number(n) || 0).toFixed(4);
   const fmtRate = (n) => '$' + (Number(n) || 0).toFixed(3);
-  const batchRows = (u.batches || []).map((b) => {
-    const cached = Number(b.usage?.prompt_tokens_details?.cached_tokens) || 0;
-    const prompt = Number(b.usage?.prompt_tokens) || 0;
-    const uncached = Math.max(0, prompt - cached);
-    return `
+
+  // Normalise legacy and new shapes onto a single per-task list.
+  // - New (Stage C+): u.tasks: [{ task_type, model, label, pages,
+  //   prompt_tokens, cached_tokens, completion_tokens, total_tokens,
+  //   price_in_per_m, price_cached_in_per_m, price_out_per_m,
+  //   estimated_cost_usd, ... }]
+  // - Legacy: u.batches: [{ kind, pages, usage }] with a single global
+  //   model and price set on `u`.
+  const tasks = Array.isArray(u.tasks)
+    ? u.tasks
+    : (u.batches || []).map((b) => ({
+        task_type: legacyKindToTaskType(b.kind),
+        model: u.model || '',
+        label: legacyKindToLabel(b.kind),
+        pages: b.pages || [],
+        prompt_tokens: Number(b.usage?.prompt_tokens) || 0,
+        cached_tokens: Number(b.usage?.prompt_tokens_details?.cached_tokens) || 0,
+        completion_tokens: Number(b.usage?.completion_tokens) || 0,
+        total_tokens: Number(b.usage?.total_tokens) || 0,
+        price_in_per_m: Number(u.price_in_per_m_tokens) || 0,
+        price_cached_in_per_m: Number(u.price_cached_in_per_m_tokens) || 0,
+        price_out_per_m: Number(u.price_out_per_m_tokens) || 0,
+        estimated_cost_usd: null, // recomputed below for legacy rows
+      }));
+
+  // Backfill estimated_cost_usd for legacy rows so the per-row column
+  // is populated. Uses the global rates that were stamped on the
+  // legacy app_usage object.
+  for (const t of tasks) {
+    if (t.estimated_cost_usd != null) continue;
+    const uncached = Math.max(0, (t.prompt_tokens || 0) - (t.cached_tokens || 0));
+    const cost =
+      (uncached / 1_000_000) * (t.price_in_per_m || 0) +
+      ((t.cached_tokens || 0) / 1_000_000) * (t.price_cached_in_per_m || 0) +
+      ((t.completion_tokens || 0) / 1_000_000) * (t.price_out_per_m || 0);
+    t.estimated_cost_usd = Math.round(cost * 10000) / 10000;
+  }
+
+  const totalCost = Number(u.estimated_cost_usd) || tasks.reduce((a, t) => a + (Number(t.estimated_cost_usd) || 0), 0);
+  const inputCost = Number(u.estimated_input_cost_usd) || 0;
+  const uncachedInput = Number(u.estimated_uncached_input_cost_usd) || 0;
+  const cachedInput = Number(u.estimated_cached_input_cost_usd) || 0;
+  const outputCost = Number(u.estimated_output_cost_usd) || 0;
+  const totals = u.totals || {};
+  const promptTokens = Number(totals.prompt_tokens) || tasks.reduce((a, t) => a + (Number(t.prompt_tokens) || 0), 0);
+  const cachedTokens = Number(totals.cached_tokens ?? totals.cached_input_tokens) || tasks.reduce((a, t) => a + (Number(t.cached_tokens) || 0), 0);
+  const completionTokens = Number(totals.completion_tokens) || tasks.reduce((a, t) => a + (Number(t.completion_tokens) || 0), 0);
+  const totalTokens = Number(totals.total_tokens) || (promptTokens + completionTokens);
+
+  const models = Array.isArray(u.models) && u.models.length > 0
+    ? u.models
+    : (u.model ? [u.model] : []);
+  const modelsLabel = models.length === 0 ? '—'
+                    : models.length === 1 ? models[0]
+                    : models.join(', ');
+
+  const taskRows = tasks.map((t, i) => `
     <tr>
-      <td>${escapeHtml(b.index + 1)}</td>
-      <td>${escapeHtml((b.pages || []).join(', '))}</td>
-      <td>${fmtTokens(uncached)}</td>
-      <td>${fmtTokens(cached)}</td>
-      <td>${fmtTokens(b.usage?.completion_tokens)}</td>
-      <td>${fmtTokens(b.usage?.total_tokens)}</td>
-    </tr>`;
-  }).join('');
+      <td>${escapeHtml(i + 1)}</td>
+      <td>${escapeHtml(taskTypeLabelLocal(t.task_type))}</td>
+      <td>${escapeHtml(t.model || '—')}</td>
+      <td>${escapeHtml((t.pages || []).join(', '))}</td>
+      <td>${fmtTokens(Math.max(0, (t.prompt_tokens || 0) - (t.cached_tokens || 0)))}</td>
+      <td>${fmtTokens(t.cached_tokens)}</td>
+      <td>${fmtTokens(t.completion_tokens)}</td>
+      <td>${fmtUsd(t.estimated_cost_usd)}</td>
+    </tr>`).join('');
+
   return `
     <h2>Cost &amp; usage <span class="muted small">(estimate)</span></h2>
-    <p><strong>Estimated total: ${fmtUsd(u.estimated_cost_usd)}</strong>
-       <span class="muted small">
-         (input ${fmtUsd(u.estimated_input_cost_usd)}
-         = uncached ${fmtUsd(u.estimated_uncached_input_cost_usd)}
-         + cached ${fmtUsd(u.estimated_cached_input_cost_usd)};
-         output ${fmtUsd(u.estimated_output_cost_usd)})
-       </span></p>
+    <p><strong>Estimated total: ${fmtUsd(totalCost)}</strong>
+       ${(inputCost || outputCost) ? `<span class="muted small">
+         (input ${fmtUsd(inputCost)}
+         = uncached ${fmtUsd(uncachedInput)}
+         + cached ${fmtUsd(cachedInput)};
+         output ${fmtUsd(outputCost)})
+       </span>` : ''}</p>
     <p class="muted small">
-      Model: ${escapeHtml(u.model || '—')} —
-      rates used: input ${fmtRate(u.price_in_per_m_tokens)}/1M,
-      cached input ${fmtRate(u.price_cached_in_per_m_tokens)}/1M,
-      output ${fmtRate(u.price_out_per_m_tokens)}/1M.
-      Verify against <a href="https://openai.com/api/pricing/" target="_blank" rel="noopener">openai.com/api/pricing</a>.
-      The authoritative cost is on the OpenAI dashboard.
+      Model${models.length > 1 ? 's' : ''}: ${escapeHtml(modelsLabel)}.
+      Each task records the prices used at request time, so this total
+      reflects what those tasks cost — later edits in Setup don't change
+      historical reports. Verify against
+      <a href="https://openai.com/api/pricing/" target="_blank" rel="noopener">openai.com/api/pricing</a>;
+      the authoritative cost is on the OpenAI dashboard.
     </p>
     <p class="muted small">
-      Total tokens: input ${fmtTokens(t.prompt_tokens)}
-      (of which cached ${fmtTokens(t.cached_input_tokens)}) +
-      output ${fmtTokens(t.completion_tokens)} =
-      ${fmtTokens(t.total_tokens)}.
+      Total tokens: input ${fmtTokens(promptTokens)}
+      (of which cached ${fmtTokens(cachedTokens)}) +
+      output ${fmtTokens(completionTokens)} =
+      ${fmtTokens(totalTokens)}.
     </p>
     <details>
-      <summary class="muted small">Per-batch breakdown</summary>
+      <summary class="muted small">Per-task breakdown</summary>
       <table style="margin-top:8px"><thead><tr>
-        <th>Batch</th><th>Pages</th><th>Uncached in</th><th>Cached in</th><th>Output</th><th>Total</th>
-      </tr></thead><tbody>${batchRows}</tbody></table>
+        <th>#</th><th>Task</th><th>Model</th><th>Pages</th>
+        <th>Uncached in</th><th>Cached in</th><th>Output</th><th>Cost</th>
+      </tr></thead><tbody>${taskRows}</tbody></table>
     </details>`;
+}
+
+// Map legacy `kind` strings used in old reports onto canonical
+// task_type / display labels so legacy reports still render.
+function legacyKindToTaskType(kind) {
+  switch (kind) {
+    case 'student':        return 'student_extraction';
+    case 'answer_key':     return 'answer_key_extraction';
+    case 'compare_text':   return 'text_comparison';
+    case 'compare_visual': return 'visual_comparison';
+    default:               return kind || '';
+  }
+}
+function legacyKindToLabel(kind) {
+  return taskTypeLabelLocal(legacyKindToTaskType(kind));
+}
+function taskTypeLabelLocal(t) {
+  switch (t) {
+    case 'student_extraction':    return 'Student answers';
+    case 'answer_key_extraction': return 'Answer key';
+    case 'text_comparison':       return 'Text compare';
+    case 'visual_comparison':     return 'Visual compare';
+    case 'detection':             return 'Page detection';
+    default:                      return t || '?';
+  }
 }
 
 function renderWarningBanner(w) {
