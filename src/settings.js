@@ -33,6 +33,19 @@ const DEFAULTS = {
   apiMode: 'direct',
   proxyEndpoint: 'https://worksheet-openai-proxy.jbjsg1.workers.dev',
   proxyToken: '',
+  // Per-task model selectors. Different tasks have very different
+  // economics:
+  //   - detection: cheap page classification → small model (nano)
+  //   - extraction: vision-heavy, accuracy matters → bigger model
+  //   - text comparison: text-only paraphrase judgement → mini is fine
+  //   - visual comparison: vision-heavy per-question → bigger model
+  // Each can be overridden via the Setup form. Pricing is frozen per
+  // task at request time — see src/cost.js. An empty string means
+  // "fall back to openaiModel".
+  detectionModel: 'gpt-5.4-nano',
+  extractionModel: 'gpt-5.4',
+  textComparisonModel: 'gpt-5.4-mini',
+  visualComparisonModel: 'gpt-5.4',
   passphrase: '', // empty = unlocked; first run sets it
   unlocked: false,
 };

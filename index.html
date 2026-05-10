@@ -136,7 +136,7 @@
         <label id="openai-key-wrap">OpenAI API key (stored only in this browser)
           <input id="openai-key" type="password" autocomplete="off" placeholder="sk-..." />
         </label>
-        <label>Model
+        <label>Default model <span class="muted small">(used for cost-estimate price overrides below)</span>
           <select id="openai-model-preset">
             <!-- options populated from MODEL_PRESETS -->
             <option value="__custom__">Other (custom name)…</option>
@@ -145,6 +145,27 @@
         <label id="openai-model-custom-wrap" hidden>Custom model name
           <input id="openai-model" type="text" placeholder="e.g. gpt-5.4-mini" />
         </label>
+
+        <fieldset style="border:1px solid var(--border); border-radius:6px; padding:8px 12px; margin-top:12px; margin-bottom:8px">
+          <legend class="muted small">Models per task</legend>
+          <p class="muted small" style="margin-top:0">
+            Different tasks have different economics. Each task can use its own
+            model. Pricing is frozen per task at request time — historical
+            reports keep their original prices.
+          </p>
+          <label>Page detection <span class="muted small">(setup-time, cheap)</span>
+            <select id="model-detection"></select>
+          </label>
+          <label>Marking / extraction <span class="muted small">(student answers + answer key — vision-heavy)</span>
+            <select id="model-extraction"></select>
+          </label>
+          <label>Final text comparison <span class="muted small">(text-only)</span>
+            <select id="model-text-compare"></select>
+          </label>
+          <label>Visual comparison <span class="muted small">(per drawing/diagram question)</span>
+            <select id="model-visual-compare"></select>
+          </label>
+        </fieldset>
         <label>Submission DPI
           <select id="render-dpi">
             <option value="150">150 (default)</option>

@@ -357,11 +357,19 @@ function bindUnlockForm() {
 function bindSetupForm() {
   // Populate the model preset dropdown from the openai.js table.
   populateModelPresetSelect();
+  // Populate the four per-task model selects from the same MODEL_PRESETS
+  // list. These default to the user-specified per-task defaults
+  // (settings.{detection|extraction|textComparison|visualComparison}Model).
+  populateTaskModelSelects();
 
   // Prefill settings inputs.
   $('openai-key').value = state.settings.openaiKey || '';
   $('openai-model').value = state.settings.openaiModel || DEFAULT_MODEL;
   applyModelToControls(state.settings.openaiModel || DEFAULT_MODEL);
+  $('model-detection').value      = state.settings.detectionModel        || state.settings.openaiModel || DEFAULT_MODEL;
+  $('model-extraction').value     = state.settings.extractionModel       || state.settings.openaiModel || DEFAULT_MODEL;
+  $('model-text-compare').value   = state.settings.textComparisonModel   || state.settings.openaiModel || DEFAULT_MODEL;
+  $('model-visual-compare').value = state.settings.visualComparisonModel || state.settings.openaiModel || DEFAULT_MODEL;
   $('render-dpi').value = String(state.settings.renderDpi || 150);
   $('batch-size').value = String(state.settings.batchSize || 5);
   $('test-mode').checked = !!state.settings.testMode;
@@ -400,6 +408,10 @@ function bindSetupForm() {
     ['price-cached-in', 'priceCachedInPerMTokens', (v) => Math.max(0, parseFloat(v) || 0)],
     ['price-out', 'priceOutPerMTokens', (v) => Math.max(0, parseFloat(v) || 0)],
     ['marking-mode', 'markingMode', (v) => v || 'auto'],
+    ['model-detection',      'detectionModel',        (v) => v.trim() || DEFAULT_MODEL],
+    ['model-extraction',     'extractionModel',       (v) => v.trim() || DEFAULT_MODEL],
+    ['model-text-compare',   'textComparisonModel',   (v) => v.trim() || DEFAULT_MODEL],
+    ['model-visual-compare', 'visualComparisonModel', (v) => v.trim() || DEFAULT_MODEL],
   ]) {
     $(id).addEventListener('change', () => {
       state.settings = saveSettings({ [key]: parser($(id).value) });
@@ -620,6 +632,24 @@ function populateModelPresetSelect() {
     sel.appendChild(opt);
   }
   sel.appendChild(customOpt);
+}
+
+// Populate each per-task model dropdown with the same MODEL_PRESETS
+// list. Selection is bound to its own settings field, defaulting to
+// the user-specified per-task default.
+function populateTaskModelSelects() {
+  const ids = ['model-detection', 'model-extraction', 'model-text-compare', 'model-visual-compare'];
+  for (const id of ids) {
+    const sel = $(id);
+    if (!sel) continue;
+    sel.innerHTML = '';
+    for (const p of MODEL_PRESETS) {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.label;
+      sel.appendChild(opt);
+    }
+  }
 }
 
 function applyModelToControls(model) {
@@ -1384,9 +1414,13 @@ async function onSubmit() {
     $('marking-status').textContent = `Marking request ${i + 1} of ${tasks.length}…`;
     try {
       let res;
+      // Per-task model — extraction (student + answer key) uses the
+      // user's extractionModel selector. Falls back to openaiModel if
+      // unset (e.g. settings migrated from before Stage D).
+      const taskModel = state.settings.extractionModel || state.settings.openaiModel || DEFAULT_MODEL;
       const transport = {
         apiKey: state.settings.openaiKey,
-        model: state.settings.openaiModel,
+        model: taskModel,
         apiMode: state.settings.apiMode || 'direct',
         proxyEndpoint: state.settings.proxyEndpoint,
         proxyToken: state.settings.proxyToken,
@@ -1408,7 +1442,7 @@ async function onSubmit() {
         task_type: t.kind === 'student'
           ? TASK_TYPES.STUDENT_EXTRACTION
           : TASK_TYPES.ANSWER_KEY_EXTRACTION,
-        model: transport.model,
+        model: taskModel,
         label: t.label,
         pages: t.plannedPages,
         usage: res.usage,
@@ -1444,13 +1478,18 @@ async function onSubmit() {
   const match = matchExtractions(studentResults, keyResults);
   const { text: textPairs, visual: visualPairs } = partitionPairsByModality(match);
 
-  const transport = {
+  // Shared transport (everything except model). The model is chosen
+  // per task type — text compare uses textComparisonModel, visual
+  // compare uses visualComparisonModel — so we don't put it on the
+  // shared transport.
+  const baseTransport = {
     apiKey: state.settings.openaiKey,
-    model: state.settings.openaiModel,
     apiMode: state.settings.apiMode || 'direct',
     proxyEndpoint: state.settings.proxyEndpoint,
     proxyToken: state.settings.proxyToken,
   };
+  const textCompareModel   = state.settings.textComparisonModel   || state.settings.openaiModel || DEFAULT_MODEL;
+  const visualCompareModel = state.settings.visualComparisonModel || state.settings.openaiModel || DEFAULT_MODEL;
 
   // Stage 3b — TEXT compare: one text-only AI call covering text-style
   // pairs (text/choice/number/tick_box/unknown). Skipped when there are
@@ -1468,7 +1507,8 @@ async function onSubmit() {
     while (true) {
       try {
         const cmpRes = await markPairs({
-          ...transport,
+          ...baseTransport,
+          model: textCompareModel,
           pairs: textPairs,
           subject: state.attempt.subject,
           level: state.attempt.level,
@@ -1476,7 +1516,7 @@ async function onSubmit() {
         aiTextReport = cmpRes.parsed;
         taskUsages.push(buildTaskRecord({
           task_type: TASK_TYPES.TEXT_COMPARISON,
-          model: transport.model,
+          model: textCompareModel,
           label: `Text compare — ${textPairs.length} pair(s)`,
           pages: [],
           usage: cmpRes.usage,
@@ -1533,7 +1573,8 @@ async function onSubmit() {
       }
       try {
         const res = await compareVisualPair({
-          ...transport,
+          ...baseTransport,
+          model: visualCompareModel,
           pair,
           completedImageDataUrl: cPageEntry.dataUrl,
           answerImageDataUrl: aPageEntry.dataUrl,
@@ -1541,7 +1582,7 @@ async function onSubmit() {
         visualResults.push({ pair, parsed: res.parsed });
         taskUsages.push(buildTaskRecord({
           task_type: TASK_TYPES.VISUAL_COMPARISON,
-          model: transport.model,
+          model: visualCompareModel,
           label: `Visual compare ${pair.display_question || pair.question}`,
           pages: [pair.completed_page, pair.answer_page].filter((n) => n != null),
           usage: res.usage,
