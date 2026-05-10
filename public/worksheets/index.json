@@ -47,26 +47,48 @@
       "description": "Booklet A (MCQ) on pages 3-18, Booklet B (open-ended) on pages 21-33. Answer key on the last four pages, including the compact MCQ grid for Q1-Q30."
     },
     {
-      "id": "p2-chinese-2019-sa2-ai-tong",
-      "title": "P2 Chinese 2019 SA2 (Ai Tong) — extract",
-      "subject": "P2 Chinese",
-      "level": "Primary 2",
-      "pdfPath": "public/worksheets/p2-chinese-2019-sa2-ai-tong.pdf",
-      "totalPages": 1,
-      "questionPages": "1",
-      "answerPages": "",
-      "description": "One-page extract — no answer sheet. Student-answer extraction works, but the AI cannot mark against an answer key. Check the report by hand."
+      "id": "p4-p5-english-mock",
+      "title": "P4/P5 English Mock (test)",
+      "subject": "P4/P5 English",
+      "level": "Primary 4/5",
+      "pdfPath": "public/worksheets/p4-p5-english-mock.pdf",
+      "totalPages": 3,
+      "questionPages": "1-2",
+      "answerPages": "3",
+      "description": "Short mock paper used for end-to-end pipeline testing. Section A (Grammar MCQ), Section B (Fill-in), Section C (Vocabulary), Section D (Comprehension) on pages 1-2. Answer key on page 3."
     },
     {
-      "id": "p1-higher-chinese-2018-ai-tong-test2",
-      "title": "P1 Higher Chinese 2018 (Ai Tong test 2) — extract",
-      "subject": "P1 Higher Chinese",
-      "level": "Primary 1",
-      "pdfPath": "public/worksheets/p1-higher-chinese-2018-ai-tong-test2.pdf",
-      "totalPages": 1,
-      "questionPages": "1",
-      "answerPages": "",
-      "description": "One-page extract — no answer sheet. Student-answer extraction works, but the AI cannot mark against an answer key. Check the report by hand."
+      "id": "p4-p5-math-mock",
+      "title": "P4/P5 Math Mock (test)",
+      "subject": "P4/P5 Maths",
+      "level": "Primary 4/5",
+      "pdfPath": "public/worksheets/p4-p5-math-mock.pdf",
+      "totalPages": 3,
+      "questionPages": "1-2",
+      "answerPages": "3",
+      "description": "Short mock paper used for end-to-end pipeline testing. Section A (MCQ), Section B (Short answer), Section C (Word problems) on pages 1-2. Answer key on page 3."
+    },
+    {
+      "id": "p4-p5-chinese-mock",
+      "title": "P4/P5 Chinese Mock (test) — 华文模拟试卷",
+      "subject": "P4/P5 Chinese",
+      "level": "Primary 4/5",
+      "pdfPath": "public/worksheets/p4-p5-chinese-mock.pdf",
+      "totalPages": 3,
+      "questionPages": "1-2",
+      "answerPages": "3",
+      "description": "Short mock paper used for end-to-end pipeline testing on a Chinese-language paper. 选择题 / 填空 / 阅读理解 on pages 1-2. Answer key on page 3."
+    },
+    {
+      "id": "p4-p5-science-mock",
+      "title": "P4/P5 Science Mock (test)",
+      "subject": "P4/P5 Science",
+      "level": "Primary 4/5",
+      "pdfPath": "public/worksheets/p4-p5-science-mock.pdf",
+      "totalPages": 3,
+      "questionPages": "1-2",
+      "answerPages": "3",
+      "description": "Short mock paper used for end-to-end pipeline testing. Section A (MCQ) and Section B (Open-ended) on pages 1-2. Answer key on page 3."
     }
   ]
 }
