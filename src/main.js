@@ -6,7 +6,12 @@ import { loadSettings, saveSettings } from './settings.js';
 import {
   putAttempt, getAttempt, putStroke, deleteStroke, getStrokesForPage,
   clearStrokesForPage, deleteAttempt, attemptExists,
+  putPaper, getPaper, listPapers,
 } from './storage.js';
+import {
+  computePaperIdentity, paperFromBuiltinCatalog, paperFromAttempt,
+  paperFreshness, snapshotPaperOntoAttempt,
+} from './paper.js';
 import { loadPdfFromBlob, renderPageToCanvas } from './pdfRender.js';
 import { attachInkController, redrawAll } from './draw.js';
 import { flattenQuestionPage, renderAnswerPage, colorContentRatio } from './flatten.js';
@@ -801,6 +806,10 @@ async function onBuiltinSelect() {
     if (w.level) $('meta-level').value = w.level;
     $('question-pages').value = w.questionPages || '';
     $('answer-pages').value = w.answerPages || '';
+    // Resolve / synthesize the paper profile for this PDF. If a stored
+    // profile already exists, prefer its ranges over the catalog
+    // metadata (the parent may have edited them).
+    await resolvePaperProfile({ source: 'built_in', builtinId: w.id, catalogEntry: w });
     // Color check (non-blocking).
     runColorCheck();
     // Resume prompt if a saved attempt exists.
@@ -850,6 +859,66 @@ async function onResumeBuiltin(worksheet, mode) {
   enterFullscreenPractice();
 }
 
+// After the PDF has loaded (built-in or upload), compute its paper
+// identity and look up an existing profile in IndexedDB.
+//
+// Built-ins always end up with a profile in state.paperProfile —
+// either the stored one (if confirmed previously) or a fresh one
+// synthesised from the catalog metadata (unconfirmed).
+//
+// Uploads only get a profile when one was previously stored for this
+// PDF. First-time uploads return null; the practice picker then uses
+// heuristic defaults until the parent confirms a profile (Stage F+G).
+//
+// If the stored built-in profile's hash / size disagrees with the
+// loaded PDF, we treat the profile as stale — the parent will need to
+// reconfirm. For now we just log and keep the stored profile so the
+// in-progress flow doesn't break; full UX is added in Stage G.
+async function resolvePaperProfile(opts) {
+  if (!state.pdf || !state.pdfBlob) {
+    state.paperProfile = null;
+    return null;
+  }
+  let bytes;
+  try {
+    bytes = new Uint8Array(await state.pdfBlob.arrayBuffer());
+  } catch (e) {
+    console.warn('Could not read PDF bytes for hashing:', e);
+    bytes = null;
+  }
+  const identity = await computePaperIdentity({
+    source: opts.source,
+    builtinId: opts.builtinId,
+    pdfBytes: bytes,
+    pdfName: opts.pdfName || opts.catalogEntry?.title || '',
+    pdfPageCount: state.pdf.numPages,
+    pdfByteLength: state.pdfBlob.size || (bytes ? bytes.byteLength : 0),
+  });
+  state.paperIdentity = identity;
+  let paper = await getPaper(identity.paper_id);
+  if (paper) {
+    const fresh = paperFreshness(paper, identity);
+    if (fresh === 'stale') {
+      console.warn(
+        `Paper profile for ${identity.paper_id} looks stale ` +
+        `(stored hash/size differs from loaded PDF). ` +
+        `Re-confirmation will be required after Stage G ships.`
+      );
+    }
+    state.paperProfile = paper;
+    return paper;
+  }
+  if (opts.source === 'built_in' && opts.catalogEntry) {
+    paper = paperFromBuiltinCatalog(opts.catalogEntry, identity);
+    paper = await putPaper(paper);
+    state.paperProfile = paper;
+    return paper;
+  }
+  // Upload with no stored profile. Caller decides what to do.
+  state.paperProfile = null;
+  return null;
+}
+
 async function runColorCheck() {
   $('color-warning').hidden = true;
   if (!state.pdf) return;
@@ -875,12 +944,23 @@ async function onPdfPicked(ev) {
     state.pdfBlob = file;
     state.pdf = await loadPdfFromBlob(file);
     $('pdf-status').textContent = `${file.name} — ${state.pdf.numPages} pages`;
-    // Suggest sensible defaults for upload only.
-    if (!$('question-pages').value) {
-      $('question-pages').value = `1-${Math.max(1, state.pdf.numPages - 4)}`;
-    }
-    if (!$('answer-pages').value && state.pdf.numPages > 4) {
-      $('answer-pages').value = `${state.pdf.numPages - 3}-${state.pdf.numPages}`;
+    // Look up or synthesize a paper profile for this upload. Returns
+    // null when there's no stored profile yet — the picker will then
+    // fall back to the heuristic defaults below until detection
+    // (Stage F) creates one.
+    const paper = await resolvePaperProfile({ source: 'upload', pdfName: file.name });
+    if (paper) {
+      // Reuse the stored ranges (parent confirmed these previously).
+      $('question-pages').value = pageArrayToRange(paper.question_pages);
+      $('answer-pages').value = pageArrayToRange(paper.answer_pages);
+    } else {
+      // Suggest sensible defaults for first-time uploads.
+      if (!$('question-pages').value) {
+        $('question-pages').value = `1-${Math.max(1, state.pdf.numPages - 4)}`;
+      }
+      if (!$('answer-pages').value && state.pdf.numPages > 4) {
+        $('answer-pages').value = `${state.pdf.numPages - 3}-${state.pdf.numPages}`;
+      }
     }
     runColorCheck();
   } catch (e) {
@@ -997,12 +1077,16 @@ async function onStartPractice() {
     pdfName = $('pdf-input').files?.[0]?.name || 'worksheet.pdf';
   }
 
-  // Create attempt
+  // Create attempt. paperId snapshots the resolved profile so later
+  // edits to the profile don't retroactively mutate this attempt.
+  // questionPages / answerPages on the attempt are still authoritative
+  // for marking; the paperId is just a back-reference.
   state.attempt = {
     id: attemptId,
     createdAt: Date.now(),
     pdfName,
     builtinId,
+    paperId: state.paperProfile?.paper_id || null,
     pdfBlob: state.sourceMode === 'upload' ? state.pdfBlob : null,
     pdfPath: state.sourceMode === 'builtin' ? state.selectedWorksheet.pdfPath : null,
     subject,
