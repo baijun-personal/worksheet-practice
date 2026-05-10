@@ -20,6 +20,10 @@
     </nav>
     <div class="topbar-actions">
       <span id="autosave-indicator" class="autosave" aria-live="polite">saved</span>
+      <button id="build-version-btn" type="button" class="link-btn build-badge"
+              title="Build time of src/main.js. Click to force-refresh past Safari cache.">
+        build…
+      </button>
       <button id="reset-btn" type="button" class="link-btn" hidden>Start over</button>
     </div>
   </header>
@@ -349,6 +353,33 @@
       'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs';
     window.pdfjsLib = pdfjsLib;
   </script>
-  <script type="module" src="src/main.js"></script>
+  <!--
+    Bootstrap: load src/main.js with a cache-busting query string
+    derived from its own Last-Modified header. This way every fresh
+    deploy gets its own cache key automatically — Safari (and other
+    browsers) re-fetch main.js without the user having to figure out
+    a hard refresh. If the user manually appended ?_v=<n> to the URL
+    (the "Force refresh" badge does this), use that instead, which
+    bypasses any cache the HEAD request might hit.
+  -->
+  <script>
+    (async () => {
+      const inject = (v) => {
+        const s = document.createElement('script');
+        s.type = 'module';
+        s.src = 'src/main.js' + (v ? ('?_v=' + encodeURIComponent(v)) : '');
+        document.body.appendChild(s);
+      };
+      const urlV = new URL(location.href).searchParams.get('_v');
+      if (urlV) { inject(urlV); return; }
+      try {
+        const res = await fetch('src/main.js', { method: 'HEAD', cache: 'no-store' });
+        const lm = res.headers.get('Last-Modified');
+        inject(lm ? String(Date.parse(lm)) : '');
+      } catch {
+        inject('');
+      }
+    })();
+  </script>
 </body>
 </html>

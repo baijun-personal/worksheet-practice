@@ -196,6 +196,90 @@ async function exitFullscreenPractice() {
   setTimeout(refreshScrollRails, 100);
 }
 
+// --- Build-version badge --------------------------------------------------
+// GitHub Pages serves a Last-Modified header on every file based on the
+// commit time of that file in the deployed branch. Reading it costs one
+// HEAD request and gives us a free build timestamp without any build
+// tooling. Display it in the topbar as a relative time so the user can
+// tell at a glance whether they're on the latest deploy.
+
+async function showBuildVersion() {
+  const btn = $('build-version-btn');
+  if (!btn) return;
+  try {
+    // Cache-bust the HEAD itself so we don't read a stale cache entry.
+    const url = `src/main.js?_v=${Date.now()}`;
+    const res = await fetch(url, { method: 'HEAD', cache: 'no-store' });
+    const lm = res.headers.get('Last-Modified');
+    if (!lm) {
+      btn.textContent = 'build ?';
+      return;
+    }
+    const built = new Date(lm);
+    const renderRelative = () => {
+      btn.textContent = 'build ' + relativeTime(built);
+      btn.title = `main.js Last-Modified: ${built.toLocaleString()} (${lm}). Click to force-refresh past the cache.`;
+      // Highlight if older than ~24h — likely an old browser cache
+      // (GitHub Pages should serve fresh files within a minute or two
+      // of a push).
+      if (Date.now() - built.getTime() > 24 * 60 * 60 * 1000) {
+        btn.classList.add('stale');
+      } else {
+        btn.classList.remove('stale');
+      }
+    };
+    renderRelative();
+    // Re-render every minute so "5 min ago" stays accurate.
+    setInterval(renderRelative, 60_000);
+  } catch (e) {
+    console.warn('showBuildVersion failed:', e);
+    btn.textContent = 'build ?';
+  }
+}
+
+function relativeTime(date) {
+  const diffMs = Date.now() - date.getTime();
+  const diffSec = Math.round(diffMs / 1000);
+  if (diffSec < 60) return `${diffSec}s ago`;
+  const diffMin = Math.round(diffSec / 60);
+  if (diffMin < 60) return `${diffMin} min ago`;
+  const diffHr = Math.round(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.round(diffHr / 24);
+  if (diffDay < 14) return `${diffDay}d ago`;
+  return date.toLocaleDateString();
+}
+
+// Force a reload that bypasses the HTTP cache for HTML and as much
+// of the linked-resource cache as we can reach from JavaScript.
+// Safari's reload button often serves stale cached ES modules; this
+// is a more aggressive last-resort.
+async function forceReloadWithCacheBust() {
+  // 1. Clear the Cache Storage API (used by service workers / PWAs).
+  //    GitHub Pages doesn't ship a SW, but if one ever lands, this
+  //    keeps a path to escape from a stuck stale build.
+  if ('caches' in window) {
+    try {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    } catch (e) { console.warn('caches.delete failed:', e); }
+  }
+  // 2. Unregister any service worker.
+  if ('serviceWorker' in navigator) {
+    try {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    } catch (e) { console.warn('SW unregister failed:', e); }
+  }
+  // 3. Append ?_v=<now> to the URL and reload. The new query string
+  //    forces browsers to treat the HTML as fresh, and the chained
+  //    module imports in the new HTML will revalidate against the
+  //    server's ETag/Last-Modified headers (GitHub Pages serves both).
+  const url = new URL(window.location.href);
+  url.searchParams.set('_v', String(Date.now()));
+  window.location.replace(url.toString());
+}
+
 // --- Init -----------------------------------------------------------------
 
 document.addEventListener('DOMContentLoaded', init);
@@ -204,6 +288,13 @@ async function init() {
   els.autosave = $('autosave-indicator');
   els.autosavePractice = $('autosave-indicator-practice');
   setAutosave('saved');
+
+  // Fire-and-forget: stamp the build-version badge in the topbar
+  // with main.js's Last-Modified header so the parent always knows
+  // which deploy they're on. The badge click does a cache-busting
+  // reload — Safari's hard refresh is unreliable.
+  showBuildVersion();
+  $('build-version-btn')?.addEventListener('click', forceReloadWithCacheBust);
 
   // Keep our `app-immersive` class in sync if the user exits full-screen via
   // the OS shortcut (Esc on desktop, swipe on iPad).
