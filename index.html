@@ -216,6 +216,9 @@
           <label>Visual comparison <span class="muted small">(per drawing/diagram question)</span>
             <select id="model-visual-compare"></select>
           </label>
+          <label>Review explanations <span class="muted small">(Why? / Show steps / Give hint)</span>
+            <select id="model-explanation"></select>
+          </label>
         </fieldset>
         <label>Submission DPI
           <select id="render-dpi">
@@ -352,11 +355,12 @@
       <div id="report-not-attempted" class="card"></div>
       <div id="report-table" class="card"></div>
       <div class="actions">
-        <button id="open-review-btn" type="button" class="primary">Open Review Mode</button>
+        <button id="open-review-btn" type="button" class="primary" hidden>Open Review Mode</button>
         <button id="download-report-pdf" type="button">Download report PDF</button>
         <button id="download-attempt-pdf" type="button">Download completed attempt PDF</button>
         <button id="toggle-raw-json" type="button">Show raw JSON</button>
       </div>
+      <p id="review-disabled-note" class="muted small" hidden></p>
       <pre id="raw-json" class="raw-json" hidden></pre>
     </section>
 
@@ -405,17 +409,6 @@
     </div>
 
   </main>
-
-  <div id="confirm-modal" class="modal" hidden>
-    <div class="modal-card">
-      <h2 id="confirm-title">Confirm</h2>
-      <p id="confirm-body"></p>
-      <div class="actions">
-        <button id="confirm-cancel" type="button">Cancel</button>
-        <button id="confirm-ok" type="button" class="primary">OK</button>
-      </div>
-    </div>
-  </div>
 
   <script type="module">
     import * as pdfjsLib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.min.mjs';

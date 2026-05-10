@@ -582,11 +582,20 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
   // wrong / unclear question (multi-part rows that share a base
   // question are grouped into a single record so the page only
   // gets one marker per question, not one per part).
-  const review_records = buildReviewRecords({
-    pairs: match.pairs,
-    questions,
-    aiQByQ,
-  });
+  //
+  // Gated on match.keysProvided: when there's no answer key,
+  // every row is "unclear" by construction (no expected to
+  // compare against), so a Review surface would be a wall of
+  // red Xs with nothing meaningful to explain. The decision was:
+  // Review Mode is unavailable for no-key papers. The empty
+  // array also lets main.js gate the entry button.
+  const review_records = match.keysProvided
+    ? buildReviewRecords({
+        pairs: match.pairs,
+        questions,
+        aiQByQ,
+      })
+    : [];
 
   return {
     summary,
@@ -654,6 +663,17 @@ function buildReviewRecords({ pairs, questions, aiQByQ }) {
   const groups = new Map(); // baseKey -> { row, parts: [] }
   for (const row of questions) {
     if (row.status !== 'incorrect' && row.status !== 'unclear') continue;
+    // Exclude visual-comparison rows from Review Mode for the MVP.
+    // Their student_answer / expected_answer are placeholder
+    // "[visual answer]" strings; the popup would show
+    // "Student: [visual answer]" / "Correct: [visual answer]" with
+    // no useful explanation. Visual results still appear in the
+    // standard report's All-questions table — Review Mode just
+    // doesn't add markers for them.
+    if (row.student_answer === '[visual answer]'
+        || row.expected_answer === '[visual answer]') {
+      continue;
+    }
     const baseDisplay = row.display_question || row.question || '';
     const baseKey = baseDisplay.replace(/\s*\([^)]*\)\s*$/, '').trim();
     const partMatch = baseDisplay.match(/\(([^)]+)\)\s*$/);
@@ -724,7 +744,13 @@ function buildReviewRecords({ pairs, questions, aiQByQ }) {
 
 function clampConfidence(v) {
   const n = Number(v);
-  if (!Number.isFinite(n)) return 1; // optimistic default — the row is graded; absence of confidence shouldn't downgrade
+  // Default to 0.7 when the AI omits confidence — sits right at
+  // the alerting threshold (>= 0.8 is "reliable" per the prompt,
+  // < 0.5 → needs_human_review). Means an omission shows up in
+  // the low-confidence banner ("verify before relying on the
+  // score") without changing the marking verdict. Earlier
+  // optimistic 1.0 default silently masked omissions.
+  if (!Number.isFinite(n)) return 0.7;
   if (n < 0) return 0;
   if (n > 1) return 1;
   return n;
@@ -748,11 +774,21 @@ function qnumNumericPrefix(qn) {
   return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER;
 }
 
-// Validate or synthesize a (page, x, y) for the review marker.
-// AI hints are accepted only when they pass strict validation —
+// Validate the AI's coordinate hint, or fall back to an ordinal
+// estimate.
+//
+// IMPORTANT: this is NOT a snap-to-Q-heading. The fallback does not
+// detect headings, columns, passages, diagrams, or page layout —
+// it only spreads questions evenly between [0.05, 0.95] of page
+// height by ordinal position. On worksheets with two-column layouts,
+// large diagrams, comprehension passages, or one long question
+// followed by short ones, the fallback will be visibly misplaced.
+//
+// AI hints are accepted only when they pass strict validation:
 // page matches the extraction's page (definitive), x and y are
-// finite numbers in [0, 1]. Otherwise we synthesize from the
-// question's ordinal position on the page.
+// finite numbers in [0, 1]. Garbage values fall through to the
+// ordinal estimate. The caller can tell which branch was used via
+// `source`: 'ai' | 'ordinal_fallback'.
 function synthLocation({ aiLocation, page, qn, pairsByPage }) {
   const pg = Number(page);
   if (!Number.isFinite(pg) || pg < 1) return null;
@@ -766,17 +802,17 @@ function synthLocation({ aiLocation, page, qn, pairsByPage }) {
   if (aiValid) {
     return { page: pg, x: aiX, y: aiY, source: 'ai' };
   }
-  // Fallback: snap to question's ordinal position on the page.
+  // Ordinal fallback. Spread questions evenly down the page —
+  // unreliable on irregular layouts, see comment above.
   const list = pairsByPage.get(pg) || [];
   const idx = list.findIndex((e) => e.qn === qn);
   const total = list.length;
-  // Reserve 5% top + 5% bottom margin; spread questions evenly in between.
   const top = 0.05;
   const bottom = 0.95;
   const y = total > 0 && idx >= 0
     ? top + ((idx + 0.5) / total) * (bottom - top)
     : 0.5;
-  return { page: pg, x: 0.06, y, source: 'snap' };
+  return { page: pg, x: 0.06, y, source: 'ordinal_fallback' };
 }
 
 // Build per-part display rows for a grouped text pair. Walks the
@@ -813,11 +849,18 @@ function buildMultiPartRows(p, aiParts, keysProvided) {
     const ai = aiByPart.get(partLabel) || (Array.isArray(aiParts) ? aiParts[i] : null);
     if (ai) {
       const status = normalizeStatus(ai.status);
+      // expected_answer falls through to '' rather than the
+      // literal '(see comment)' marker the previous code used —
+      // that string was leaking into both the All-questions table
+      // and (more visibly) the Review popup, where the parent
+      // saw "Correct: (see comment)" with no comment to refer to.
+      // A blank cell is cleaner; the popup logic now hides the
+      // Correct row when the value is empty.
       rows.push({
         ...baseRow,
         display_question: display,
         student_answer: ai.student_answer ?? sp.answer ?? '',
-        expected_answer: ai.matched_expected ?? '(see comment)',
+        expected_answer: ai.matched_expected ?? '',
         status,
         comment: ai.comment ? String(ai.comment) : '',
       });

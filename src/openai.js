@@ -163,10 +163,10 @@ For ANY row or part where status is "incorrect" or "unclear", additionally produ
   confidence            — a number in [0, 1] reflecting how confident you are in the comparison verdict. Use < 0.5 when something is genuinely ambiguous (e.g. unreadable handwriting, ambiguous question matching, units uncertain).
   question_start_location — a best-effort page+coordinate hint of where the printed question heading begins. Schema:
         { "page": <integer>, "x": <0..1>, "y": <0..1> }
-    "page" should be the page number where the student's answer was found (use the page metadata in the input items). "x" is the horizontal position (origin = left edge), "y" is vertical (origin = top edge). You don't see the rendered page, so your coordinate guess is allowed to be approximate — code-side post-processing snaps it to the nearest plausible question heading, so just provide a sensible band:
-       x = 0.06 (questions start near the left margin)
-       y = guess based on the question's printed number among other questions on the same page (e.g. for Q3 on a page with 5 questions, y ≈ 0.4)
-    If the page is unknown, omit the location.
+    "page" should equal the input item's "completed_page" exactly — that field is definitive (it comes from the per-answer page metadata produced during extraction). "x" is the horizontal position (origin = left edge), "y" is vertical (origin = top edge). You don't see the rendered page, so your coordinate guess is approximate — code-side post-processing replaces obvious garbage with an ordinal-based fallback. Provide a sensible band:
+       x = 0.06 (questions start near the left margin in every Singapore primary worksheet we've measured)
+       y = (page_question_index + 0.5) / questions_on_page, BUT bias upward when the question is short (one-line MCQ) and downward when the previous questions are long (list answers, comprehension). The two metadata fields tell you the ordinal position; your judgement adjusts for spacing.
+    If "completed_page" is missing on the input item, omit the location entirely (don't fabricate one).
 
 For MULTI-PART rows where some parts are correct and others are incorrect/unclear, attach the row-level review fields ONCE on the row (not per-part). Per-part status / comment / matched_expected stay as before.
 
@@ -545,6 +545,40 @@ export async function markPairs({
   proxyEndpoint,
   proxyToken,
 }) {
+  // Per-page question count + per-pair page index. Used to give
+  // the AI enough metadata to synthesize a meaningful y-position
+  // for question_start_location — without page+ordinal context,
+  // the AI's coordinate output was a guess in [0,1] with no
+  // grounding. Reviewer-2 flagged this in the v4 round.
+  const pageQuestionCounts = new Map();
+  for (const p of pairs) {
+    const pg = Number(p.completed_page);
+    if (Number.isFinite(pg)) {
+      pageQuestionCounts.set(pg, (pageQuestionCounts.get(pg) || 0) + 1);
+    }
+  }
+  // Sort pairs per page to compute each pair's index-on-page.
+  const pairsOnPage = new Map(); // page -> [pair, ...]
+  for (const p of pairs) {
+    const pg = Number(p.completed_page);
+    if (!Number.isFinite(pg)) continue;
+    if (!pairsOnPage.has(pg)) pairsOnPage.set(pg, []);
+    pairsOnPage.get(pg).push(p);
+  }
+  for (const list of pairsOnPage.values()) {
+    list.sort((a, b) => {
+      const ka = String(a.display_question || a.question || '');
+      const kb = String(b.display_question || b.question || '');
+      const na = (ka.match(/\d+/) || ['0'])[0];
+      const nb = (kb.match(/\d+/) || ['0'])[0];
+      return Number(na) - Number(nb);
+    });
+  }
+  const indexOnPage = new Map(); // pair → index within page
+  for (const list of pairsOnPage.values()) {
+    list.forEach((p, i) => indexOnPage.set(p, i));
+  }
+
   const payload = {
     subject: subject || '',
     level: level || '',
@@ -553,6 +587,16 @@ export async function markPairs({
         question: p.display_question || p.question,
         match_confidence: typeof p.match_confidence === 'number' ? p.match_confidence : 1,
       };
+      // Page metadata so the AI can return a non-fake
+      // question_start_location. completed_page is from extraction
+      // (definitive); page_question_index + questions_on_page let
+      // the AI compute a sensible y for "this is question N of K
+      // on the page".
+      if (Number.isFinite(Number(p.completed_page))) {
+        item.completed_page = Number(p.completed_page);
+        item.page_question_index = indexOnPage.get(p) ?? null;
+        item.questions_on_page = pageQuestionCounts.get(Number(p.completed_page)) || null;
+      }
       if (p.is_multi_part) {
         item.is_multi_part = true;
         item.order_matters = !!p.order_matters;
@@ -647,8 +691,15 @@ export async function requestExplanation({
       { role: 'system', content: system },
       { role: 'user', content },
     ],
-    temperature: 0.4, // a bit of warmth — these are explanations, not extractions
   };
+  // Reasoning-class models reject the `temperature` parameter
+  // (only temperature: 1 / unset is accepted). Detect by id pattern
+  // and omit. Non-reasoning models get a low warmth — these are
+  // explanations, not extractions, so a tiny bit of variation is
+  // OK; 0.4 keeps it small.
+  if (!isReasoningModel(model)) {
+    body.temperature = 0.4;
+  }
   let resp;
   try {
     resp = await fetch(url, {
@@ -678,6 +729,17 @@ export async function requestExplanation({
   return { text: String(text).trim(), raw: json, usage: json.usage };
 }
 
+// Reasoning-class models (o1, o3, gpt-5+ reasoning variants) reject
+// the temperature parameter — only the default is accepted, so
+// callers must omit it. Match conservatively on common id prefixes
+// and the "thinking" / "reasoning" suffix conventions.
+function isReasoningModel(model) {
+  const m = String(model || '').toLowerCase();
+  return /^o\d/.test(m)
+      || /reasoning/.test(m)
+      || /thinking/.test(m);
+}
+
 async function chatJson({ apiKey, model, system, content, signal, apiMode, proxyEndpoint, proxyToken }) {
   if (!model) throw new Error('Model not set');
   const { url, headers } = buildRequest({ apiMode, apiKey, proxyEndpoint, proxyToken });
@@ -688,8 +750,13 @@ async function chatJson({ apiKey, model, system, content, signal, apiMode, proxy
       { role: 'user', content },
     ],
     response_format: { type: 'json_object' },
-    temperature: 0,
   };
+  // See note in requestExplanation — reasoning models reject
+  // explicit temperature. Omit for those, fix at 0 for everything
+  // else (we want deterministic JSON output for marking).
+  if (!isReasoningModel(model)) {
+    body.temperature = 0;
+  }
   let resp;
   try {
     resp = await fetch(url, {

@@ -111,7 +111,16 @@ export function renderReport(report, mountNodes) {
   // needs_human_review, source). This block is intentionally
   // minimal styling; it gets replaced by the Review Mode entry
   // point in Phase 2.
+  //
+  // Remove any previous debug block first — renderReport() runs
+  // on every Back-from-Review transition and was otherwise
+  // appending duplicates.
   const reviewRecords = Array.isArray(report.review_records) ? report.review_records : [];
+  if (tableEl.parentElement) {
+    for (const old of tableEl.parentElement.querySelectorAll('.review-records-debug')) {
+      old.remove();
+    }
+  }
   if (reviewRecords.length > 0 && tableEl.parentElement) {
     const debug = document.createElement('div');
     debug.className = 'review-records-debug';

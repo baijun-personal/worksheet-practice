@@ -13,7 +13,7 @@ import {
   paperFreshness, snapshotPaperOntoAttempt, paperFromIdentity,
 } from './paper.js';
 import { loadPdfFromBlob, renderPageToCanvas, renderPageOffscreen } from './pdfRender.js';
-import { attachInkController, redrawAll } from './draw.js';
+import { attachInkController, redrawAll, drawStroke } from './draw.js';
 import { flattenQuestionPage, renderAnswerPage, colorContentRatio } from './flatten.js';
 import { extractStudentAnswers, extractAnswerKey, markPairs, compareVisualPair, requestExplanation, MODEL_PRESETS, DEFAULT_MODEL, presetForModel } from './openai.js';
 import { matchExtractions, buildFinalReport, partitionPairsByModality } from './compare.js';
@@ -422,6 +422,11 @@ async function init() {
   // tab) — the only way to get truly sealed fullscreen on iPad.
   setupIosAddToHomeHint();
 
+  // Phase 6 telemetry: also flush on tab close so we don't lose
+  // the per-session counters if the parent doesn't navigate back
+  // to the report. Console-only — no network telemetry per plan.
+  window.addEventListener('beforeunload', logExplanationTelemetrySummary);
+
   // Keep our `app-immersive` class in sync if the user exits full-screen via
   // the OS shortcut (Esc on desktop, swipe on iPad).
   document.addEventListener('fullscreenchange', () => {
@@ -649,6 +654,7 @@ function bindSetupForm() {
   setVal('model-extraction',     state.settings.extractionModel       || state.settings.openaiModel || DEFAULT_MODEL);
   setVal('model-text-compare',   state.settings.textComparisonModel   || state.settings.openaiModel || DEFAULT_MODEL);
   setVal('model-visual-compare', state.settings.visualComparisonModel || state.settings.openaiModel || DEFAULT_MODEL);
+  setVal('model-explanation',    state.settings.explanationModel      || state.settings.openaiModel || DEFAULT_MODEL);
   setVal('render-dpi', String(state.settings.renderDpi || 150));
   setVal('batch-size', String(state.settings.batchSize || 5));
   setChecked('test-mode', !!state.settings.testMode);
@@ -691,6 +697,7 @@ function bindSetupForm() {
     ['model-extraction',     'extractionModel',       (v) => v.trim() || DEFAULT_MODEL],
     ['model-text-compare',   'textComparisonModel',   (v) => v.trim() || DEFAULT_MODEL],
     ['model-visual-compare', 'visualComparisonModel', (v) => v.trim() || DEFAULT_MODEL],
+    ['model-explanation',    'explanationModel',      (v) => v.trim() || DEFAULT_MODEL],
   ]) {
     const el = document.getElementById(id);
     if (!el) {
@@ -926,7 +933,7 @@ function populateModelPresetSelect() {
 // list. Selection is bound to its own settings field, defaulting to
 // the user-specified per-task default.
 function populateTaskModelSelects() {
-  const ids = ['model-detection', 'model-extraction', 'model-text-compare', 'model-visual-compare'];
+  const ids = ['model-detection', 'model-extraction', 'model-text-compare', 'model-visual-compare', 'model-explanation'];
   for (const id of ids) {
     const sel = $(id);
     if (!sel) continue;
@@ -2750,6 +2757,31 @@ function showReport(merged) {
     // shows the new cost without needing the marking pass to rerun.
     explanationCosts: state.attempt?.explanation_costs || [],
   });
+  // Gate the Open Review Mode button:
+  //   - no answer pages on the attempt → button hidden, note shown
+  //     ("Review Mode needs an answer key.")
+  //   - has answer pages but zero review records (everything correct
+  //     OR keys produced no comparable items) → button hidden, note
+  //     ("Review Mode: no questions to review — nice work!")
+  //   - otherwise (review_records present) → button visible
+  const hasKey = (state.attempt?.answerPages?.length || 0) > 0;
+  const recordCount = (merged?.review_records || []).length;
+  const reviewable = hasKey && recordCount > 0;
+  const btn = $('open-review-btn');
+  const note = $('review-disabled-note');
+  if (btn) btn.hidden = !reviewable;
+  if (note) {
+    if (!hasKey) {
+      note.hidden = false;
+      note.textContent = 'Review Mode needs an answer key. This paper doesn\'t have one.';
+    } else if (recordCount === 0) {
+      note.hidden = false;
+      note.textContent = 'Review Mode: no questions to review — nice work!';
+    } else {
+      note.hidden = true;
+      note.textContent = '';
+    }
+  }
 }
 
 function fileBaseName(name) {
@@ -2785,28 +2817,13 @@ function bindReviewUI() {
     // section reflects any taps the parent made in this session.
     if (state.reportJson) showReport(state.reportJson);
     else setStage('report');
-    // Phase 6 telemetry summary: log totals on the way out so
-    // the developer can see what the parent actually used. No
-    // network telemetry — console only per the plan.
-    if (typeof explanationTelemetry !== 'undefined') {
-      const tt = explanationTelemetry.taps;
-      const lat = explanationTelemetry.totalLatencyMs;
-      const sum = (tt.why || 0) + (tt.show_steps || 0) + (tt.give_hint || 0);
-      if (sum > 0) {
-        const avg = (rt) => (tt[rt] ? Math.round(lat[rt] / tt[rt]) : 0);
-        console.info(`[review] session totals: why=${tt.why || 0} (avg ${avg('why')}ms), ` +
-          `show_steps=${tt.show_steps || 0} (avg ${avg('show_steps')}ms), ` +
-          `give_hint=${tt.give_hint || 0} (avg ${avg('give_hint')}ms)`);
-      }
-    }
+    logExplanationTelemetrySummary();
   });
   $('review-prev-page-btn')?.addEventListener('click', () => navigateReviewPage(-1));
   $('review-next-page-btn')?.addEventListener('click', () => navigateReviewPage(+1));
   $('review-popup-close')?.addEventListener('click', closeReviewPopup);
   $('review-popup-prev')?.addEventListener('click', () => navigateReviewRecord(-1));
   $('review-popup-next')?.addEventListener('click', () => navigateReviewRecord(+1));
-  // Phase 4+5 will replace these no-op handlers — for now the
-  // explanation buttons stay disabled in HTML and have no listeners.
   // Click-outside-card closes the popup.
   $('review-popup')?.addEventListener('click', (ev) => {
     if (ev.target?.id === 'review-popup') closeReviewPopup();
@@ -2890,11 +2907,19 @@ async function renderReviewCurrentPage() {
   const layer = $('review-marker-layer');
   if (!host || !canvas || !layer) return;
   const hostWidth = Math.min(1000, host.parentElement?.clientWidth || 800) - 8;
+  // Pull saved strokes for this page so renderReviewPage can flatten
+  // them onto the rendered PDF — the parent sees the COMPLETED page,
+  // not the clean worksheet. (If the attempt has no strokes for
+  // this page, returns []; render is clean.)
+  const strokes = state.attempt
+    ? await getStrokesForPage(state.attempt.id, pageNumber)
+    : [];
   await renderReviewPage({
     pdf: state.pdf,
     paperProfile: state.paperProfile,
     reviewRecords: r.records,
     pageNumber,
+    strokes,
     canvas,
     markerLayer: layer,
     hostWidth,
@@ -2979,7 +3004,24 @@ async function navigateReviewRecord(delta) {
 const explanationTelemetry = {
   taps: { why: 0, show_steps: 0, give_hint: 0 },
   totalLatencyMs: { why: 0, show_steps: 0, give_hint: 0 },
+  loggedSession: false,
 };
+
+function logExplanationTelemetrySummary() {
+  const tt = explanationTelemetry.taps;
+  const lat = explanationTelemetry.totalLatencyMs;
+  const sum = (tt.why || 0) + (tt.show_steps || 0) + (tt.give_hint || 0);
+  if (sum === 0 || explanationTelemetry.loggedSession) return;
+  const avg = (rt) => (tt[rt] ? Math.round(lat[rt] / tt[rt]) : 0);
+  console.info(
+    `[review] session totals: why=${tt.why || 0} (avg ${avg('why')}ms), ` +
+    `show_steps=${tt.show_steps || 0} (avg ${avg('show_steps')}ms), ` +
+    `give_hint=${tt.give_hint || 0} (avg ${avg('give_hint')}ms)`
+  );
+  // Tag so beforeunload doesn't double-log when Back-to-report
+  // already fired.
+  explanationTelemetry.loggedSession = true;
+}
 
 async function onExplanationClick(requestType) {
   const r = state.review;
@@ -3086,12 +3128,30 @@ function setReviewPopupStatus(text, kind) {
 
 function collapseExplanationButtonsToClose() {
   // Per plan Phase 4: after the response, replace the three
-  // explanation buttons with a single Close. We just hide the row
-  // and rely on the existing × in the header (or click-outside /
-  // Esc) to close the popup. Re-opening this same record's popup
-  // (via Prev/Next or re-tap on the marker) will reset the row.
+  // explanation buttons with a single Close. We hide the existing
+  // row and inject a visible Close button so the parent (and
+  // child) have an obvious way out — relying purely on the
+  // header × / Esc / click-outside left no in-flow target near
+  // where the eye is after reading the explanation. Re-opening
+  // the same record's popup later restores the three buttons.
   const row = document.querySelector('.review-popup-explain-row');
   if (row) row.style.display = 'none';
+  let closeRow = document.getElementById('review-popup-close-row');
+  if (!closeRow) {
+    closeRow = document.createElement('div');
+    closeRow.id = 'review-popup-close-row';
+    closeRow.className = 'review-popup-explain-row';
+    closeRow.style.justifyContent = 'flex-end';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'primary';
+    btn.textContent = 'Close';
+    btn.addEventListener('click', closeReviewPopup);
+    closeRow.appendChild(btn);
+    row?.parentElement?.insertBefore(closeRow, row.nextSibling);
+  } else {
+    closeRow.style.display = '';
+  }
   if (state.review) state.review.explanationCollapsed = true;
 }
 
@@ -3126,8 +3186,10 @@ function handleExplanationError(e, requestType) {
 function resetExplanationPanel() {
   const exp = $('review-popup-explanation');
   if (exp) { exp.hidden = true; exp.innerHTML = ''; }
-  const row = document.querySelector('.review-popup-explain-row');
+  const row = document.querySelector('.review-popup-explain-row:not(#review-popup-close-row)');
   if (row) row.style.display = '';
+  const closeRow = document.getElementById('review-popup-close-row');
+  if (closeRow) closeRow.style.display = 'none';
   if (state.review) state.review.explanationCollapsed = false;
   setReviewPopupStatus('', '');
 }
@@ -3190,14 +3252,22 @@ function pickExpectedAnswerForExplanation(record) {
   return record.expected_answer || record.short_display_answer || '—';
 }
 
-// Render the target page with a red ✗ stamped at the question
-// location, plus prev-2 and next-1 pages clean. Returns
+// Render the target page with the child's saved strokes flattened
+// in, then a red ✗ stamped at the question location. Plus prev-2
+// and next-1 pages — also flattened with strokes when those pages
+// are within the attempt's question range, so passages / context
+// the child wrote on are visible too. Returns
 // [{ role, pageNumber, dataUrl }, ...] in document order.
 //
-// Render DPI is intentionally fixed at 150 (the same default as
-// the marking submission DPI). The model needs to read printed
-// text near the marker; lower DPI risks losing detail on dense
-// MCQ option grids.
+// Render DPI is fixed at 150 — same default as marking-submission
+// DPI. The model needs to read printed text + child's blue ink
+// near the marker; lower DPI risks losing detail on dense MCQ
+// option grids.
+//
+// The system prompt tells the model "student's answer is in BLUE,
+// printed worksheet is BLACK" — that's only true if the rendered
+// pages actually carry the strokes. Reviewer-2 flagged the prior
+// version (clean PDF + stamped X) as a blocker for this reason.
 async function buildExplanationContext(pdf, record) {
   const dpi = 150;
   const targetPage = record.completed_page;
@@ -3207,40 +3277,65 @@ async function buildExplanationContext(pdf, record) {
   const x = record.question_start_location?.x ?? 0.06;
   const y = record.question_start_location?.y ?? 0.5;
 
-  const renderClean = async (pageNum) => {
-    const r = await renderPageOffscreen(pdf, pageNum, dpi);
-    return { dataUrl: r.canvas.toDataURL('image/jpeg', 0.85) };
+  // Helper: render a page with strokes flattened in (returns the
+  // dataURL). attemptId may be null if no attempt is loaded;
+  // strokes are then empty and the page renders clean.
+  const attemptId = state.attempt?.id || null;
+  const renderWithStrokes = async (pageNum) => {
+    const strokes = attemptId
+      ? await getStrokesForPage(attemptId, pageNum)
+      : [];
+    const dataUrl = await flattenQuestionPage(pdf, pageNum, strokes, dpi);
+    return { dataUrl };
   };
 
-  // Target with ✗ overlay.
+  // Target page with strokes + ✗ overlay. Render via
+  // renderPageOffscreen so we keep the canvas reference for the
+  // overlay, then draw strokes, then stamp the X.
   const r = await renderPageOffscreen(pdf, targetPage, dpi);
+  const targetStrokes = attemptId
+    ? await getStrokesForPage(attemptId, targetPage)
+    : [];
+  if (targetStrokes.length > 0) {
+    const size = {
+      pageWidthPts: r.pageWidthPts,
+      pageHeightPts: r.pageHeightPts,
+      widthPx: r.widthPx,
+      heightPx: r.heightPx,
+    };
+    for (const s of targetStrokes) drawStroke(r.ctx, s, size);
+  }
   const ctx = r.ctx;
   const cx = Math.round(x * r.widthPx);
   const cy = Math.round(y * r.heightPx);
-  const size = Math.max(28, Math.round(r.heightPx * 0.04));
+  const xSize = Math.max(28, Math.round(r.heightPx * 0.04));
   ctx.save();
   ctx.strokeStyle = '#c0392b';
-  ctx.lineWidth = Math.max(4, Math.round(size * 0.18));
+  ctx.lineWidth = Math.max(4, Math.round(xSize * 0.18));
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(cx - size / 2, cy - size / 2);
-  ctx.lineTo(cx + size / 2, cy + size / 2);
-  ctx.moveTo(cx + size / 2, cy - size / 2);
-  ctx.lineTo(cx - size / 2, cy + size / 2);
+  ctx.moveTo(cx - xSize / 2, cy - xSize / 2);
+  ctx.lineTo(cx + xSize / 2, cy + xSize / 2);
+  ctx.moveTo(cx + xSize / 2, cy - xSize / 2);
+  ctx.lineTo(cx - xSize / 2, cy + xSize / 2);
   ctx.stroke();
   ctx.restore();
   const targetDataUrl = r.canvas.toDataURL('image/jpeg', 0.85);
 
   const pageImages = [];
   for (let p = Math.max(1, targetPage - 2); p < targetPage; p++) {
-    pageImages.push({ role: 'context', pageNumber: p, dataUrl: (await renderClean(p)).dataUrl });
+    pageImages.push({
+      role: 'context',
+      pageNumber: p,
+      dataUrl: (await renderWithStrokes(p)).dataUrl,
+    });
   }
   pageImages.push({ role: 'target', pageNumber: targetPage, dataUrl: targetDataUrl });
   if (targetPage + 1 <= pdf.numPages) {
     pageImages.push({
       role: 'context',
       pageNumber: targetPage + 1,
-      dataUrl: (await renderClean(targetPage + 1)).dataUrl,
+      dataUrl: (await renderWithStrokes(targetPage + 1)).dataUrl,
     });
   }
   return pageImages;
