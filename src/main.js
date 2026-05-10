@@ -162,6 +162,7 @@ async function enterFullscreenPractice() {
   // fullscreen exit. Locking both keeps all gestures inside
   // #page-stage.
   document.documentElement.classList.add('app-immersive-html');
+  swapToolbarLabels(true);
   const root = document.documentElement;
   const req = root.requestFullscreen || root.webkitRequestFullscreen;
   if (typeof req === 'function') {
@@ -181,9 +182,26 @@ async function enterFullscreenPractice() {
   setTimeout(refreshScrollRails, 100);
 }
 
+// Swap practice-toolbar buttons that carry a `data-short` attribute
+// between their long label (non-immersive) and the short label
+// (immersive). Long is stashed in `data-long` on first toggle so we
+// can swap back. Keeps the toolbar single-row in fullscreen on iPad.
+function swapToolbarLabels(toShort) {
+  const buttons = document.querySelectorAll('.practice-toolbar button[data-short]');
+  for (const btn of buttons) {
+    if (toShort) {
+      if (!btn.dataset.long) btn.dataset.long = btn.textContent.trim();
+      btn.textContent = btn.dataset.short;
+    } else if (btn.dataset.long) {
+      btn.textContent = btn.dataset.long;
+    }
+  }
+}
+
 async function exitFullscreenPractice() {
   document.body.classList.remove('app-immersive');
   document.documentElement.classList.remove('app-immersive-html');
+  swapToolbarLabels(false);
   const exitFn = document.exitFullscreen || document.webkitExitFullscreen;
   if (document.fullscreenElement || document.webkitFullscreenElement) {
     if (typeof exitFn === 'function') {
@@ -314,12 +332,14 @@ async function init() {
     if (!document.fullscreenElement) {
       document.body.classList.remove('app-immersive');
       document.documentElement.classList.remove('app-immersive-html');
+      swapToolbarLabels(false);
     }
   });
   document.addEventListener('webkitfullscreenchange', () => {
     if (!document.webkitFullscreenElement) {
       document.body.classList.remove('app-immersive');
       document.documentElement.classList.remove('app-immersive-html');
+      swapToolbarLabels(false);
     }
   });
 
