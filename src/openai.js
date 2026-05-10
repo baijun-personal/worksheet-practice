@@ -638,7 +638,7 @@ const EXPLANATION_PROMPT_BASE = `You are helping a parent understand why a prima
 
 You receive:
   - The TARGET page image with a red ✗ next to the printed question heading the parent is asking about. The student's answer is in BLUE; the printed worksheet is in BLACK.
-  - The 2 PREVIOUS pages and the NEXT page (cleanly rendered, no markup) — for passage / table / figure context. Some pages may be omitted at the start or end of the paper.
+  - The 2 PREVIOUS pages and the NEXT page — also rendered with the student's blue ink where it exists, for passage / table / figure context AND so you can see related working the child wrote on those pages. Only the TARGET page has the red ✗. Some pages may be omitted at the start or end of the paper.
   - Question metadata: the printed question label, what the student wrote, what the correct answer is, and a one-sentence reason from the marker.
 
 Style:
@@ -739,10 +739,20 @@ export async function requestExplanation({
   return { text: String(text).trim(), raw: json, usage: json.usage };
 }
 
-// Reasoning-class models (o1, o3, gpt-5+ reasoning variants) reject
-// the temperature parameter — only the default is accepted, so
-// callers must omit it. Match conservatively on common id prefixes
-// and the "thinking" / "reasoning" suffix conventions.
+// Reasoning-class models reject the `temperature` parameter (only
+// the default value is accepted), so callers must omit it for
+// those. We match on:
+//   - o-series:    o1, o3, etc.
+//   - gpt-5.x variants explicitly tagged "reasoning" or "thinking"
+//                  (e.g. "gpt-5-thinking-mini").
+// The plain gpt-5.4 / gpt-5.4-mini / gpt-5.4-nano models in
+// MODEL_PRESETS accept temperature normally and are intentionally
+// NOT matched here — the marking pipeline relies on
+// `temperature: 0` for deterministic JSON output and that has been
+// running on gpt-5.4 successfully throughout the pipeline.
+// Adding a blanket /^gpt-5/ would silently strip determinism for
+// no benefit; revisit only if a real reasoning-tagged gpt-5.x
+// variant gets used.
 function isReasoningModel(model) {
   const m = String(model || '').toLowerCase();
   return /^o\d/.test(m)

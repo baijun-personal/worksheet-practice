@@ -2947,6 +2947,15 @@ async function navigateReviewPage(delta) {
 function openReviewPopup(record) {
   const popup = $('review-popup');
   if (!popup || !state.review) return;
+  // If we're switching to a different record while an explanation
+  // call is still pending for the previous one, cancel it so its
+  // late response can't overwrite the new record's panel.
+  if (state.review.activeRecord
+      && state.review.activeRecord !== record
+      && state.review.explanationAbort) {
+    state.review.explanationAbort.abort();
+    state.review.explanationAbort = null;
+  }
   state.review.activeRecord = record;
   $('review-popup-title').textContent = popupTitle(record);
   $('review-popup-body').innerHTML = popupBodyHtml(record);
@@ -2974,7 +2983,15 @@ function openReviewPopup(record) {
 function closeReviewPopup() {
   const popup = $('review-popup');
   if (popup) popup.hidden = true;
-  if (state.review) state.review.activeRecord = null;
+  if (state.review) {
+    // Cancel any in-flight explanation call so a slow response
+    // doesn't write into a closed (or later re-opened) popup.
+    if (state.review.explanationAbort) {
+      state.review.explanationAbort.abort();
+      state.review.explanationAbort = null;
+    }
+    state.review.activeRecord = null;
+  }
 }
 
 async function navigateReviewRecord(delta) {
@@ -3031,6 +3048,21 @@ async function onExplanationClick(requestType) {
     setReviewPopupStatus('Cannot generate — PDF not loaded.', 'error');
     return;
   }
+  // Per-call AbortController. Lets us cancel an in-flight
+  // explanation when the parent closes the popup or navigates to
+  // a different record mid-call — without it, a slow ~10s
+  // response could resolve AFTER the popup has moved on and
+  // overwrite the new record's panel with an explanation for
+  // the old one. Stored on state.review.explanationAbort so
+  // closeReviewPopup / openReviewPopup can reach it.
+  if (state.review.explanationAbort) {
+    state.review.explanationAbort.abort();
+  }
+  const abort = new AbortController();
+  state.review.explanationAbort = abort;
+  // Tag the request with the record identity so we can detect
+  // when a late-arriving response is for a stale popup state.
+  const requestRecord = record;
   // Disable the three explanation buttons during the call so the
   // parent doesn't double-tap or fire a different request mid-flight.
   setExplanationButtonsDisabled(true);
@@ -3063,7 +3095,14 @@ async function onExplanationClick(requestType) {
       expectedAnswer: pickExpectedAnswerForExplanation(record),
       shortReason: record.short_reason || record.comment || '',
       pageImages,
+      signal: abort.signal,
     });
+    // Bail if the user moved on while we were waiting. The fetch
+    // may have already completed by the time the abort fires, so
+    // the post-fetch check is a second line of defense.
+    if (abort.signal.aborted || state.review?.activeRecord !== requestRecord) {
+      return;
+    }
     const tEnd = performance.now();
     const latencyMs = Math.round(tEnd - tStart);
     explanationTelemetry.taps[requestType] = (explanationTelemetry.taps[requestType] || 0) + 1;
@@ -3097,9 +3136,26 @@ async function onExplanationClick(requestType) {
       try { await putAttempt(state.attempt); } catch (e) { console.warn('Could not persist explanation cost:', e); }
     }
   } catch (e) {
+    // Abort is the user-initiated cancellation path — silently
+    // ignore (the panel was already cleared by openReviewPopup or
+    // closeReviewPopup). Real errors still surface.
+    if (e?.name === 'AbortError'
+        || /aborted|cancel/i.test(String(e?.message || ''))) {
+      return;
+    }
+    // If the user moved to another record while waiting and we
+    // somehow got here without the abort signal firing, suppress
+    // too — never write an old explanation into a new record's
+    // popup.
+    if (state.review?.activeRecord !== requestRecord) return;
     console.error('Explanation request failed:', e);
     handleExplanationError(e, requestType);
   } finally {
+    // Clear the abort handle if it's still ours (a newer click
+    // would have replaced it with its own controller).
+    if (state.review?.explanationAbort === abort) {
+      state.review.explanationAbort = null;
+    }
     // The button-collapse-to-Close happened on success; on error
     // we re-enable so the parent can retry.
     if (!state.review?.explanationCollapsed) {
@@ -3213,7 +3269,7 @@ function showReviewModeFirstTapHelpOnce() {
     <div class="rp-help-body">
       <strong>Review Mode tip:</strong> a red ✗ marks each question that needs a closer look.
       Tap <em>Why?</em> for a short explanation, <em>Show steps</em> for a worked solution,
-      or <em>Give hint</em> for a nudge that doesn't reveal the answer.
+      or <em>Give hint</em> for a nudge that tries not to reveal the answer.
     </div>
     <button type="button" class="rp-help-close" title="Got it">×</button>
   `;

@@ -18,9 +18,26 @@
 import { renderPageOffscreen } from './pdfRender.js';
 import { drawStroke } from './draw.js';
 
+// Page types where having a question is genuinely impossible —
+// suppress markers even if a stray review record somehow anchors
+// here (defensive against AI returning a coordinate on a clearly-
+// unanswerable page).
+//
+// Earlier versions also suppressed 'passage', 'composition',
+// 'instruction', 'section_divider', 'answer_key'. That was
+// wrong: in primary-school comprehension layouts a 'passage'
+// page very commonly hosts the questions BELOW the passage on
+// the same page. Treating those records as fake silently
+// dropped real review markers — Reviewer 2 caught this.
+//
+// Trimmed to types where a question record would itself be
+// evidence of an extraction bug we want to surface elsewhere,
+// not hide here. Composition / instruction / section-divider /
+// answer-key pages can be reclassified manually if a stray
+// marker shows up; that's a more honest failure mode than
+// silently dropping markers the parent expects to see.
 const NON_QUESTION_TYPES = new Set([
-  'passage', 'composition', 'cover', 'instruction',
-  'section_divider', 'blank', 'answer_key',
+  'cover', 'blank',
 ]);
 
 // Render the given PDF page into the supplied canvas at a width
@@ -145,13 +162,22 @@ export async function renderReviewPage(ctx) {
   } = ctx;
   await renderToCanvas(pdf, pageNumber, canvas, hostWidth, strokes);
   markerLayer.innerHTML = '';
-  if (!shouldRenderMarkersOnPage(paperProfile, pageNumber)) return;
 
   // Records anchored to this page only.
   const onThisPage = (reviewRecords || []).filter((r) => {
     const loc = r.question_start_location;
     return loc && loc.page === pageNumber;
   });
+  // Page-type gate runs AFTER the per-page filter. The gate now
+  // only fires if (a) there are records here AND (b) the page
+  // type is in the trimmed NON_QUESTION_TYPES set (cover or
+  // blank — impossible to genuinely host a question). If
+  // records anchor to a 'passage' or 'composition' page, we
+  // render — those types CAN host questions in real worksheets,
+  // and the upstream pipeline thinks there's something to
+  // review. Only the very-not-a-question types still suppress.
+  if (onThisPage.length === 0) return;
+  if (!shouldRenderMarkersOnPage(paperProfile, pageNumber)) return;
   const groups = groupReviewRecords(onThisPage);
 
   for (const g of groups) {
