@@ -263,13 +263,29 @@ body.app-immersive .build-badge { display: none; }
   position: relative;
   background: white;
   box-shadow: 0 4px 24px rgba(0,0,0,0.3);
-  /* Drawing surfaces own pen/touch input */
+  /* Drawing surfaces own pen/touch input. */
   touch-action: none;
+  /* Suppress iOS long-press behaviour on the worksheet:
+     - touch-callout disables the system callout (copy / define /
+       share) menu that pops up after holding a finger / pen.
+     - user-select prevents text selection from a hold-and-drag
+       gesture.
+     Without these, holding a stroke for a beat triggers iOS's
+     copy/paste UI right in the middle of the child's writing. */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 .pdf-canvas, .ink-canvas {
   display: block;
   width: 100%;
   height: auto;
+  /* Belt-and-braces: the canvas itself also blocks selection /
+     callout. Some iOS gestures fire against the canvas element
+     directly even when the parent has user-select: none. */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 .ink-canvas {
   position: absolute;
