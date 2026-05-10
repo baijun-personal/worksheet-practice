@@ -691,7 +691,18 @@ export async function requestExplanation({
         ? `TARGET page ${p.pageNumber} — the red ✗ marks the question being explained.`
         : `Context page ${p.pageNumber}.`,
     });
-    content.push({ type: 'image_url', image_url: { url: p.dataUrl, detail: 'high' } });
+    // 'low' detail intentionally — explanation calls already
+    // receive structured metadata (question label, student
+    // answer, correct answer, status, short reason) plus the
+    // red ✗ on the target page. Low-detail is the cheap-and-
+    // fast starting point; we'll evaluate whether high is worth
+    // the cost only if low produces visibly worse output during
+    // testing. Marking-stage vision calls (extract / answer
+    // key / visual compare) keep their existing 'high' setting
+    // because they have to read printed text and the child's
+    // handwriting; explanation only needs to interpret a known
+    // question, not extract from scratch.
+    content.push({ type: 'image_url', image_url: { url: p.dataUrl, detail: 'low' } });
   }
   if (!model) throw new Error('Model not set');
   const { url, headers } = buildRequest({ apiMode, apiKey, proxyEndpoint, proxyToken });

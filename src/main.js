@@ -3122,11 +3122,21 @@ async function onExplanationClick(requestType) {
 
     // Cost record on the attempt (NOT on the marking report — Phase
     // 6 surfaces these separately under "Review explanations").
+    //
+    // pages reflects the ACTUAL pages sent to the model (target
+    // plus the prev-2/next-1 context window). Recording only the
+    // target was misleading: a Why? on page 5 sends 4 images
+    // (3,4,5,6), and the cost-section breakdown should show that
+    // so a developer can spot odd context windows (start-of-paper
+    // → 2 images, end-of-paper → 3 images).
+    const sentPages = pageImages
+      .map((p) => Number(p.pageNumber))
+      .filter((n) => Number.isFinite(n));
     const costRec = buildTaskRecord({
       task_type: TASK_TYPES.EXPLANATION,
       model,
       label: `${labelForRequestType(requestType)} — ${record.question}`,
-      pages: [record.completed_page].filter((p) => p != null),
+      pages: sentPages,
       usage: result.usage,
       settings: state.settings,
     });

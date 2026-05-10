@@ -634,13 +634,19 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
 //     question_start_location: { page, x, y }   x/y normalized 0..1
 //   }
 //
-// Coordinates: the AI-suggested location (if any) is taken as a hint
-// but always validated; on any out-of-bounds / NaN / page-mismatch
-// value we fall back to a code-side snap based on the question's
-// position among other questions on the same page. The snap puts x at
-// a fixed left-margin band (questions start near the left in every
-// worksheet we've seen) and y proportional to the question's
-// numeric ordering on the page. Fully deterministic.
+// Coordinates: APPROXIMATE marker placement, not visual
+// snap-to-heading detection.
+//
+// The AI-suggested location (if any) is taken as a hint and always
+// validated; on any out-of-bounds / NaN / page-mismatch value we
+// fall back to a code-side ordinal estimate based on the question's
+// position among other questions on the same page. The fallback
+// puts x at a fixed left-margin band (questions start near the
+// left in every worksheet we've seen) and y proportional to the
+// question's numeric ordering on the page. Fully deterministic but
+// blind to actual page layout — see synthLocation() below for the
+// caveats. Marker placement is intended to be visually acceptable
+// on most pages, NOT pixel-accurate.
 function buildReviewRecords({ pairs, questions, aiQByQ }) {
   // Index pairs by base question for the position-on-page lookup.
   const pairsByPage = new Map(); // page -> [{ qn, pair }]
@@ -777,21 +783,25 @@ function qnumNumericPrefix(qn) {
   return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER;
 }
 
-// Validate the AI's coordinate hint, or fall back to an ordinal
-// estimate.
+// Estimate an approximate question_start_location for Review Mode.
+// This is NOT visual snap-to-heading detection. The marker
+// position is approximate and based on (in priority order):
 //
-// IMPORTANT: this is NOT a snap-to-Q-heading. The fallback does not
-// detect headings, columns, passages, diagrams, or page layout —
-// it only spreads questions evenly between [0.05, 0.95] of page
-// height by ordinal position. On worksheets with two-column layouts,
-// large diagrams, comprehension passages, or one long question
-// followed by short ones, the fallback will be visibly misplaced.
+//   1. The AI's coordinate hint, when it passes strict validation
+//      (page matches the extraction's page, x and y are finite
+//      numbers in [0, 1]).
+//   2. An ordinal fallback when the AI hint is missing or out of
+//      range. The fallback spreads questions evenly between
+//      [0.05, 0.95] of page height by ordinal position. It does
+//      not detect headings, columns, passages, diagrams, or page
+//      layout — on worksheets with two-column layouts, large
+//      diagrams, comprehension passages, or one long question
+//      followed by short ones, the fallback will be visibly
+//      off.
 //
-// AI hints are accepted only when they pass strict validation:
-// page matches the extraction's page (definitive), x and y are
-// finite numbers in [0, 1]. Garbage values fall through to the
-// ordinal estimate. The caller can tell which branch was used via
-// `source`: 'ai' | 'ordinal_fallback'.
+// The caller can tell which branch was used via `source`:
+//   'ai' | 'ordinal_fallback'.
+// Use ?debug=1 in Review Mode to surface this on every marker.
 function synthLocation({ aiLocation, page, qn, pairsByPage }) {
   const pg = Number(page);
   if (!Number.isFinite(pg) || pg < 1) return null;
