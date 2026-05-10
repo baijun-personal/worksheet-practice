@@ -46,6 +46,12 @@ const DEFAULTS = {
   extractionModel: 'gpt-5.4',
   textComparisonModel: 'gpt-5.4-mini',
   visualComparisonModel: 'gpt-5.4',
+  // Used for Review Mode's per-question explanation requests
+  // (Why? / Show steps / Give hint). Vision-aware because the
+  // request includes the marked-up target page image; the model
+  // also gets the surrounding 2 pages plus the next page so it
+  // sees passage / context references.
+  explanationModel: 'gpt-5.4',
   passphrase: '', // empty = unlocked; first run sets it
   unlocked: false,
 };

@@ -575,6 +575,109 @@ export async function markPairs({
   return chatJson({ apiKey, model, system: COMPARE_PROMPT, content, signal, apiMode, proxyEndpoint, proxyToken });
 }
 
+// Per-question explanation calls for Review Mode. Three flavours
+// driven by request_type: 'why', 'show_steps', 'give_hint'. All
+// share the image context (marked-up target page + previous-2 +
+// next-1 for passage / table reference) and the question metadata.
+//
+// Returns the raw text response (NOT JSON) — the explanation is a
+// short paragraph or step list that gets shown directly in the
+// popup. Adding JSON wrapping would only add noise.
+const EXPLANATION_PROMPT_BASE = `You are helping a parent understand why a primary-school worksheet question was marked the way it was.
+
+You receive:
+  - The TARGET page image with a red ✗ next to the printed question heading the parent is asking about. The student's answer is in BLUE; the printed worksheet is in BLACK.
+  - The 2 PREVIOUS pages and the NEXT page (cleanly rendered, no markup) — for passage / table / figure context. Some pages may be omitted at the start or end of the paper.
+  - Question metadata: the printed question label, what the student wrote, what the correct answer is, and a one-sentence reason from the marker.
+
+Style:
+  - Match the worksheet's language. English for English / Math / Science / English-language papers; use 简体中文 if the worksheet is in 中文.
+  - Age-appropriate for primary school (P1–P6). Short sentences, no jargon, no LaTeX.
+  - Do NOT mention the red ✗ or "the marker" or grading workflow — speak directly to the parent / child about the question.
+  - Do NOT repeat the student's answer or the correct answer verbatim — those are already visible above your response. Address the *reason*.
+  - Keep it concise. Length depends on request_type (see below).
+`;
+
+const EXPLANATION_VARIANTS = {
+  why: `Request type: WHY?
+Explain in 2–4 sentences why the correct answer is what it is, and what the common mistake is here. Be plain-language. Do not produce a bulleted list.`,
+  show_steps: `Request type: SHOW STEPS
+List the steps to solve this question, one per line, numbered. Each step is one short sentence. Aim for 3–6 steps. The last step should produce the correct answer (or directly support it for a non-numeric answer). Do not add any preamble or wrap-up.`,
+  give_hint: `Request type: GIVE HINT
+Give 1–2 sentences nudging the child toward the right approach WITHOUT revealing the correct answer. Phrase it as a question or a partial pointer ("Look at the second sentence of the passage…", "What unit does the question ask for?"). The child should still need to do the actual work after reading the hint.`,
+};
+
+export async function requestExplanation({
+  apiKey,
+  model,
+  requestType,           // 'why' | 'show_steps' | 'give_hint'
+  question,              // printed label, e.g. "Q19" or "Q5b"
+  studentAnswer,
+  expectedAnswer,
+  shortReason,
+  pageImages,            // [{ role: 'target' | 'context', pageNumber, dataUrl }]
+  signal,
+  apiMode,
+  proxyEndpoint,
+  proxyToken,
+}) {
+  const variant = EXPLANATION_VARIANTS[requestType] || EXPLANATION_VARIANTS.why;
+  const system = `${EXPLANATION_PROMPT_BASE}\n${variant}`;
+  const headerLines = [
+    `Question: ${question || '(unknown)'}`,
+    `Student wrote: ${studentAnswer || '(blank)'}`,
+    `Correct answer: ${expectedAnswer || '(unspecified)'}`,
+  ];
+  if (shortReason) headerLines.push(`Marker's reason: ${shortReason}`);
+  const content = [{ type: 'text', text: headerLines.join('\n') }];
+  for (const p of pageImages) {
+    content.push({
+      type: 'text',
+      text: p.role === 'target'
+        ? `TARGET page ${p.pageNumber} — the red ✗ marks the question being explained.`
+        : `Context page ${p.pageNumber}.`,
+    });
+    content.push({ type: 'image_url', image_url: { url: p.dataUrl, detail: 'high' } });
+  }
+  if (!model) throw new Error('Model not set');
+  const { url, headers } = buildRequest({ apiMode, apiKey, proxyEndpoint, proxyToken });
+  const body = {
+    model,
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content },
+    ],
+    temperature: 0.4, // a bit of warmth — these are explanations, not extractions
+  };
+  let resp;
+  try {
+    resp = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (e) {
+    if (e && (e.name === 'TypeError' || /failed to fetch|network/i.test(e.message || ''))) {
+      throw new Error(
+        `Could not reach ${url}. Check whether this device's network or parental-control filter is blocking that URL. Original error: ${e.message}`
+      );
+    }
+    throw e;
+  }
+  if (!resp.ok) {
+    const errText = await resp.text();
+    if (resp.status === 429) {
+      throw new Error(`429 OpenAI is rate-limiting. ${errText.slice(0, 200)}`);
+    }
+    throw new Error(`OpenAI ${resp.status}: ${errText.slice(0, 400)}`);
+  }
+  const json = await resp.json();
+  const text = json?.choices?.[0]?.message?.content;
+  if (!text) throw new Error('OpenAI response had no content');
+  return { text: String(text).trim(), raw: json, usage: json.usage };
+}
+
 async function chatJson({ apiKey, model, system, content, signal, apiMode, proxyEndpoint, proxyToken }) {
   if (!model) throw new Error('Model not set');
   const { url, headers } = buildRequest({ apiMode, apiKey, proxyEndpoint, proxyToken });

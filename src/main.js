@@ -12,10 +12,10 @@ import {
   computePaperIdentity, paperFromBuiltinCatalog, paperFromAttempt,
   paperFreshness, snapshotPaperOntoAttempt, paperFromIdentity,
 } from './paper.js';
-import { loadPdfFromBlob, renderPageToCanvas } from './pdfRender.js';
+import { loadPdfFromBlob, renderPageToCanvas, renderPageOffscreen } from './pdfRender.js';
 import { attachInkController, redrawAll } from './draw.js';
 import { flattenQuestionPage, renderAnswerPage, colorContentRatio } from './flatten.js';
-import { extractStudentAnswers, extractAnswerKey, markPairs, compareVisualPair, MODEL_PRESETS, DEFAULT_MODEL, presetForModel } from './openai.js';
+import { extractStudentAnswers, extractAnswerKey, markPairs, compareVisualPair, requestExplanation, MODEL_PRESETS, DEFAULT_MODEL, presetForModel } from './openai.js';
 import { matchExtractions, buildFinalReport, partitionPairsByModality } from './compare.js';
 import { renderReport, exportReportPdf, exportCompletedAttemptPdf } from './report.js';
 import { loadCatalog, fetchBuiltinPdf, builtinAttemptId } from './builtin.js';
@@ -2789,6 +2789,9 @@ function bindReviewUI() {
   $('review-popup')?.addEventListener('click', (ev) => {
     if (ev.target?.id === 'review-popup') closeReviewPopup();
   });
+  $('review-popup-why')?.addEventListener('click', () => onExplanationClick('why'));
+  $('review-popup-steps')?.addEventListener('click', () => onExplanationClick('show_steps'));
+  $('review-popup-hint')?.addEventListener('click', () => onExplanationClick('give_hint'));
   // Esc closes too.
   document.addEventListener('keydown', (ev) => {
     if (ev.key === 'Escape' && state.review?.activeRecord) {
@@ -2900,15 +2903,16 @@ function openReviewPopup(record) {
   state.review.activeRecord = record;
   $('review-popup-title').textContent = popupTitle(record);
   $('review-popup-body').innerHTML = popupBodyHtml(record);
-  // Reset explanation panel — will be used in Phase 4+.
-  const exp = $('review-popup-explanation');
-  if (exp) { exp.hidden = true; exp.innerHTML = ''; }
-  $('review-popup-status').textContent = '';
-  $('review-popup-status').className = 'muted small';
-  // Phase 3: explanation buttons stay visibly disabled.
-  $('review-popup-why').disabled = true;
-  $('review-popup-steps').disabled = true;
-  $('review-popup-hint').disabled = true;
+  // Reset explanation panel + button row each time. Phase 4 plan
+  // requires that re-opening the same record's popup restores the
+  // three explanation buttons (no client-side caching).
+  resetExplanationPanel();
+  // Phase 4+5: enable the explanation buttons.
+  $('review-popup-why').disabled = false;
+  $('review-popup-steps').disabled = false;
+  $('review-popup-hint').disabled = false;
+  // Telemetry per popup-open — Phase 6 will use this.
+  state.review._popupOpenedAt = Date.now();
   // Position counter (1 / N).
   const idx = recordIndex(state.review.records, record);
   $('review-popup-position').textContent =
@@ -2939,4 +2943,249 @@ async function navigateReviewRecord(delta) {
     }
   }
   openReviewPopup(target);
+}
+
+// ---------- Explanation calls (Phase 4 + 5) ------------------------------
+
+// Track per-tap stats console-only — useful in test runs to see how
+// often each button gets used and how slow the explanation calls are.
+// No network telemetry. (Phase 6 surfaces totals per session.)
+const explanationTelemetry = {
+  taps: { why: 0, show_steps: 0, give_hint: 0 },
+  totalLatencyMs: { why: 0, show_steps: 0, give_hint: 0 },
+};
+
+async function onExplanationClick(requestType) {
+  const r = state.review;
+  if (!r?.activeRecord) return;
+  const record = r.activeRecord;
+  if (!state.pdf) {
+    setReviewPopupStatus('Cannot generate — PDF not loaded.', 'error');
+    return;
+  }
+  // Disable the three explanation buttons during the call so the
+  // parent doesn't double-tap or fire a different request mid-flight.
+  setExplanationButtonsDisabled(true);
+  setReviewPopupStatus('Generating explanation…', '');
+  // Reveal explanation panel so the parent can see the call is in
+  // progress; original review content stays above (popupBody is not
+  // touched).
+  const expEl = $('review-popup-explanation');
+  expEl.hidden = false;
+  expEl.innerHTML = `<div class="rp-exp-heading">${labelForRequestType(requestType)}</div>` +
+                    `<p class="muted small">Generating…</p>`;
+  const tStart = performance.now();
+  try {
+    const pageImages = await buildExplanationContext(state.pdf, record);
+    const apiMode = state.settings.apiMode || 'direct';
+    const transport = {
+      apiKey: state.settings.openaiKey,
+      apiMode,
+      proxyEndpoint: state.settings.proxyEndpoint,
+      proxyToken: state.settings.proxyToken,
+    };
+    const model = state.settings.explanationModel
+      || state.settings.openaiModel || DEFAULT_MODEL;
+    const result = await requestExplanation({
+      ...transport,
+      model,
+      requestType,
+      question: record.question,
+      studentAnswer: pickStudentAnswerForExplanation(record),
+      expectedAnswer: pickExpectedAnswerForExplanation(record),
+      shortReason: record.short_reason || record.comment || '',
+      pageImages,
+    });
+    const tEnd = performance.now();
+    const latencyMs = Math.round(tEnd - tStart);
+    explanationTelemetry.taps[requestType] = (explanationTelemetry.taps[requestType] || 0) + 1;
+    explanationTelemetry.totalLatencyMs[requestType] = (explanationTelemetry.totalLatencyMs[requestType] || 0) + latencyMs;
+    console.info(`[review] ${requestType} for ${record.question} in ${latencyMs} ms`);
+
+    // Render the explanation. Replace the loading message; keep the
+    // original review content above it.
+    expEl.innerHTML = `<div class="rp-exp-heading">${labelForRequestType(requestType)}</div>` +
+                     escapeHtmlForPopup(result.text);
+    setReviewPopupStatus('', '');
+    // After response: per the plan, replace the three explanation
+    // buttons with a single Close. The original answer/correction
+    // block stays above. Re-opening the same popup later restores
+    // the buttons.
+    collapseExplanationButtonsToClose();
+
+    // Cost record on the attempt (NOT on the marking report — Phase
+    // 6 surfaces these separately under "Review explanations").
+    const costRec = buildTaskRecord({
+      task_type: TASK_TYPES.EXPLANATION,
+      model,
+      label: `${labelForRequestType(requestType)} — ${record.question}`,
+      pages: [record.completed_page].filter((p) => p != null),
+      usage: result.usage,
+      settings: state.settings,
+    });
+    if (state.attempt) {
+      state.attempt.explanation_costs = state.attempt.explanation_costs || [];
+      state.attempt.explanation_costs.push(costRec);
+      try { await putAttempt(state.attempt); } catch (e) { console.warn('Could not persist explanation cost:', e); }
+    }
+  } catch (e) {
+    console.error('Explanation request failed:', e);
+    handleExplanationError(e, requestType);
+  } finally {
+    // The button-collapse-to-Close happened on success; on error
+    // we re-enable so the parent can retry.
+    if (!state.review?.explanationCollapsed) {
+      setExplanationButtonsDisabled(false);
+    }
+  }
+}
+
+function setExplanationButtonsDisabled(disabled) {
+  $('review-popup-why').disabled = disabled;
+  $('review-popup-steps').disabled = disabled;
+  $('review-popup-hint').disabled = disabled;
+}
+
+function setReviewPopupStatus(text, kind) {
+  const el = $('review-popup-status');
+  if (!el) return;
+  el.textContent = text || '';
+  let cls;
+  if (kind === 'error')      cls = 'error';
+  else if (kind === 'warn')  cls = 'warn-text';
+  else if (kind === 'ok')    cls = 'ok-text';
+  else                       cls = 'muted small';
+  el.className = cls + (cls.includes('small') ? '' : ' small');
+}
+
+function collapseExplanationButtonsToClose() {
+  // Per plan Phase 4: after the response, replace the three
+  // explanation buttons with a single Close. We just hide the row
+  // and rely on the existing × in the header (or click-outside /
+  // Esc) to close the popup. Re-opening this same record's popup
+  // (via Prev/Next or re-tap on the marker) will reset the row.
+  const row = document.querySelector('.review-popup-explain-row');
+  if (row) row.style.display = 'none';
+  if (state.review) state.review.explanationCollapsed = true;
+}
+
+function handleExplanationError(e, requestType) {
+  const msg = String(e?.message || e || '');
+  let userMsg;
+  if (/429|rate.?limit/i.test(msg)) {
+    userMsg = 'OpenAI is rate-limiting. Wait a moment and try again.';
+  } else if (/network|failed to fetch|could not reach|TypeError/i.test(msg)) {
+    userMsg = `Couldn't reach OpenAI. Check your connection.`;
+  } else if (/no content|not valid JSON|unexpected/i.test(msg)) {
+    userMsg = 'Got an unexpected response. Try again.';
+  } else {
+    userMsg = msg;
+  }
+  const expEl = $('review-popup-explanation');
+  if (expEl) {
+    expEl.innerHTML = `<div class="rp-exp-heading">${labelForRequestType(requestType)}</div>` +
+                     `<p class="error">${escapeHtmlForPopup(userMsg)}</p>` +
+                     `<p class="muted small">Tap the same button to retry.</p>`;
+  }
+  setReviewPopupStatus(userMsg, 'error');
+  // Leave buttons enabled so the parent can retry directly. Don't
+  // collapse to Close — they may want to try a different request.
+  setExplanationButtonsDisabled(false);
+  if (state.review) state.review.explanationCollapsed = false;
+}
+
+// Reset popup explanation panel + buttons when a NEW record is
+// opened (otherwise the collapsed state from a previous popup
+// would leak into the next one).
+function resetExplanationPanel() {
+  const exp = $('review-popup-explanation');
+  if (exp) { exp.hidden = true; exp.innerHTML = ''; }
+  const row = document.querySelector('.review-popup-explain-row');
+  if (row) row.style.display = '';
+  if (state.review) state.review.explanationCollapsed = false;
+  setReviewPopupStatus('', '');
+}
+
+function labelForRequestType(rt) {
+  switch (rt) {
+    case 'why':        return 'Why?';
+    case 'show_steps': return 'Show steps';
+    case 'give_hint':  return 'Give hint';
+    default:           return 'Explanation';
+  }
+}
+
+function escapeHtmlForPopup(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function pickStudentAnswerForExplanation(record) {
+  if (Array.isArray(record.parts) && record.parts.length > 0) {
+    return record.parts.map((p) => `(${p.part}) ${p.student_answer || '(blank)'}`).join('; ');
+  }
+  return record.student_answer || '(blank)';
+}
+function pickExpectedAnswerForExplanation(record) {
+  if (Array.isArray(record.parts) && record.parts.length > 0) {
+    return record.parts.map((p) => `(${p.part}) ${p.matched_expected || '—'}`).join('; ');
+  }
+  return record.expected_answer || record.short_display_answer || '—';
+}
+
+// Render the target page with a red ✗ stamped at the question
+// location, plus prev-2 and next-1 pages clean. Returns
+// [{ role, pageNumber, dataUrl }, ...] in document order.
+//
+// Render DPI is intentionally fixed at 150 (the same default as
+// the marking submission DPI). The model needs to read printed
+// text near the marker; lower DPI risks losing detail on dense
+// MCQ option grids.
+async function buildExplanationContext(pdf, record) {
+  const dpi = 150;
+  const targetPage = record.completed_page;
+  if (!Number.isFinite(targetPage) || targetPage < 1) {
+    throw new Error('Review record has no anchor page — cannot build explanation context');
+  }
+  const x = record.question_start_location?.x ?? 0.06;
+  const y = record.question_start_location?.y ?? 0.5;
+
+  const renderClean = async (pageNum) => {
+    const r = await renderPageOffscreen(pdf, pageNum, dpi);
+    return { dataUrl: r.canvas.toDataURL('image/jpeg', 0.85) };
+  };
+
+  // Target with ✗ overlay.
+  const r = await renderPageOffscreen(pdf, targetPage, dpi);
+  const ctx = r.ctx;
+  const cx = Math.round(x * r.widthPx);
+  const cy = Math.round(y * r.heightPx);
+  const size = Math.max(28, Math.round(r.heightPx * 0.04));
+  ctx.save();
+  ctx.strokeStyle = '#c0392b';
+  ctx.lineWidth = Math.max(4, Math.round(size * 0.18));
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx - size / 2, cy - size / 2);
+  ctx.lineTo(cx + size / 2, cy + size / 2);
+  ctx.moveTo(cx + size / 2, cy - size / 2);
+  ctx.lineTo(cx - size / 2, cy + size / 2);
+  ctx.stroke();
+  ctx.restore();
+  const targetDataUrl = r.canvas.toDataURL('image/jpeg', 0.85);
+
+  const pageImages = [];
+  for (let p = Math.max(1, targetPage - 2); p < targetPage; p++) {
+    pageImages.push({ role: 'context', pageNumber: p, dataUrl: (await renderClean(p)).dataUrl });
+  }
+  pageImages.push({ role: 'target', pageNumber: targetPage, dataUrl: targetDataUrl });
+  if (targetPage + 1 <= pdf.numPages) {
+    pageImages.push({
+      role: 'context',
+      pageNumber: targetPage + 1,
+      dataUrl: (await renderClean(targetPage + 1)).dataUrl,
+    });
+  }
+  return pageImages;
 }

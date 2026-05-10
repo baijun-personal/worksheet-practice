@@ -181,6 +181,7 @@ export const TASK_TYPES = {
   TEXT_COMPARISON: 'text_comparison',
   VISUAL_COMPARISON: 'visual_comparison',
   DETECTION: 'detection',
+  EXPLANATION: 'explanation',
 };
 
 export function taskTypeLabel(t) {
@@ -190,6 +191,7 @@ export function taskTypeLabel(t) {
     case 'text_comparison':       return 'Text compare';
     case 'visual_comparison':     return 'Visual compare';
     case 'detection':             return 'Page detection';
+    case 'explanation':           return 'Review explanation';
     default:                      return t || '?';
   }
 }
