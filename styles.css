@@ -276,6 +276,32 @@ body.app-immersive .build-badge { display: none; }
   font-size: 14px;
   line-height: 1.45;
 }
+.review-popup-body .rp-help {
+  background: #fff5d6;
+  border: 1px solid #f0e2a8;
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #5a4a00;
+}
+.review-popup-body .rp-help-body { flex: 1; line-height: 1.4; }
+.review-popup-body .rp-help-close {
+  background: transparent;
+  border: 1px solid transparent;
+  font-size: 18px;
+  line-height: 1;
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+  border-radius: 4px;
+  color: #5a4a00;
+  flex-shrink: 0;
+}
+.review-popup-body .rp-help-close:hover { background: rgba(0,0,0,0.06); }
 .review-popup-body .rp-row { margin-bottom: 10px; }
 .review-popup-body .rp-row:last-child { margin-bottom: 0; }
 .review-popup-body .rp-label { font-weight: 600; color: var(--muted); margin-right: 6px; }

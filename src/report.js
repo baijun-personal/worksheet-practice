@@ -18,8 +18,21 @@ export function renderReport(report, mountNodes) {
   `;
 
   if (costEl) {
-    costEl.innerHTML = report.app_usage ? renderCostCard(report.app_usage) : '';
-    costEl.style.display = report.app_usage ? '' : 'none';
+    let costHtml = report.app_usage ? renderCostCard(report.app_usage) : '';
+    // Phase 6 — explanation costs from Review Mode are stored on
+    // the attempt (not on the marking report) and grow over time
+    // as the parent taps Why? / Show steps / Give hint. Render them
+    // as a separate sub-section so they don't get confused with the
+    // marking cost. The list is read from the live attempt in main.js
+    // and passed via mountNodes.explanationCosts.
+    const explanationCosts = Array.isArray(mountNodes.explanationCosts)
+      ? mountNodes.explanationCosts
+      : (Array.isArray(report.explanation_costs) ? report.explanation_costs : []);
+    if (explanationCosts.length > 0) {
+      costHtml += renderExplanationCostsCard(explanationCosts);
+    }
+    costEl.innerHTML = costHtml;
+    costEl.style.display = costHtml ? '' : 'none';
   }
 
   const results = Array.isArray(report.questions) ? report.questions : [];
@@ -253,6 +266,45 @@ function renderCostCard(u) {
         <th>#</th><th>Task</th><th>Model</th><th>Pages</th>
         <th>Uncached in</th><th>Cached in</th><th>Output</th><th>Cost</th>
       </tr></thead><tbody>${taskRows}</tbody></table>
+    </details>`;
+}
+
+// Phase 6: separate cost section for Review Mode explanation
+// requests. Rendered after the main marking-cost card so the parent
+// can see at a glance what Why? / Show steps / Give hint taps cost
+// vs. what marking itself cost.
+function renderExplanationCostsCard(records) {
+  const fmtTokens = (n) => Number(n || 0).toLocaleString();
+  const fmtUsd = (n) => '$' + (Number(n) || 0).toFixed(4);
+  let total = 0;
+  let promptTokens = 0, cachedTokens = 0, completionTokens = 0;
+  for (const r of records) {
+    total += Number(r.estimated_cost_usd) || 0;
+    promptTokens += Number(r.prompt_tokens) || 0;
+    cachedTokens += Number(r.cached_tokens) || 0;
+    completionTokens += Number(r.completion_tokens) || 0;
+  }
+  const rows = records.map((r, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td>${escapeHtml(r.label || '')}</td>
+      <td>${escapeHtml(r.model || '')}</td>
+      <td>${fmtTokens(Math.max(0, (r.prompt_tokens || 0) - (r.cached_tokens || 0)))}</td>
+      <td>${fmtTokens(r.cached_tokens)}</td>
+      <td>${fmtTokens(r.completion_tokens)}</td>
+      <td>${fmtUsd(r.estimated_cost_usd)}</td>
+    </tr>`).join('');
+  return `
+    <h2 style="margin-top:24px">Review explanations <span class="muted small">(${records.length} tap${records.length === 1 ? '' : 's'})</span></h2>
+    <p><strong>Total ${fmtUsd(total)}</strong>
+       <span class="muted small">across ${records.length} explanation tap${records.length === 1 ? '' : 's'}.
+       Tokens: input ${fmtTokens(promptTokens)} (cached ${fmtTokens(cachedTokens)}) + output ${fmtTokens(completionTokens)}.</span></p>
+    <details>
+      <summary class="muted small">Per-tap breakdown</summary>
+      <table style="margin-top:8px"><thead><tr>
+        <th>#</th><th>Tap</th><th>Model</th>
+        <th>Uncached in</th><th>Cached in</th><th>Output</th><th>Cost</th>
+      </tr></thead><tbody>${rows}</tbody></table>
     </details>`;
 }
 

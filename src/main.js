@@ -2744,6 +2744,11 @@ function showReport(merged) {
     notAttemptedEl: $('report-not-attempted'),
     tableEl: $('report-table'),
     rawEl: $('raw-json'),
+    // Phase 6: live attempt-resident explanation costs surface as
+    // a separate "Review explanations" section in the cost card.
+    // Read from the live attempt so re-rendering after a Why? tap
+    // shows the new cost without needing the marking pass to rerun.
+    explanationCosts: state.attempt?.explanation_costs || [],
   });
 }
 
@@ -2776,7 +2781,24 @@ function triggerDownload(blob, filename) {
 function bindReviewUI() {
   $('review-back-btn')?.addEventListener('click', () => {
     closeReviewPopup();
-    setStage('report');
+    // Re-render the report so the "Review explanations" cost
+    // section reflects any taps the parent made in this session.
+    if (state.reportJson) showReport(state.reportJson);
+    else setStage('report');
+    // Phase 6 telemetry summary: log totals on the way out so
+    // the developer can see what the parent actually used. No
+    // network telemetry — console only per the plan.
+    if (typeof explanationTelemetry !== 'undefined') {
+      const tt = explanationTelemetry.taps;
+      const lat = explanationTelemetry.totalLatencyMs;
+      const sum = (tt.why || 0) + (tt.show_steps || 0) + (tt.give_hint || 0);
+      if (sum > 0) {
+        const avg = (rt) => (tt[rt] ? Math.round(lat[rt] / tt[rt]) : 0);
+        console.info(`[review] session totals: why=${tt.why || 0} (avg ${avg('why')}ms), ` +
+          `show_steps=${tt.show_steps || 0} (avg ${avg('show_steps')}ms), ` +
+          `give_hint=${tt.give_hint || 0} (avg ${avg('give_hint')}ms)`);
+      }
+    }
   });
   $('review-prev-page-btn')?.addEventListener('click', () => navigateReviewPage(-1));
   $('review-next-page-btn')?.addEventListener('click', () => navigateReviewPage(+1));
@@ -2903,6 +2925,10 @@ function openReviewPopup(record) {
   state.review.activeRecord = record;
   $('review-popup-title').textContent = popupTitle(record);
   $('review-popup-body').innerHTML = popupBodyHtml(record);
+  // Phase 6 inline help: once-per-device first-tap tooltip
+  // explaining what the X means and what the buttons do. Stored
+  // dismissal so it doesn't reappear.
+  showReviewModeFirstTapHelpOnce();
   // Reset explanation panel + button row each time. Phase 4 plan
   // requires that re-opening the same record's popup restores the
   // three explanation buttons (no client-side caching).
@@ -3104,6 +3130,36 @@ function resetExplanationPanel() {
   if (row) row.style.display = '';
   if (state.review) state.review.explanationCollapsed = false;
   setReviewPopupStatus('', '');
+}
+
+// Once-per-device inline help shown the first time the parent
+// opens the Review popup. Explains the marker convention and what
+// the three explanation buttons do. Sets a localStorage flag on
+// dismissal so subsequent popups skip the tooltip.
+function showReviewModeFirstTapHelpOnce() {
+  const KEY = 'wsp.reviewHelpDismissed.v1';
+  try { if (localStorage.getItem(KEY) === '1') return; }
+  catch { return; }
+  // Insert as the first child of the popup body so it's visible
+  // before the answer rows. Has its own × so dismissal doesn't
+  // close the popup.
+  const body = $('review-popup-body');
+  if (!body || body.querySelector('.rp-help')) return;
+  const help = document.createElement('div');
+  help.className = 'rp-help';
+  help.innerHTML = `
+    <div class="rp-help-body">
+      <strong>Review Mode tip:</strong> a red ✗ marks each question that needs a closer look.
+      Tap <em>Why?</em> for a short explanation, <em>Show steps</em> for a worked solution,
+      or <em>Give hint</em> for a nudge that doesn't reveal the answer.
+    </div>
+    <button type="button" class="rp-help-close" title="Got it">×</button>
+  `;
+  body.insertBefore(help, body.firstChild);
+  help.querySelector('.rp-help-close').addEventListener('click', () => {
+    help.remove();
+    try { localStorage.setItem(KEY, '1'); } catch {}
+  });
 }
 
 function labelForRequestType(rt) {
