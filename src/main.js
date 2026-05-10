@@ -10,7 +10,7 @@ import {
 } from './storage.js';
 import {
   computePaperIdentity, paperFromBuiltinCatalog, paperFromAttempt,
-  paperFreshness, snapshotPaperOntoAttempt,
+  paperFreshness, snapshotPaperOntoAttempt, paperFromIdentity,
 } from './paper.js';
 import { loadPdfFromBlob, renderPageToCanvas } from './pdfRender.js';
 import { attachInkController, redrawAll } from './draw.js';
@@ -969,16 +969,21 @@ async function onAutoClassifyClick() {
     });
     state.detectionResult = result;
     // Stamp results onto the paper profile (in memory + IndexedDB).
-    // Kept as confirmed_by_user: false until the user clicks Confirm
-    // in the (Stage G) confirmation UI.
-    if (state.paperProfile) {
-      const merged = mergeDetectionIntoPaper(state.paperProfile, result);
-      state.paperProfile = await putPaper(merged);
-      // Reflect derived ranges in the form so the parent can see them
-      // and edit if needed even before the confirmation UI lands.
-      $('question-pages').value = pageArrayToRange(state.paperProfile.question_pages);
-      $('answer-pages').value = pageArrayToRange(state.paperProfile.answer_pages);
+    // For first-time uploads the profile may not exist yet — create
+    // one from state.paperIdentity + the detection result.
+    let paper = state.paperProfile;
+    if (!paper) {
+      if (!state.paperIdentity) {
+        throw new Error('Internal error: paperIdentity missing — re-pick the PDF and retry.');
+      }
+      paper = paperFromIdentity(state.paperIdentity, $('pdf-status').textContent || '');
     }
+    const merged = mergeDetectionIntoPaper(paper, result);
+    state.paperProfile = await putPaper(merged);
+    // Reflect derived ranges in the form so the parent can see them
+    // and edit if needed even before clicking Confirm.
+    $('question-pages').value = pageArrayToRange(state.paperProfile.question_pages);
+    $('answer-pages').value = pageArrayToRange(state.paperProfile.answer_pages);
     const counts = result.pages.reduce((acc, p) => {
       acc[p.type] = (acc[p.type] || 0) + 1;
       return acc;
@@ -1030,36 +1035,190 @@ function mergeDetectionIntoPaper(paper, detectionResult) {
   };
 }
 
-// Lightweight inline summary of detected page types. Stage G will
-// replace this with a full per-page editor (highlight low-confidence,
-// allow type edits, Confirm / Re-detect / manual fallback buttons).
+// Per-page confirmation UI. Driven by state.paperProfile.pages so a
+// fresh paper profile (no detection ever run) can also use this view
+// — the table will simply show 'unknown' for every page.
+//
+// Edits flow:
+//   - Each page row has a <select> for its type.
+//   - On change, the page is updated in state.paperProfile.pages,
+//     manually_edited is set true, the question/answer-page ranges are
+//     recomputed and reflected in both the form and the saved paper
+//     profile, and confirmed_by_user is reset to false (an edit
+//     invalidates a previous confirm).
+// Confirm / Re-detect / Use manual:
+//   - Confirm sets confirmed_by_user true and saves.
+//   - Re-detect re-runs detection (warns that manual edits will be
+//     overwritten).
+//   - Use manual collapses the editor; user types ranges by hand.
+const PAGE_TYPE_OPTIONS = [
+  'question', 'answer_key', 'passage', 'composition',
+  'cover', 'instruction', 'section_divider', 'blank', 'unknown',
+];
+
 function renderPageClassifyPanel() {
   const panel = $('page-classify-panel');
   if (!panel) return;
-  const result = state.detectionResult;
-  if (!result) {
+  const paper = state.paperProfile;
+  if (!paper || !Array.isArray(paper.pages) || paper.pages.length === 0) {
     panel.hidden = true;
     panel.innerHTML = '';
     return;
   }
-  const rows = result.pages.map((p) => {
-    const lowConf = (p.confidence || 0) < 0.7;
-    const flag = (p.type === 'unknown' || lowConf) ? ' ⚠' : '';
-    return `<tr${lowConf || p.type === 'unknown' ? ' class="warning-row"' : ''}>
-      <td>p.${p.page}</td>
-      <td>${escapeAttr(p.type)}${flag}</td>
-      <td>${(p.confidence || 0).toFixed(2)}</td>
+
+  const detectionRan = !!state.detectionResult ||
+    paper.pages.some((p) => Number.isFinite(p.confidence) && p.confidence > 0);
+  const lowConfCount = paper.pages.filter((p) => (p.confidence || 0) < 0.7).length;
+  const unknownCount = paper.pages.filter((p) => p.type === 'unknown').length;
+
+  const summaryLine = detectionRan
+    ? `Detected ${paper.pages.length} pages — ` +
+      `${lowConfCount} low-confidence, ${unknownCount} unknown.`
+    : `${paper.pages.length} pages — none classified yet. Use Auto-classify, or set page types manually.`;
+
+  const rangeLine = `Question pages: ${pageArrayToRange(paper.question_pages) || '(none)'}; ` +
+                    `Answer pages: ${pageArrayToRange(paper.answer_pages) || '(none)'}.`;
+
+  const rows = paper.pages.map((p) => {
+    const lowConf = Number.isFinite(p.confidence) && p.confidence < 0.7 && p.confidence > 0;
+    const isUnknown = p.type === 'unknown';
+    const rowClass = (isUnknown || lowConf) ? 'class="warning-row"' : '';
+    const confText = Number.isFinite(p.confidence) && p.confidence > 0
+      ? p.confidence.toFixed(2)
+      : (p.manually_edited ? 'manual' : '—');
+    const flagBits = [];
+    if (isUnknown) flagBits.push('unknown');
+    if (lowConf) flagBits.push(`low ${confText}`);
+    if (p.manually_edited) flagBits.push('edited');
+    const flag = flagBits.length ? ' (' + flagBits.join(', ') + ')' : '';
+    const opts = PAGE_TYPE_OPTIONS.map((t) =>
+      `<option value="${t}"${t === p.type ? ' selected' : ''}>${t}</option>`
+    ).join('');
+    return `<tr ${rowClass}>
+      <td style="white-space:nowrap">p.${p.page}${flag}</td>
+      <td><select data-page="${p.page}" class="page-type-select" style="font-size:13px">${opts}</select></td>
       <td>${escapeAttr(p.reason || '')}</td>
     </tr>`;
   }).join('');
+
+  const confirmedTag = paper.confirmed_by_user
+    ? '<span class="muted small">✓ confirmed</span>'
+    : '<span class="muted small">not yet confirmed</span>';
+
   panel.hidden = false;
   panel.innerHTML = `
-    <details open style="margin-top:8px">
-      <summary class="muted small">Detected page types (${result.pages.length}) — review and edit ranges above. Full editor coming next.</summary>
-      <table style="margin-top:8px"><thead>
-        <tr><th>Page</th><th>Type</th><th>Conf.</th><th>Reason</th></tr>
-      </thead><tbody>${rows}</tbody></table>
+    <details open style="margin-top:12px; border:1px solid var(--border); border-radius:6px; padding:8px 12px">
+      <summary><strong>Page setup</strong> — ${summaryLine} ${confirmedTag}</summary>
+      <p class="muted small" style="margin:8px 0">${escapeAttr(rangeLine)}</p>
+      <div class="actions" style="margin:8px 0">
+        <button id="confirm-pages-btn" type="button" class="primary">Confirm page setup</button>
+        <button id="redetect-pages-btn" type="button">Re-detect</button>
+        <button id="manual-pages-btn" type="button">Use manual page ranges instead</button>
+      </div>
+      <p class="muted small" id="confirm-pages-status"></p>
+      <table style="margin-top:8px; width:100%"><thead><tr>
+        <th style="text-align:left">Page</th>
+        <th style="text-align:left">Type</th>
+        <th style="text-align:left">Reason</th>
+      </tr></thead><tbody>${rows}</tbody></table>
     </details>`;
+
+  // Wire row-level edits.
+  for (const sel of panel.querySelectorAll('.page-type-select')) {
+    sel.addEventListener('change', onPageTypeChange);
+  }
+  $('confirm-pages-btn').addEventListener('click', onConfirmPages);
+  $('redetect-pages-btn').addEventListener('click', onRedetectClick);
+  $('manual-pages-btn').addEventListener('click', onUseManualPagesClick);
+}
+
+async function onPageTypeChange(ev) {
+  const paper = state.paperProfile;
+  if (!paper) return;
+  const pageNum = Number(ev.currentTarget.dataset.page);
+  const newType = String(ev.currentTarget.value);
+  const idx = paper.pages.findIndex((p) => p.page === pageNum);
+  if (idx < 0) return;
+  paper.pages[idx] = {
+    ...paper.pages[idx],
+    type: newType,
+    manually_edited: true,
+    // confidence unchanged — this reflects the AI's confidence at
+    // detection time. The "edited" flag marks human override.
+  };
+  // Recompute derived ranges and sync form.
+  const { question_pages, answer_pages } = rangesFromPages(paper.pages);
+  paper.question_pages = question_pages;
+  paper.answer_pages = answer_pages;
+  paper.confirmed_by_user = false; // edit invalidates a prior confirm
+  state.paperProfile = await putPaper(paper);
+  $('question-pages').value = pageArrayToRange(paper.question_pages);
+  $('answer-pages').value = pageArrayToRange(paper.answer_pages);
+  // Re-render to refresh confirmed-tag and warning row classes.
+  renderPageClassifyPanel();
+}
+
+async function onConfirmPages() {
+  const paper = state.paperProfile;
+  if (!paper) return;
+  // Sanity-check before confirming: at least one question page must
+  // exist. If there's no answer key, that's allowed (warned at
+  // submission time) but worth surfacing here too.
+  const issues = [];
+  if (!paper.question_pages || paper.question_pages.length === 0) {
+    issues.push('No question pages selected — at least one is required.');
+  }
+  if (!paper.answer_pages || paper.answer_pages.length === 0) {
+    issues.push('No answer pages selected. Marking will skip the answer-key compare stage.');
+  }
+  if (issues.some((s) => /required/.test(s))) {
+    setConfirmStatus(issues.join(' '), 'error');
+    return;
+  }
+  paper.confirmed_by_user = true;
+  state.paperProfile = await putPaper(paper);
+  setConfirmStatus(
+    issues.length > 0
+      ? `Confirmed with warning: ${issues.join(' ')}`
+      : `Confirmed. Practice picker will use these pages.`,
+    'ok',
+  );
+  renderPageClassifyPanel();
+}
+
+async function onRedetectClick() {
+  const paper = state.paperProfile;
+  const editedCount = paper?.pages?.filter((p) => p.manually_edited).length || 0;
+  if (editedCount > 0) {
+    const ok = confirm(
+      `Re-detection will overwrite the AI classifications on every page, ` +
+      `including the ${editedCount} page(s) you've manually edited. Manual edits will be lost.\n\n` +
+      `Continue?`
+    );
+    if (!ok) return;
+  }
+  await onAutoClassifyClick();
+}
+
+function onUseManualPagesClick() {
+  // Just collapse the editor — the question-pages / answer-pages
+  // inputs above the panel are the manual-entry fallback. We don't
+  // discard the paper profile; this is a "I'll do it by hand for
+  // now" escape hatch.
+  const panel = $('page-classify-panel');
+  if (!panel) return;
+  panel.hidden = true;
+  setAutoClassifyStatus(
+    'Using manual page ranges. Edit Question pages / Answer pages above as needed. Auto-classify can be re-run later.',
+    'ok',
+  );
+}
+
+function setConfirmStatus(text, kind) {
+  const el = $('confirm-pages-status');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = 'small ' + (kind === 'error' ? 'error' : 'muted');
 }
 
 async function runColorCheck() {

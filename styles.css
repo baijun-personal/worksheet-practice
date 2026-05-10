@@ -101,6 +101,9 @@ button.tool-btn.active { background: var(--accent); color: white; border-color: 
   border-radius: 6px;
   font-size: 13px;
 }
+/* Page-classify panel: highlight low-confidence and unknown rows. */
+tr.warning-row { background: var(--warning-bg); }
+tr.warning-row > td { border-top: 1px solid var(--warning-border); }
 
 /* Practice stage */
 .practice-toolbar {

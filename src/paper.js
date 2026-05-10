@@ -249,6 +249,32 @@ function synthesizePagesFromRanges(totalPages, questionPages, answerPages, reaso
   return out;
 }
 
+// Build an empty paper profile from a paper identity. Used when an
+// upload reaches Auto-classify without a stored profile — the
+// detection result is then merged into this skeleton (see
+// mergeDetectionIntoPaper in main.js).
+export function paperFromIdentity(identity, title) {
+  if (!identity || !identity.paper_id) {
+    throw new Error('paperFromIdentity: identity.paper_id required');
+  }
+  return {
+    paper_id: identity.paper_id,
+    title: title || identity.pdf_name || '',
+    source: identity.source || 'upload',
+    built_in_id: identity.built_in_id || null,
+    pdf_hash: identity.pdf_hash || null,
+    pdf_name: identity.pdf_name || '',
+    pdf_byte_length: identity.pdf_byte_length || 0,
+    pdf_page_count: identity.pdf_page_count || 0,
+    question_pages: [],
+    answer_pages: [],
+    pages: [],
+    confirmed_by_user: false,
+    setup_costs: [],
+    updated_at: new Date().toISOString(),
+  };
+}
+
 // Snapshot the question/answer page ranges from a paper profile onto
 // an attempt at attempt-start time. Profile edits made AFTER this
 // snapshot don't retroactively change the in-progress attempt — see
