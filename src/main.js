@@ -1460,8 +1460,26 @@ async function onStartPracticeImpl() {
   if (rangesOverlap(questionPages, answerPages)) {
     if (!confirm('Question and answer page ranges overlap. Continue anyway?')) return;
   }
+  // API-key/proxy preflight. The "ready to mark?" question depends on
+  // which API mode the user picked:
+  //   - direct: needs an OpenAI key on this device
+  //   - proxy:  needs a proxy URL + token; the OpenAI key lives on
+  //             the Worker server-side, not here.
+  // We were unconditionally asking for openaiKey, so users in proxy
+  // mode (key on the Worker, not in the form) saw a misleading
+  // "No OpenAI API key set" prompt. Branch on apiMode instead.
   const apiKey = $('openai-key').value.trim();
-  if (!apiKey) {
+  const apiModeSel = (document.querySelector('input[name="api-mode"]:checked')?.value) || 'direct';
+  const proxyEndpoint = $('proxy-endpoint').value.trim();
+  const proxyToken = $('proxy-token').value;
+  if (apiModeSel === 'proxy') {
+    if (!proxyEndpoint || !proxyToken) {
+      if (!confirm(
+        'Proxy mode is selected but the Proxy URL or token is empty. ' +
+        'You can still practise, but submitting for marking will fail. Continue?'
+      )) return;
+    }
+  } else if (!apiKey) {
     if (!confirm('No OpenAI API key set. You can still practise, but submitting for marking will fail. Continue?')) return;
   }
   state.settings = saveSettings({
