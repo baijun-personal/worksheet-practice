@@ -22,8 +22,12 @@ import { loadCatalog, fetchBuiltinPdf, builtinAttemptId } from './builtin.js';
 import { composeFourUpA4, composeContactSheetA4, chunkInto } from './fourup.js';
 import { buildTaskRecord, aggregateTasks, TASK_TYPES } from './cost.js';
 import { runPageDetection, rangesFromPages } from './detect.js';
+import {
+  renderReviewPage, pagesWithReviews, recordIndex,
+  popupBodyHtml, popupTitle, lowConfidenceBannerHtml,
+} from './review.js';
 
-const STAGES = ['unlock', 'setup', 'practice', 'marking', 'report'];
+const STAGES = ['unlock', 'setup', 'practice', 'marking', 'report', 'review'];
 
 const state = {
   stage: 'setup',
@@ -449,6 +453,7 @@ async function init() {
   bindPracticeUI();
   bindMarkingUI();
   bindReportUI();
+  bindReviewUI();
   setupScrollRails();
   $('reset-btn').addEventListener('click', resetApp);
 }
@@ -2687,6 +2692,7 @@ function bindReportUI() {
     el.hidden = !el.hidden;
     $('toggle-raw-json').textContent = el.hidden ? 'Show raw JSON' : 'Hide raw JSON';
   });
+  $('open-review-btn')?.addEventListener('click', onOpenReviewMode);
   $('download-report-pdf').addEventListener('click', async (ev) => {
     if (!state.reportJson) return;
     const btn = ev.currentTarget;
@@ -2755,4 +2761,182 @@ function triggerDownload(blob, filename) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+// --- Review Mode (Phase 2 + 3) -------------------------------------------
+//
+// State while Review Mode is active:
+//   state.review = {
+//     records,         // report.review_records
+//     pages,           // pagesWithReviews(records) — sorted unique
+//     pageIdx,         // index into pages[]
+//     activeRecord,    // currently popped record (Phase 3+) or null
+//   }
+
+function bindReviewUI() {
+  $('review-back-btn')?.addEventListener('click', () => {
+    closeReviewPopup();
+    setStage('report');
+  });
+  $('review-prev-page-btn')?.addEventListener('click', () => navigateReviewPage(-1));
+  $('review-next-page-btn')?.addEventListener('click', () => navigateReviewPage(+1));
+  $('review-popup-close')?.addEventListener('click', closeReviewPopup);
+  $('review-popup-prev')?.addEventListener('click', () => navigateReviewRecord(-1));
+  $('review-popup-next')?.addEventListener('click', () => navigateReviewRecord(+1));
+  // Phase 4+5 will replace these no-op handlers — for now the
+  // explanation buttons stay disabled in HTML and have no listeners.
+  // Click-outside-card closes the popup.
+  $('review-popup')?.addEventListener('click', (ev) => {
+    if (ev.target?.id === 'review-popup') closeReviewPopup();
+  });
+  // Esc closes too.
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && state.review?.activeRecord) {
+      closeReviewPopup();
+    }
+  });
+}
+
+async function onOpenReviewMode() {
+  if (!state.reportJson) return;
+  const records = Array.isArray(state.reportJson.review_records)
+    ? state.reportJson.review_records
+    : [];
+  // "Review Mode disabled" path: no answer key → no review records
+  // (extract-only papers, or papers without keys).
+  // Surface the message but still let the user open the stage so
+  // the empty state explains what's going on.
+  state.review = {
+    records,
+    pages: pagesWithReviews(records),
+    pageIdx: 0,
+    activeRecord: null,
+  };
+  setStage('review');
+  await renderReviewStage();
+}
+
+async function renderReviewStage() {
+  const r = state.review;
+  if (!r) return;
+  const banner = $('review-low-conf-banner');
+  if (banner) {
+    const html = lowConfidenceBannerHtml(r.records);
+    if (html) {
+      banner.hidden = false;
+      banner.innerHTML = html;
+    } else {
+      banner.hidden = true;
+      banner.innerHTML = '';
+    }
+  }
+  const empty = $('review-empty-state');
+  const frame = $('review-stage-frame');
+  if (r.records.length === 0) {
+    if (empty) {
+      empty.hidden = false;
+      // Distinguish "no key" vs "all correct".
+      const hasAnswerKey = (state.attempt?.answerPages?.length || 0) > 0;
+      empty.textContent = hasAnswerKey
+        ? 'All correct! No questions to review.'
+        : 'Review Mode needs an answer key. This paper doesn\'t have one.';
+    }
+    if (frame) frame.hidden = true;
+    $('review-counter').textContent = '';
+    $('review-page-label').textContent = '—';
+    return;
+  }
+  if (empty) { empty.hidden = true; empty.textContent = ''; }
+  if (frame) frame.hidden = false;
+  if (r.pages.length === 0) {
+    $('review-counter').textContent = `${r.records.length} record(s), no page anchors`;
+    $('review-page-label').textContent = '—';
+    return;
+  }
+  await renderReviewCurrentPage();
+}
+
+async function renderReviewCurrentPage() {
+  const r = state.review;
+  if (!r || r.pages.length === 0 || !state.pdf) return;
+  const pageNumber = r.pages[r.pageIdx];
+  const host = $('review-page-host');
+  const canvas = $('review-pdf-canvas');
+  const layer = $('review-marker-layer');
+  if (!host || !canvas || !layer) return;
+  const hostWidth = Math.min(1000, host.parentElement?.clientWidth || 800) - 8;
+  await renderReviewPage({
+    pdf: state.pdf,
+    paperProfile: state.paperProfile,
+    reviewRecords: r.records,
+    pageNumber,
+    canvas,
+    markerLayer: layer,
+    hostWidth,
+    onMarkerClick: (record) => openReviewPopup(record),
+  });
+  $('review-page-label').textContent = `Page ${pageNumber}`;
+  // Counter: how many review records on this page / total records.
+  const onThisPage = r.records.filter((rec) => rec.question_start_location?.page === pageNumber);
+  $('review-counter').textContent =
+    `${onThisPage.length} on this page · ${r.records.length} total`;
+  // Disable nav buttons at the ends.
+  $('review-prev-page-btn').disabled = r.pageIdx === 0;
+  $('review-next-page-btn').disabled = r.pageIdx === r.pages.length - 1;
+}
+
+async function navigateReviewPage(delta) {
+  const r = state.review;
+  if (!r) return;
+  const next = r.pageIdx + delta;
+  if (next < 0 || next >= r.pages.length) return;
+  r.pageIdx = next;
+  await renderReviewCurrentPage();
+}
+
+function openReviewPopup(record) {
+  const popup = $('review-popup');
+  if (!popup || !state.review) return;
+  state.review.activeRecord = record;
+  $('review-popup-title').textContent = popupTitle(record);
+  $('review-popup-body').innerHTML = popupBodyHtml(record);
+  // Reset explanation panel — will be used in Phase 4+.
+  const exp = $('review-popup-explanation');
+  if (exp) { exp.hidden = true; exp.innerHTML = ''; }
+  $('review-popup-status').textContent = '';
+  $('review-popup-status').className = 'muted small';
+  // Phase 3: explanation buttons stay visibly disabled.
+  $('review-popup-why').disabled = true;
+  $('review-popup-steps').disabled = true;
+  $('review-popup-hint').disabled = true;
+  // Position counter (1 / N).
+  const idx = recordIndex(state.review.records, record);
+  $('review-popup-position').textContent =
+    idx.idx >= 0 ? `${idx.idx + 1} / ${idx.total}` : '— / —';
+  popup.hidden = false;
+}
+
+function closeReviewPopup() {
+  const popup = $('review-popup');
+  if (popup) popup.hidden = true;
+  if (state.review) state.review.activeRecord = null;
+}
+
+async function navigateReviewRecord(delta) {
+  const r = state.review;
+  if (!r || !r.activeRecord) return;
+  const idx = recordIndex(r.records, r.activeRecord);
+  if (idx.idx === -1) return;
+  const target = delta < 0 ? idx.prev : idx.next;
+  if (!target) return;
+  // If the target lives on a different page, navigate the page too.
+  const targetPage = target.question_start_location?.page;
+  if (Number.isFinite(targetPage)) {
+    const newPageIdx = r.pages.indexOf(targetPage);
+    if (newPageIdx !== -1 && newPageIdx !== r.pageIdx) {
+      r.pageIdx = newPageIdx;
+      await renderReviewCurrentPage();
+    }
+  }
+  openReviewPopup(target);
 }

@@ -27,6 +27,7 @@
       <span data-stage="practice">Practice</span>
       <span data-stage="marking">Marking</span>
       <span data-stage="report">Report</span>
+      <span data-stage="review">Review</span>
     </nav>
     <div class="topbar-actions">
       <span id="autosave-indicator" class="autosave" aria-live="polite">saved</span>
@@ -351,12 +352,57 @@
       <div id="report-not-attempted" class="card"></div>
       <div id="report-table" class="card"></div>
       <div class="actions">
+        <button id="open-review-btn" type="button" class="primary">Open Review Mode</button>
         <button id="download-report-pdf" type="button">Download report PDF</button>
         <button id="download-attempt-pdf" type="button">Download completed attempt PDF</button>
         <button id="toggle-raw-json" type="button">Show raw JSON</button>
       </div>
       <pre id="raw-json" class="raw-json" hidden></pre>
     </section>
+
+    <!-- Review -->
+    <section id="stage-review" class="stage" hidden>
+      <div class="review-toolbar">
+        <button id="review-back-btn" type="button" title="Back to report">‹ Report</button>
+        <span id="review-page-label" class="review-page-label">—</span>
+        <span class="sep"></span>
+        <button id="review-prev-page-btn" type="button" title="Previous page">◀</button>
+        <button id="review-next-page-btn" type="button" title="Next page">▶</button>
+        <span class="sep"></span>
+        <span id="review-counter" class="muted small">—</span>
+      </div>
+      <div id="review-low-conf-banner" class="warning" hidden></div>
+      <div id="review-empty-state" hidden></div>
+      <div id="review-stage-frame">
+        <div id="review-page-host" class="review-page-host">
+          <canvas id="review-pdf-canvas" class="review-pdf-canvas"></canvas>
+          <div id="review-marker-layer" class="review-marker-layer"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Review popup -->
+    <div id="review-popup" class="review-popup" hidden>
+      <div class="review-popup-card" role="dialog" aria-modal="true" aria-labelledby="review-popup-title">
+        <header class="review-popup-header">
+          <h2 id="review-popup-title">Review</h2>
+          <button id="review-popup-close" type="button" class="link-btn" title="Close">×</button>
+        </header>
+        <div id="review-popup-body" class="review-popup-body"></div>
+        <div id="review-popup-explanation" class="review-popup-explanation" hidden></div>
+        <div class="review-popup-actions">
+          <button id="review-popup-prev" type="button">‹ Previous</button>
+          <span id="review-popup-position" class="muted small">— / —</span>
+          <button id="review-popup-next" type="button">Next ›</button>
+        </div>
+        <div class="review-popup-explain-row">
+          <button id="review-popup-why" type="button" class="primary" disabled>Why?</button>
+          <button id="review-popup-steps" type="button" disabled>Show steps</button>
+          <button id="review-popup-hint" type="button" disabled>Give hint</button>
+        </div>
+        <p id="review-popup-status" class="muted small"></p>
+      </div>
+    </div>
 
   </main>
 

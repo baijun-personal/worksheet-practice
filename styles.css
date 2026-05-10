@@ -163,6 +163,153 @@ body.app-immersive .ios-hint { display: none; }
 .build-badge.stale { color: #c0392b; border-color: #c0392b; }
 body.app-immersive .build-badge { display: none; }
 
+/* ---------- Review Mode ---------- */
+.review-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 49px;
+  z-index: 4;
+  flex-wrap: wrap;
+}
+.review-toolbar button {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+.review-page-label { font-weight: 600; min-width: 80px; }
+.review-page-host {
+  position: relative;
+  margin: 16px auto;
+  max-width: 1000px;
+  background: white;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.15);
+}
+.review-pdf-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.review-marker-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none; /* children re-enable per-marker */
+}
+.review-marker {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: auto;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  /* Center the marker on its (x, y) anchor. The X glyph and label
+     sit on a horizontal row anchored to the left of the question. */
+  transform: translate(-12px, -50%);
+}
+.review-marker-x {
+  font-size: 22px;
+  line-height: 1;
+  font-weight: bold;
+  color: #c0392b;
+  text-shadow: 0 0 3px rgba(255,255,255,0.9), 0 0 6px rgba(255,255,255,0.6);
+}
+.review-marker-label {
+  background: rgba(255,255,255,0.92);
+  border: 1px solid #c0392b;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #2a2200;
+  white-space: nowrap;
+  max-width: 240px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+}
+.review-marker.unclear .review-marker-x { color: #b07a00; }
+.review-marker.unclear .review-marker-label { border-color: #b07a00; }
+
+#review-empty-state {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 16px;
+}
+
+/* Review popup */
+.review-popup {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0,0,0,0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom);
+}
+.review-popup[hidden] { display: none; }
+.review-popup-card {
+  background: var(--card);
+  border-radius: 10px;
+  width: min(560px, 100% - 16px);
+  max-height: calc(100% - 16px);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 18px 48px rgba(0,0,0,0.30);
+}
+.review-popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.review-popup-header h2 { margin: 0; font-size: 17px; }
+.review-popup-body {
+  padding: 14px 16px;
+  overflow-y: auto;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.review-popup-body .rp-row { margin-bottom: 10px; }
+.review-popup-body .rp-row:last-child { margin-bottom: 0; }
+.review-popup-body .rp-label { font-weight: 600; color: var(--muted); margin-right: 6px; }
+.review-popup-body .rp-correct { color: #1e7a34; font-weight: 500; }
+.review-popup-body .rp-wrong { color: #c0392b; font-weight: 500; }
+.review-popup-body .rp-part { padding: 8px 12px; background: rgba(0,0,0,0.03); border-radius: 6px; margin-bottom: 8px; }
+.review-popup-body .rp-part-label { font-weight: 600; margin-bottom: 4px; }
+.review-popup-explanation {
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.review-popup-explanation .rp-exp-heading { font-weight: 600; color: var(--muted); margin-bottom: 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+.review-popup-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+  gap: 8px;
+}
+.review-popup-explain-row {
+  display: flex;
+  gap: 8px;
+  padding: 8px 16px 14px;
+  flex-wrap: wrap;
+}
+.review-popup-explain-row button:disabled { opacity: 0.5; cursor: not-allowed; }
+#review-popup-status { padding: 0 16px 12px; min-height: 1em; }
+#review-popup-status.error { color: var(--error); }
+#review-popup-status.warn-text { color: #b07a00; }
+
 /* In-page confirm modal. Used in fullscreen practice mode so that
    iOS Safari doesn't kick the user out of fullscreen — native
    confirm() requires the OS chrome and breaks immersive layouts.
