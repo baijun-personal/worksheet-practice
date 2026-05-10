@@ -212,12 +212,12 @@ body.app-immersive .build-badge { display: none; }
   min-height: calc(100vh - 100px);
   padding: 16px;
   overflow: auto;
-  /* Keep the rubber-band scroll inside this element. Without this,
-     scrolling past the top/bottom of the worksheet propagates to the
-     body and on iPad Safari pulls down the URL bar / kicks us out of
-     fullscreen — even though our scrollable content is the
-     page-stage. */
-  overscroll-behavior: contain;
+  /* Stop ALL overscroll on iPad Safari. `contain` lets the rubber-
+     band still happen inside the element; `none` blocks even that,
+     which is what we need — any rubber-band gesture is exactly what
+     Safari interprets as "user wants the URL bar back" and exits
+     fullscreen. */
+  overscroll-behavior: none;
   display: flex;
   justify-content: center;
   align-items: flex-start;
@@ -348,7 +348,22 @@ body.app-immersive {
    Exit fullscreen button move into the practice toolbar instead. */
 body.app-immersive .topbar { display: none; }
 body.app-immersive #app { padding: 0; max-width: none; margin: 0; }
-body.app-immersive #stage-practice { padding: 0; }
+/* Pin the practice stage to the visual viewport in immersive mode.
+   With position:fixed there's literally nothing for a scroll
+   gesture to bubble to outside this rectangle, so iPad Safari
+   can't interpret a vertical drag as "show URL bar / leave
+   fullscreen". 100svh stays correct as the URL bar shows/hides. */
+body.app-immersive #stage-practice {
+  padding: 0;
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100svh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
 body.app-immersive .practice-toolbar {
   top: 0;
   /* Compact toolbar: smaller padding + tight gap + nowrap so the
@@ -388,19 +403,18 @@ body.app-immersive #page-indicator {
   min-width: 70px;
   flex-shrink: 0;
 }
-/* Keep the autosave indicator + Exit button visible at the right
-   even when the row scrolls. */
+/* Keep the autosave indicator + Fullscreen toggle visible at the
+   right even when the row scrolls. */
 body.app-immersive #autosave-indicator-practice,
-body.app-immersive #exit-fullscreen-btn {
+body.app-immersive #fullscreen-toggle-btn {
   flex-shrink: 0;
 }
 
-/* Show the Exit fullscreen button + the toolbar-internal autosave
-   indicator only while immersive. Hidden otherwise so the topbar's
-   autosave indicator handles non-immersive views. */
-#exit-fullscreen-btn { display: none; }
+/* Fullscreen toggle is always available in the practice toolbar so
+   the parent can re-enter immersive mode after Safari kicked them
+   out. The label flips between "Fullscreen" and "Exit" via JS. */
+#fullscreen-toggle-btn { display: inline-block; }
 #autosave-indicator-practice { display: none; }
-body.app-immersive #exit-fullscreen-btn { display: inline-block; }
 body.app-immersive #autosave-indicator-practice {
   display: inline-block;
   margin-left: auto;

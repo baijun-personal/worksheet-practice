@@ -163,6 +163,7 @@ async function enterFullscreenPractice() {
   // #page-stage.
   document.documentElement.classList.add('app-immersive-html');
   swapToolbarLabels(true);
+  refreshFullscreenToggleLabel();
   const root = document.documentElement;
   const req = root.requestFullscreen || root.webkitRequestFullscreen;
   if (typeof req === 'function') {
@@ -180,6 +181,24 @@ async function enterFullscreenPractice() {
     setTimeout(() => loadCurrentPage(), 50);
   }
   setTimeout(refreshScrollRails, 100);
+}
+
+// Update the Fullscreen toggle button's label to reflect the current
+// state: "Fullscreen" / short "FS" when not immersive, "Exit" when
+// immersive. Called on every transition.
+function refreshFullscreenToggleLabel() {
+  const btn = $('fullscreen-toggle-btn');
+  if (!btn) return;
+  const inImmersive = document.body.classList.contains('app-immersive');
+  if (inImmersive) {
+    btn.dataset.short = 'Exit';
+    btn.textContent = 'Exit';
+    btn.title = 'Exit full-screen practice mode';
+  } else {
+    btn.dataset.short = 'FS';
+    btn.textContent = 'Fullscreen';
+    btn.title = 'Enter full-screen practice mode';
+  }
 }
 
 // Swap practice-toolbar buttons that carry a `data-short` attribute
@@ -202,6 +221,7 @@ async function exitFullscreenPractice() {
   document.body.classList.remove('app-immersive');
   document.documentElement.classList.remove('app-immersive-html');
   swapToolbarLabels(false);
+  refreshFullscreenToggleLabel();
   const exitFn = document.exitFullscreen || document.webkitExitFullscreen;
   if (document.fullscreenElement || document.webkitFullscreenElement) {
     if (typeof exitFn === 'function') {
@@ -333,6 +353,7 @@ async function init() {
       document.body.classList.remove('app-immersive');
       document.documentElement.classList.remove('app-immersive-html');
       swapToolbarLabels(false);
+      refreshFullscreenToggleLabel();
     }
   });
   document.addEventListener('webkitfullscreenchange', () => {
@@ -340,6 +361,7 @@ async function init() {
       document.body.classList.remove('app-immersive');
       document.documentElement.classList.remove('app-immersive-html');
       swapToolbarLabels(false);
+      refreshFullscreenToggleLabel();
     }
   });
 
@@ -1747,7 +1769,15 @@ function bindPracticeUI() {
   $('page-nav-next').addEventListener('click', () => navigateBy(1));
   $('submit-btn').addEventListener('click', onSubmit);
   $('back-to-setup-btn').addEventListener('click', onBackToSetup);
-  $('exit-fullscreen-btn').addEventListener('click', () => exitFullscreenPractice());
+  $('fullscreen-toggle-btn').addEventListener('click', () => {
+    if (document.body.classList.contains('app-immersive')) {
+      exitFullscreenPractice();
+    } else {
+      enterFullscreenPractice();
+    }
+    refreshFullscreenToggleLabel();
+  });
+  refreshFullscreenToggleLabel();
 
   document.addEventListener('keydown', (ev) => {
     if (state.stage !== 'practice') return;
