@@ -368,14 +368,14 @@ body.app-immersive .build-badge { display: none; }
    never reach the body and never trigger Safari's chrome. */
 html.app-immersive-html,
 body.app-immersive {
+  /* Lock outer scrolling so iPad's body-scroll rubber-band can't
+     reach the URL bar. Don't constrain touch-action on body, though
+     — earlier we set touch-action:pan-y here, which on iPad Safari
+     intercepted button taps before they could reach the toolbar.
+     Buttons need plain default touch behaviour to fire reliably. */
   overflow: hidden;
   overscroll-behavior: none;
   -webkit-overflow-scrolling: auto;
-  /* touch-action:pan-y on the body itself blocks pinch-zoom of the
-     page chrome but lets the inner #page-stage handle its own touch.
-     Without this iPad will sometimes sneak in a viewport zoom that
-     also exits fullscreen. */
-  touch-action: pan-y;
   height: 100%;
   width: 100%;
 }
@@ -387,11 +387,18 @@ body.app-immersive .topbar { display: none; }
 body.app-immersive #app { padding: 0; max-width: none; margin: 0; }
 body.app-immersive #stage-practice { padding: 0; }
 body.app-immersive .practice-toolbar {
+  /* Pin the toolbar to the visual viewport in immersive mode.
+     position:sticky on iPad Safari, combined with the
+     overflow:hidden body, was creating a stacking context that
+     made the toolbar non-interactive (taps on the buttons did
+     nothing). position:fixed avoids the sticky-context tangle
+     and guarantees the toolbar receives its own pointer events.
+     z-index keeps it above the page-stage-frame. */
+  position: fixed;
   top: 0;
-  /* Compact toolbar: smaller padding + tight gap. flex-wrap is
-     left at the default (wrap) — buttons are now small enough
-     that the row fits on iPad portrait without forcing a scroll
-     container, which on iPad Safari ate button taps. */
+  left: 0;
+  right: 0;
+  z-index: 10;
   padding: 6px 10px;
   gap: 6px;
 }
@@ -465,12 +472,14 @@ body.app-immersive #page-indicator { display: none; }
 
 body.app-immersive #page-stage-frame {
   position: relative;
-  /* 100svh = smallest viewport height; on iPad Safari this excludes the
-     URL bar / home indicator so the frame stays inside the visible area
-     even when Safari's chrome is showing. Falls back to 100vh on browsers
-     that don't support svh. */
-  height: calc(100vh - 56px);
-  height: calc(100svh - 56px);
+  /* The toolbar is now position:fixed in immersive mode (sticky was
+     making it non-interactive on iPad Safari), so the frame has to
+     leave room for it via margin-top. height = remaining viewport.
+     100svh excludes Safari's URL bar / home indicator; 100vh is the
+     fallback. */
+  margin-top: 50px;
+  height: calc(100vh - 50px);
+  height: calc(100svh - 50px);
   overflow: hidden;
 }
 body.app-immersive #page-stage {
