@@ -393,13 +393,21 @@ body.app-immersive .practice-toolbar {
      made the toolbar non-interactive (taps on the buttons did
      nothing). position:fixed avoids the sticky-context tangle
      and guarantees the toolbar receives its own pointer events.
-     z-index keeps it above the page-stage-frame. */
+     z-index keeps it above the page-stage-frame.
+
+     padding-top honours safe-area-inset-top so the buttons are
+     pushed BELOW the iOS status bar in Add-to-Home-Screen
+     standalone mode. With apple-mobile-web-app-status-bar-style
+     "black-translucent" iOS overlays a translucent status bar
+     on top of our content; without this padding the toolbar's
+     top half hides behind it and iOS captures taps in that
+     region. */
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
   z-index: 10;
-  padding: 6px 10px;
+  padding: calc(6px + env(safe-area-inset-top)) 10px 6px;
   gap: 6px;
 }
 body.app-immersive .page-stage {
@@ -484,12 +492,14 @@ body.app-immersive #page-stage-frame {
   position: relative;
   /* The toolbar is now position:fixed in immersive mode (sticky was
      making it non-interactive on iPad Safari), so the frame has to
-     leave room for it via margin-top. height = remaining viewport.
-     100svh excludes Safari's URL bar / home indicator; 100vh is the
-     fallback. */
-  margin-top: 50px;
-  height: calc(100vh - 50px);
-  height: calc(100svh - 50px);
+     leave room for it via margin-top. The toolbar's effective
+     height is 50px + env(safe-area-inset-top) (padding-top respects
+     the status-bar overlay in iOS standalone mode), so the frame
+     margin and height match. 100svh excludes Safari's URL bar /
+     home indicator; 100vh is the fallback. */
+  margin-top: calc(50px + env(safe-area-inset-top));
+  height: calc(100vh - 50px - env(safe-area-inset-top));
+  height: calc(100svh - 50px - env(safe-area-inset-top));
   overflow: hidden;
 }
 body.app-immersive #page-stage {
@@ -508,7 +518,9 @@ body.app-immersive #page-stage {
 body.app-immersive .scroll-rail-v {
   display: block;
   position: fixed;
-  top: 56px;          /* sits below the practice toolbar */
+  /* Below the toolbar — which itself sits below the iOS status bar
+     in standalone mode via env(safe-area-inset-top). */
+  top: calc(56px + env(safe-area-inset-top));
   right: 0;
   bottom: calc(64px + env(safe-area-inset-bottom));
   width: 28px;
