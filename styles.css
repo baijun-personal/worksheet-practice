@@ -94,6 +94,8 @@ button.tool-btn.active { background: var(--accent); color: white; border-color: 
 .muted { color: var(--muted); font-size: 13px; }
 .muted.small { font-size: 12px; }
 .error { color: var(--error); font-size: 13px; }
+.warn-text { color: #b07a00; font-weight: 500; font-size: 13px; }
+.ok-text { color: #1e7a34; font-weight: 500; font-size: 13px; }
 .warning {
   background: var(--warning-bg);
   border: 1px solid var(--warning-border);

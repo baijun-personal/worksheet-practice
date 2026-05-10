@@ -279,12 +279,24 @@ export function paperFromIdentity(identity, title) {
 // an attempt at attempt-start time. Profile edits made AFTER this
 // snapshot don't retroactively change the in-progress attempt — see
 // the Stage E spec.
-export function snapshotPaperOntoAttempt(paper, attempt) {
+//
+// When the practice picker has narrowed the run to a subset of
+// question pages (via the chip selector — Stage H), the caller can
+// pass `overrides.questionPages` / `overrides.answerPages` to keep
+// those subsets instead of using the paper's full page ranges. The
+// answer-pages default still comes from the paper, since answer
+// pages are an internal-only concern (the picker hides them).
+export function snapshotPaperOntoAttempt(paper, attempt, overrides) {
   if (!paper) return attempt;
+  const o = overrides || {};
   return {
     ...attempt,
     paperId: paper.paper_id,
-    questionPages: [...(paper.question_pages || [])],
-    answerPages: [...(paper.answer_pages || [])],
+    questionPages: Array.isArray(o.questionPages)
+      ? [...o.questionPages]
+      : [...(paper.question_pages || [])],
+    answerPages: Array.isArray(o.answerPages)
+      ? [...o.answerPages]
+      : [...(paper.answer_pages || [])],
   };
 }

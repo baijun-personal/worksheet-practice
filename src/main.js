@@ -19,7 +19,7 @@ import { extractStudentAnswers, extractAnswerKey, markPairs, compareVisualPair, 
 import { matchExtractions, buildFinalReport, partitionPairsByModality } from './compare.js';
 import { renderReport, exportReportPdf, exportCompletedAttemptPdf } from './report.js';
 import { loadCatalog, fetchBuiltinPdf, builtinAttemptId } from './builtin.js';
-import { composeFourUpA4, chunkInto } from './fourup.js';
+import { composeFourUpA4, composeContactSheetA4, chunkInto } from './fourup.js';
 import { buildTaskRecord, aggregateTasks, TASK_TYPES } from './cost.js';
 import { runPageDetection, rangesFromPages } from './detect.js';
 
@@ -1024,6 +1024,15 @@ function onSourceChange() {
   state.pdfBlob = null;
   state.selectedWorksheet = null;
   state.resumableAttempt = null;
+  // Clear paper-profile and detection state too — switching source
+  // means the next loaded PDF gets a fresh resolve. Without this,
+  // a stale state.detectionResult from the previous PDF could
+  // cause the page-classify panel to claim "detection ran" against
+  // a paper it didn't actually run on.
+  state.paperProfile = null;
+  state.paperIdentity = null;
+  state.detectionResult = null;
+  state.paperStaleWarning = null;
   $('pdf-status').textContent = '';
   $('color-warning').hidden = true;
   $('builtin-resume').hidden = true;
@@ -1187,9 +1196,24 @@ async function resolvePaperProfile(opts) {
     if (fresh === 'stale') {
       console.warn(
         `Paper profile for ${identity.paper_id} looks stale ` +
-        `(stored hash/size differs from loaded PDF). ` +
-        `Re-confirmation will be required after Stage G ships.`
+        `(stored hash/size differs from loaded PDF).`
       );
+      // Surface the staleness to the parent in the UI rather than
+      // letting them silently use a profile against a different PDF
+      // version. confirmed_by_user is reset so the practice picker
+      // shows the manual inputs (not the locked chip view), and the
+      // "Auto-classify status" line carries the message right above
+      // the per-page editor where they'd act on it.
+      paper = { ...paper, confirmed_by_user: false };
+      paper = await putPaper(paper);
+      // Defer the status display until the panel is rendered (which
+      // happens after this function returns). setStaleWarning gets
+      // checked + cleared at panel-render time.
+      state.paperStaleWarning =
+        'This paper appears to have changed since you confirmed its page setup. ' +
+        'Re-confirm the page types or click Re-detect to re-classify.';
+    } else {
+      state.paperStaleWarning = null;
     }
     state.paperProfile = paper;
     return paper;
@@ -1269,7 +1293,7 @@ async function onAutoClassifyClick() {
     const summary = Object.entries(counts).map(([k, v]) => `${k}: ${v}`).join(', ');
     setAutoClassifyStatus(
       `Done. ${summary}. Detection cost: $${result.costRecord.estimated_cost_usd.toFixed(4)} ` +
-      `(model ${result.costRecord.model}). Review or edit ranges below; full confirmation UI is coming next.`,
+      `(model ${result.costRecord.model}). Review the per-page table below, edit any types you disagree with, then click Confirm page setup.`,
       'ok',
     );
     renderPageClassifyPanel();
@@ -1290,7 +1314,12 @@ function setAutoClassifyStatus(text, kind) {
   const el = $('auto-classify-status');
   if (!el) return;
   el.textContent = text || '';
-  el.className = 'small ' + (kind === 'error' ? 'error' : kind === 'ok' ? 'muted' : 'muted');
+  let cls;
+  if (kind === 'error')      cls = 'error';
+  else if (kind === 'warn')  cls = 'warn-text';
+  else if (kind === 'ok')    cls = 'ok-text';
+  else                       cls = 'muted';
+  el.className = 'small ' + cls;
 }
 
 // Merge a detection result into a paper profile, recomputing the
@@ -1401,10 +1430,22 @@ function renderPageClassifyPanel() {
     ? '<span class="muted small">✓ confirmed</span>'
     : '<span class="muted small">not yet confirmed</span>';
 
+  // Stale-paper banner. Set in resolvePaperProfile when the
+  // stored profile's pdf_hash / byte length doesn't match the
+  // currently-loaded PDF. Cleared once shown so the parent isn't
+  // nagged again after they re-confirm.
+  const staleBanner = state.paperStaleWarning
+    ? `<div class="warning" style="margin:8px 0">
+         <strong>This paper appears to have changed.</strong>
+         ${escapeAttr(state.paperStaleWarning.replace(/^This paper appears to have changed\.\s*/, ''))}
+       </div>`
+    : '';
+
   panel.hidden = false;
   panel.innerHTML = `
     <details open style="margin-top:12px; border:1px solid var(--border); border-radius:6px; padding:8px 12px">
       <summary><strong>Page setup</strong> — ${summaryLine} ${confirmedTag}</summary>
+      ${staleBanner}
       <p class="muted small" style="margin:8px 0">${escapeAttr(rangeLine)}</p>
       <div class="actions" style="margin:8px 0">
         <button id="confirm-pages-btn" type="button" class="primary">Confirm page setup</button>
@@ -1418,6 +1459,9 @@ function renderPageClassifyPanel() {
         <th style="text-align:left">Reason</th>
       </tr></thead><tbody>${rows}</tbody></table>
     </details>`;
+  // The stale banner is one-shot — clear after rendering so any
+  // future render (after confirm / re-detect) doesn't keep showing.
+  if (state.paperStaleWarning) state.paperStaleWarning = null;
 
   // Wire row-level edits.
   for (const sel of panel.querySelectorAll('.page-type-select')) {
@@ -1471,13 +1515,26 @@ async function onConfirmPages() {
     setConfirmStatus(issues.join(' '), 'error');
     return;
   }
+  // Two-step confirm when there are non-blocking warnings: first
+  // click surfaces the warning visibly, second click commits. This
+  // catches the case where a parent has accidentally not selected
+  // any answer pages on a paper that should have them.
+  if (issues.length > 0 && state._confirmPagesWarnedFor !== paper.paper_id) {
+    state._confirmPagesWarnedFor = paper.paper_id;
+    setConfirmStatus(
+      `Warning: ${issues.join(' ')} Click Confirm again to proceed anyway.`,
+      'warn',
+    );
+    return;
+  }
+  state._confirmPagesWarnedFor = null;
   paper.confirmed_by_user = true;
   state.paperProfile = await putPaper(paper);
   setConfirmStatus(
     issues.length > 0
       ? `Confirmed with warning: ${issues.join(' ')}`
       : `Confirmed. Practice picker will use these pages.`,
-    'ok',
+    issues.length > 0 ? 'warn' : 'ok',
   );
   renderPageClassifyPanel();
   applyConfirmedPagesPickerVisibility();
@@ -1601,7 +1658,13 @@ function setConfirmStatus(text, kind) {
   const el = $('confirm-pages-status');
   if (!el) return;
   el.textContent = text || '';
-  el.className = 'small ' + (kind === 'error' ? 'error' : 'muted');
+  // 'error' (red), 'warn' (amber), 'ok' (green), default neutral.
+  let cls;
+  if (kind === 'error')      cls = 'error';
+  else if (kind === 'warn')  cls = 'warn-text';
+  else if (kind === 'ok')    cls = 'ok-text';
+  else                       cls = 'muted';
+  el.className = 'small ' + cls;
 }
 
 async function runColorCheck() {
@@ -1801,26 +1864,27 @@ async function onStartPracticeImpl() {
     pdfName = $('pdf-input').files?.[0]?.name || 'worksheet.pdf';
   }
 
-  // Create attempt. paperId snapshots the resolved profile so later
-  // edits to the profile don't retroactively mutate this attempt.
-  // questionPages / answerPages on the attempt are still authoritative
-  // for marking; the paperId is just a back-reference.
-  state.attempt = {
+  // Create attempt. snapshotPaperOntoAttempt copies the paper_id +
+  // pages onto the attempt — the form-supplied questionPages /
+  // answerPages override the paper's defaults to honour any chip-
+  // picker subset selection. Profile edits AFTER this snapshot
+  // can't retroactively mutate this attempt's stroke layout (Stage
+  // E spec).
+  let attempt = {
     id: attemptId,
     createdAt: Date.now(),
     pdfName,
     builtinId,
-    paperId: state.paperProfile?.paper_id || null,
     pdfBlob: state.sourceMode === 'upload' ? state.pdfBlob : null,
     pdfPath: state.sourceMode === 'builtin' ? state.selectedWorksheet.pdfPath : null,
     subject,
     level,
-    questionPages,
-    answerPages,
     currentPage: questionPages[0],
     reportJson: null,
     status: 'in_progress',
   };
+  attempt = snapshotPaperOntoAttempt(state.paperProfile, attempt, { questionPages, answerPages });
+  state.attempt = attempt;
   await putAttempt(state.attempt);
   state.currentPage = questionPages[0];
   updateStartPracticeButton();
@@ -2183,12 +2247,47 @@ async function onSubmit() {
   }
   state.flattenedCompletedPages = completedPagesAll.map(({ pageNumber, dataUrl }) => ({ pageNumber, dataUrl }));
 
-  // Render answer pages once.
-  const answerImages = [];
+  // Render answer pages. ALWAYS render one full-page image per
+  // answer page — the visual-compare stage indexes them by page
+  // number and needs full resolution. answerImagesByPage feeds
+  // that lookup.
+  //
+  // For the answer-key EXTRACTION call we additionally allow a
+  // contact-sheet variant in batch4_fourup mode, which packs ≤4
+  // answer pages into a single image and saves significant input
+  // tokens on multi-page answer keys. Other modes keep the
+  // individual full pages so dense MCQ grids stay legible to the
+  // extraction model.
+  const answerImagesByPage = [];
   for (const pageNum of aPages) {
     if (state.cancelMarking) return abortMarking('Cancelled');
     const dataUrl = await renderAnswerPage(state.pdf, pageNum, dpi);
-    answerImages.push({ pageNumber: pageNum, dataUrl });
+    answerImagesByPage.push({ pageNumber: pageNum, dataUrl });
+  }
+
+  let answerImages;
+  if (mode === 'batch4_fourup' && aPages.length > 1) {
+    answerImages = [];
+    const chunks = chunkInto(aPages, 4);
+    for (const chunk of chunks) {
+      if (state.cancelMarking) return abortMarking('Cancelled');
+      const tilePages = chunk.map((n) => ({ pageNumber: n }));
+      const composed = await composeContactSheetA4(state.pdf, tilePages, {
+        dpi: 200,
+        labelPrefix: 'Answer page',
+        labelSuffix: '', // no "not student answer" — these are the key
+      });
+      answerImages.push({
+        pageNumber: chunk[0],
+        dataUrl: composed.dataUrl,
+        contactSheet: true,
+        includedPageNumbers: composed.includedPageNumbers,
+      });
+    }
+  } else {
+    // Re-use the per-page renders for the extraction call; no
+    // re-render needed.
+    answerImages = answerImagesByPage;
   }
 
   // Now build per-batch image arrays, composing 4-up sheets where requested.
@@ -2418,7 +2517,10 @@ async function onSubmit() {
   const visualResults = [];
   if (visualPairs.length > 0 && match.keysProvided) {
     const completedByPage = new Map(completedPagesAll.map((p) => [p.pageNumber, p]));
-    const answerByPage = new Map(answerImages.map((p) => [p.pageNumber, p]));
+    // answerImagesByPage = always full-page individual renders, even
+    // when answerImages is contact-sheet packed for the extraction
+    // call. Visual compare needs the full per-page resolution.
+    const answerByPage = new Map(answerImagesByPage.map((p) => [p.pageNumber, p]));
     let vCount = 0;
     for (const pair of visualPairs) {
       if (state.cancelMarking) break;
