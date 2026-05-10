@@ -1768,10 +1768,61 @@ async function onUndo() {
 
 async function onClearPage() {
   if (!state.attempt) return;
-  if (!confirm(`Clear all writing on this page?`)) return;
+  // confirmInPage instead of native confirm() — iOS Safari forces an
+  // exit from fullscreen whenever it shows a native dialog, breaking
+  // immersive practice mode. The in-page modal stays inside the
+  // fullscreened root element so the user remains immersive.
+  if (!(await confirmInPage(`Clear all writing on this page?`, { okLabel: 'Clear', danger: true }))) return;
   await clearStrokesForPage(state.attempt.id, state.currentPage);
   const inkCanvas = $('ink-canvas');
   inkCanvas.getContext('2d').clearRect(0, 0, inkCanvas.width, inkCanvas.height);
+}
+
+// Lightweight in-page confirm dialog. Native confirm() forces iOS
+// Safari to exit fullscreen (the system dialog needs the OS chrome
+// back), so anywhere we want to stay immersive — practice-stage
+// actions like Clear page — we use this instead. Returns a
+// Promise<boolean>.
+function confirmInPage(message, opts = {}) {
+  return new Promise((resolve) => {
+    const okLabel = opts.okLabel || 'OK';
+    const cancelLabel = opts.cancelLabel || 'Cancel';
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.setAttribute('role', 'dialog');
+    backdrop.setAttribute('aria-modal', 'true');
+    backdrop.innerHTML = `
+      <div class="modal-card">
+        <p class="modal-msg"></p>
+        <div class="modal-actions">
+          <button type="button" class="modal-cancel">${escapeAttr(cancelLabel)}</button>
+          <button type="button" class="modal-ok ${opts.danger ? 'danger' : 'primary'}">${escapeAttr(okLabel)}</button>
+        </div>
+      </div>`;
+    backdrop.querySelector('.modal-msg').textContent = String(message || '');
+    // Append into the fullscreen element if there is one (so the
+    // modal stays inside fullscreen and inherits its stacking
+    // context). Otherwise fall back to body.
+    const host = document.fullscreenElement || document.body;
+    host.appendChild(backdrop);
+    const close = (value) => {
+      backdrop.remove();
+      resolve(value);
+    };
+    backdrop.querySelector('.modal-ok').addEventListener('click', () => close(true));
+    backdrop.querySelector('.modal-cancel').addEventListener('click', () => close(false));
+    // Click outside the card cancels.
+    backdrop.addEventListener('click', (ev) => {
+      if (ev.target === backdrop) close(false);
+    });
+    // Escape cancels.
+    backdrop.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') { ev.preventDefault(); close(false); }
+      if (ev.key === 'Enter')  { ev.preventDefault(); close(true); }
+    });
+    // Focus the OK button so Enter / Space activates it.
+    setTimeout(() => backdrop.querySelector('.modal-ok')?.focus(), 0);
+  });
 }
 
 // --- Marking pipeline -----------------------------------------------------
