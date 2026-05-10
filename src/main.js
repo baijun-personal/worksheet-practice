@@ -1103,15 +1103,33 @@ function renderPageClassifyPanel() {
     return;
   }
 
-  const detectionRan = !!state.detectionResult ||
-    paper.pages.some((p) => Number.isFinite(p.confidence) && p.confidence > 0);
-  const lowConfCount = paper.pages.filter((p) => (p.confidence || 0) < 0.7).length;
+  // detectionRan is the right signal for "the AI saw this" — curated
+  // metadata (paperFromBuiltinCatalog) marks question / answer pages
+  // with confidence:1 too, so we can't infer detection from confidence
+  // alone. setup_costs is appended only when AI detection actually ran.
+  const detectionRan = !!state.detectionResult || (paper.setup_costs?.length || 0) > 0;
   const unknownCount = paper.pages.filter((p) => p.type === 'unknown').length;
+  // Only count low-confidence among pages the AI actually classified
+  // (confidence > 0 AND not 'unknown'). Otherwise unknown pages would
+  // double-count: they have confidence 0 and would always be flagged.
+  const lowConfCount = paper.pages.filter((p) =>
+    p.type !== 'unknown' && (p.confidence || 0) > 0 && (p.confidence || 0) < 0.7
+  ).length;
 
-  const summaryLine = detectionRan
-    ? `Detected ${paper.pages.length} pages — ` +
-      `${lowConfCount} low-confidence, ${unknownCount} unknown.`
-    : `${paper.pages.length} pages — none classified yet. Use Auto-classify, or set page types manually.`;
+  let summaryLine;
+  if (detectionRan) {
+    summaryLine = `Detected ${paper.pages.length} pages — ` +
+      `${lowConfCount} low-confidence, ${unknownCount} unknown.`;
+  } else if (unknownCount > 0) {
+    // Curated metadata only — the catalog gave us question + answer
+    // ranges, but doesn't know which of the remaining pages are
+    // covers / blanks / dividers / etc. They're typed 'unknown'.
+    summaryLine = `${paper.pages.length} pages from curated metadata — ` +
+      `${unknownCount} not yet classified (likely covers, blank pages, or section dividers). ` +
+      `Click Auto-classify above to fill them in, or pick a type per row below.`;
+  } else {
+    summaryLine = `${paper.pages.length} pages — all classified from curated metadata.`;
+  }
 
   const rangeLine = `Question pages: ${pageArrayToRange(paper.question_pages) || '(none)'}; ` +
                     `Answer pages: ${pageArrayToRange(paper.answer_pages) || '(none)'}.`;
