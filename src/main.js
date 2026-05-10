@@ -155,6 +155,13 @@ function setAutosave(label, cls = '') {
 // CSS only if Fullscreen API isn't available (older iPad Safari).
 async function enterFullscreenPractice() {
   document.body.classList.add('app-immersive');
+  // Mirror the immersive class onto <html> so CSS can lock both
+  // body AND html scrolling. iPad Safari sometimes scrolls the
+  // <html> element itself (rather than body) when the viewport
+  // changes, and that scroll is what triggers the URL-bar reveal /
+  // fullscreen exit. Locking both keeps all gestures inside
+  // #page-stage.
+  document.documentElement.classList.add('app-immersive-html');
   const root = document.documentElement;
   const req = root.requestFullscreen || root.webkitRequestFullscreen;
   if (typeof req === 'function') {
@@ -176,6 +183,7 @@ async function enterFullscreenPractice() {
 
 async function exitFullscreenPractice() {
   document.body.classList.remove('app-immersive');
+  document.documentElement.classList.remove('app-immersive-html');
   const exitFn = document.exitFullscreen || document.webkitExitFullscreen;
   if (document.fullscreenElement || document.webkitFullscreenElement) {
     if (typeof exitFn === 'function') {
@@ -200,10 +208,16 @@ async function init() {
   // Keep our `app-immersive` class in sync if the user exits full-screen via
   // the OS shortcut (Esc on desktop, swipe on iPad).
   document.addEventListener('fullscreenchange', () => {
-    if (!document.fullscreenElement) document.body.classList.remove('app-immersive');
+    if (!document.fullscreenElement) {
+      document.body.classList.remove('app-immersive');
+      document.documentElement.classList.remove('app-immersive-html');
+    }
   });
   document.addEventListener('webkitfullscreenchange', () => {
-    if (!document.webkitFullscreenElement) document.body.classList.remove('app-immersive');
+    if (!document.webkitFullscreenElement) {
+      document.body.classList.remove('app-immersive');
+      document.documentElement.classList.remove('app-immersive-html');
+    }
   });
 
   // Show unlock if a passphrase was previously set and not yet unlocked.

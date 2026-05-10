@@ -193,6 +193,12 @@ tr.warning-row > td { border-top: 1px solid var(--warning-border); }
   min-height: calc(100vh - 100px);
   padding: 16px;
   overflow: auto;
+  /* Keep the rubber-band scroll inside this element. Without this,
+     scrolling past the top/bottom of the worksheet propagates to the
+     body and on iPad Safari pulls down the URL bar / kicks us out of
+     fullscreen — even though our scrollable content is the
+     page-stage. */
+  overscroll-behavior: contain;
   display: flex;
   justify-content: center;
   align-items: flex-start;
@@ -297,6 +303,26 @@ tr.warning-row > td { border-top: 1px solid var(--warning-border); }
 /* Activated by adding `app-immersive` to <body>. Used together with the
    browser Fullscreen API where supported, or as a standalone immersive
    layout where Fullscreen isn't (older iPad Safari). */
+
+/* Lock the body in immersive mode. iPad Safari exits fullscreen
+   whenever a vertical body scroll / rubber-band gesture reaches the
+   viewport edge — same UX as native confirm() pulling chrome back.
+   Pinning html/body to overflow:hidden + overscroll-behavior:none
+   keeps the only scrollable region inside #page-stage so swipes
+   never reach the body and never trigger Safari's chrome. */
+html.app-immersive-html,
+body.app-immersive {
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: auto;
+  /* touch-action:pan-y on the body itself blocks pinch-zoom of the
+     page chrome but lets the inner #page-stage handle its own touch.
+     Without this iPad will sometimes sneak in a viewport zoom that
+     also exits fullscreen. */
+  touch-action: pan-y;
+  height: 100%;
+  width: 100%;
+}
 
 /* Hide chrome — topbar, stage tabs, "Start over" — so the page becomes
    essentially the worksheet plus its toolbar. Autosave indicator and
