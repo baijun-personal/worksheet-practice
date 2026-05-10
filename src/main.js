@@ -1245,7 +1245,10 @@ async function onSubmit() {
   ).join('\n');
   const answerLine = answerKeyRequestCount > 0
     ? `  Request ${studentRequestCount + 1}: Answer key — ${aPages.length} answer page image(s) covering page${aPages.length === 1 ? '' : 's'} ${aPages.join(', ')}`
-    : `  (No answer pages specified — answer-key extraction and final comparison will be skipped.)`;
+    : `  ⚠ No answer pages specified — normal answer-key marking cannot run.\n` +
+      `    The AI will still extract the student's answers, but the report will\n` +
+      `    have no expected-answer column and no correct/incorrect verdicts.\n` +
+      `    Add answer pages in Setup if you want full marking.`;
   const compareLine = compareRequestCount > 0
     ? `  Request ${studentRequestCount + 2}: Final comparison — text-only (no images), one call covering all matched pairs`
     : '';

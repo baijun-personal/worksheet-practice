@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "_doc": "questionPages and answerPages use the same syntax as the Setup form: comma-separated page numbers and ranges, 1-based. Examples: '3-10, 13-29' or '1'. Leave answerPages blank for one-page extract papers without an answer sheet — the app will warn that normal answer-key marking cannot run, but student-answer extraction still works.",
   "worksheets": [
     {
       "id": "p4-math-2025-sa2",
@@ -8,9 +9,9 @@
       "level": "Primary 4",
       "pdfPath": "public/worksheets/p4-math-2025-sa2.pdf",
       "totalPages": 32,
-      "questionPages": "",
-      "answerPages": "",
-      "description": "Set the question and answer page ranges yourself before starting."
+      "questionPages": "3-10, 13-29",
+      "answerPages": "31-32",
+      "description": "Booklet A on pages 3-10 (MCQ), Booklet B on pages 13-29 (open-ended). Answer key on the last two pages. Adjust page ranges if your copy differs."
     },
     {
       "id": "p4-english-2025-sa2",
@@ -19,9 +20,9 @@
       "level": "Primary 4",
       "pdfPath": "public/worksheets/p4-english-2025-sa2.pdf",
       "totalPages": 26,
-      "questionPages": "",
-      "answerPages": "",
-      "description": "Set the question and answer page ranges yourself before starting."
+      "questionPages": "2, 4-8, 10-24",
+      "answerPages": "25-26",
+      "description": "Paper 1 (Writing) on p.2, Paper 2 (Language Use) on pages 4-8, Paper 3 (Comprehension) on pages 10-24. Answer key on the last two pages."
     },
     {
       "id": "p4-chinese-2025-sa2",
@@ -30,9 +31,9 @@
       "level": "Primary 4",
       "pdfPath": "public/worksheets/p4-chinese-2025-sa2.pdf",
       "totalPages": 16,
-      "questionPages": "",
-      "answerPages": "",
-      "description": "Set the question and answer page ranges yourself before starting."
+      "questionPages": "3-4, 6-14",
+      "answerPages": "15-16",
+      "description": "Paper 1 (Composition) on pages 3-4, Paper 2 (Language) on pages 6-14. Answer key on the last two pages."
     },
     {
       "id": "p4-science-2025-sa2",
@@ -41,9 +42,9 @@
       "level": "Primary 4",
       "pdfPath": "public/worksheets/p4-science-2025-sa2.pdf",
       "totalPages": 38,
-      "questionPages": "",
-      "answerPages": "",
-      "description": "Set the question and answer page ranges yourself before starting."
+      "questionPages": "3-18, 21-33",
+      "answerPages": "35-38",
+      "description": "Booklet A (MCQ) on pages 3-18, Booklet B (open-ended) on pages 21-33. Answer key on the last four pages, including the compact MCQ grid for Q1-Q30."
     },
     {
       "id": "p2-chinese-2019-sa2-ai-tong",
@@ -52,9 +53,9 @@
       "level": "Primary 2",
       "pdfPath": "public/worksheets/p2-chinese-2019-sa2-ai-tong.pdf",
       "totalPages": 1,
-      "questionPages": "",
+      "questionPages": "1",
       "answerPages": "",
-      "description": "Set the question and answer page ranges yourself before starting."
+      "description": "One-page extract — no answer sheet. Student-answer extraction works, but the AI cannot mark against an answer key. Check the report by hand."
     },
     {
       "id": "p1-higher-chinese-2018-ai-tong-test2",
@@ -63,9 +64,9 @@
       "level": "Primary 1",
       "pdfPath": "public/worksheets/p1-higher-chinese-2018-ai-tong-test2.pdf",
       "totalPages": 1,
-      "questionPages": "",
+      "questionPages": "1",
       "answerPages": "",
-      "description": "Set the question and answer page ranges yourself before starting."
+      "description": "One-page extract — no answer sheet. Student-answer extraction works, but the AI cannot mark against an answer key. Check the report by hand."
     }
   ]
 }
