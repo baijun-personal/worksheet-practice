@@ -118,6 +118,14 @@ tr.warning-row > td { border-top: 1px solid var(--warning-border); }
   align-items: center;
   color: #5a4a00;
 }
+/* The class rule above sets display:flex with the same specificity
+   as the browser-default [hidden] { display: none }, and because
+   author rules cascade after user-agent rules, our rule wins —
+   meaning `hidden` attribute alone wouldn't hide the banner. Add
+   an explicit override so the hidden attribute actually works
+   (used both at startup when not on iOS and after the user clicks
+   the × dismiss button). */
+.ios-hint[hidden] { display: none; }
 .ios-hint-body { flex: 1; }
 .ios-hint-body strong { color: #2a2200; }
 .ios-hint .link-btn {

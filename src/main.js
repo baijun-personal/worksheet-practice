@@ -288,9 +288,18 @@ function setupIosAddToHomeHint() {
   if (!banner) return;
   const dismissKey = 'wsp.iosAddToHomeDismissed.v1';
   if (localStorage.getItem(dismissKey) === '1') return;
-  // navigator.standalone is set to true when running from the iOS
-  // home screen. Don't nag if they've already done it.
-  if (window.navigator.standalone === true) return;
+  // Detect standalone (Add-to-Home-Screen / PWA) mode. Two signals,
+  // either is sufficient:
+  //   - navigator.standalone: legacy iOS-only flag, set when launched
+  //     from a home-screen icon.
+  //   - matchMedia('(display-mode: standalone)'): modern, cross-browser
+  //     PWA detection — matches when the manifest's display:standalone
+  //     is honoured.
+  const isStandalone =
+    window.navigator.standalone === true ||
+    (typeof window.matchMedia === 'function' &&
+     window.matchMedia('(display-mode: standalone)').matches);
+  if (isStandalone) return;
   // Detect iPad / iPhone / iPod. iPadOS 13+ reports as Mac with
   // touch — sniff by ua + maxTouchPoints to catch the modern case.
   const ua = navigator.userAgent || '';
