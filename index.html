@@ -87,13 +87,29 @@
         <p class="muted small" id="auto-classify-privacy">
           Page classification sends low-resolution page images to OpenAI. No PDFs are stored by this app.
         </p>
-        <label>Question pages
-          <input id="question-pages" type="text" placeholder="e.g. 1-20" />
-        </label>
-        <label>Answer pages
-          <input id="answer-pages" type="text" placeholder="e.g. 21-24" />
-        </label>
-        <p class="muted">Page numbers are 1-based. Examples: <code>1-20</code>, <code>1,2,5-8</code>.</p>
+        <!-- Manual page-range fallback. Visible until a paper profile
+             has been confirmed; then we collapse this and show the
+             chip picker below instead. -->
+        <div id="manual-pages-wrap">
+          <label>Question pages
+            <input id="question-pages" type="text" placeholder="e.g. 1-20" />
+          </label>
+          <label>Answer pages
+            <input id="answer-pages" type="text" placeholder="e.g. 21-24" />
+          </label>
+          <p class="muted">Page numbers are 1-based. Examples: <code>1-20</code>, <code>1,2,5-8</code>.</p>
+        </div>
+        <!-- Chip picker — shown only when state.paperProfile is
+             confirmed. Question pages from the profile are listed as
+             chips, all selected by default. Answer pages are hidden
+             (still used internally for marking). -->
+        <div id="confirmed-pages-wrap" hidden>
+          <p class="muted small" style="margin-bottom:4px">
+            Question pages (from confirmed paper profile). Click a chip to deselect a page.
+          </p>
+          <div id="question-page-chips" class="chip-row" role="listbox" aria-label="Question pages"></div>
+          <p class="muted small" id="confirmed-pages-meta" style="margin-top:8px"></p>
+        </div>
         <p id="page-range-error" class="error" hidden></p>
         <div id="page-classify-panel" hidden></div>
       </div>

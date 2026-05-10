@@ -815,6 +815,11 @@ async function onBuiltinSelect() {
     // profile already exists, prefer its ranges over the catalog
     // metadata (the parent may have edited them).
     await resolvePaperProfile({ source: 'built_in', builtinId: w.id, catalogEntry: w });
+    // If a confirmed paper profile already exists for this PDF, the
+    // chip picker prefills from it; the manual inputs are hidden.
+    if (state.paperProfile?.confirmed_by_user) {
+      applyConfirmedPagesPickerVisibility();
+    }
     state.detectionResult = null;
     renderPageClassifyPanel();
     updateAutoClassifyButton();
@@ -1184,6 +1189,91 @@ async function onConfirmPages() {
     'ok',
   );
   renderPageClassifyPanel();
+  applyConfirmedPagesPickerVisibility();
+}
+
+// Toggle between the manual range inputs and the chip picker based
+// on whether the current paper profile is confirmed. Stage H spec:
+// once a paper is confirmed, hide the answer-pages input (it's on
+// the profile and used internally for marking) and let the parent
+// pick a subset of question pages via chips. All chips selected by
+// default; click to toggle.
+function applyConfirmedPagesPickerVisibility() {
+  const paper = state.paperProfile;
+  const confirmed = !!paper?.confirmed_by_user;
+  $('manual-pages-wrap').hidden = confirmed;
+  $('confirmed-pages-wrap').hidden = !confirmed;
+  if (!confirmed) return;
+
+  // First time we show the chips for this paper, default to "all
+  // selected". Subsequent renders preserve the user's selection.
+  if (!state.selectedQuestionPages
+      || state.selectedQuestionPagesPaperId !== paper.paper_id) {
+    state.selectedQuestionPages = new Set(paper.question_pages);
+    state.selectedQuestionPagesPaperId = paper.paper_id;
+  }
+  // Drop any pages that are no longer question pages (profile
+  // edited), keep selections that still apply.
+  const valid = new Set(paper.question_pages);
+  for (const p of [...state.selectedQuestionPages]) {
+    if (!valid.has(p)) state.selectedQuestionPages.delete(p);
+  }
+
+  const row = $('question-page-chips');
+  row.innerHTML = '';
+  for (const p of paper.question_pages) {
+    const selected = state.selectedQuestionPages.has(p);
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'chip';
+    chip.setAttribute('role', 'option');
+    chip.setAttribute('aria-selected', selected ? 'true' : 'false');
+    chip.textContent = `p.${p}`;
+    chip.dataset.page = String(p);
+    chip.addEventListener('click', onQuestionChipClick);
+    row.appendChild(chip);
+  }
+
+  // Internal-only: write through to hidden inputs so the existing
+  // onStartPractice() code path keeps working (it parses the inputs).
+  syncConfirmedPagesToInputs();
+  updateConfirmedPagesMeta();
+}
+
+function onQuestionChipClick(ev) {
+  const p = Number(ev.currentTarget.dataset.page);
+  if (!p) return;
+  if (state.selectedQuestionPages.has(p)) {
+    state.selectedQuestionPages.delete(p);
+    ev.currentTarget.setAttribute('aria-selected', 'false');
+  } else {
+    state.selectedQuestionPages.add(p);
+    ev.currentTarget.setAttribute('aria-selected', 'true');
+  }
+  syncConfirmedPagesToInputs();
+  updateConfirmedPagesMeta();
+}
+
+function syncConfirmedPagesToInputs() {
+  const paper = state.paperProfile;
+  if (!paper) return;
+  const sel = [...(state.selectedQuestionPages || [])].sort((a, b) => a - b);
+  $('question-pages').value = pageArrayToRange(sel);
+  $('answer-pages').value   = pageArrayToRange(paper.answer_pages || []);
+}
+
+function updateConfirmedPagesMeta() {
+  const paper = state.paperProfile;
+  const sel = state.selectedQuestionPages || new Set();
+  const meta = $('confirmed-pages-meta');
+  if (!paper || !meta) return;
+  const total = paper.question_pages?.length || 0;
+  const aPages = paper.answer_pages?.length || 0;
+  meta.textContent =
+    `${sel.size} of ${total} question page(s) selected. ` +
+    (aPages > 0
+      ? `${aPages} answer page(s) on the profile (used internally; not shown for practice).`
+      : `No answer pages on the profile — marking will skip the answer-key compare stage.`);
 }
 
 async function onRedetectClick() {
@@ -1201,13 +1291,15 @@ async function onRedetectClick() {
 }
 
 function onUseManualPagesClick() {
-  // Just collapse the editor — the question-pages / answer-pages
-  // inputs above the panel are the manual-entry fallback. We don't
-  // discard the paper profile; this is a "I'll do it by hand for
-  // now" escape hatch.
+  // Collapse the editor and force the manual-input view back, even
+  // if a paper profile was already confirmed. The profile isn't
+  // discarded — the parent can re-open the editor by re-running
+  // Auto-classify. This is a "let me just type the ranges" escape
+  // hatch.
   const panel = $('page-classify-panel');
-  if (!panel) return;
-  panel.hidden = true;
+  if (panel) panel.hidden = true;
+  $('manual-pages-wrap').hidden = false;
+  $('confirmed-pages-wrap').hidden = true;
   setAutoClassifyStatus(
     'Using manual page ranges. Edit Question pages / Answer pages above as needed. Auto-classify can be re-run later.',
     'ok',
@@ -1263,6 +1355,9 @@ async function onPdfPicked(ev) {
       if (!$('answer-pages').value && state.pdf.numPages > 4) {
         $('answer-pages').value = `${state.pdf.numPages - 3}-${state.pdf.numPages}`;
       }
+    }
+    if (state.paperProfile?.confirmed_by_user) {
+      applyConfirmedPagesPickerVisibility();
     }
     state.detectionResult = null;
     renderPageClassifyPanel();
