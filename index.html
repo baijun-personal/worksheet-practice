@@ -80,6 +80,13 @@
 
       <div class="card">
         <h2>Pages</h2>
+        <div class="actions" style="margin-bottom:8px">
+          <button id="auto-classify-btn" type="button" disabled>Auto-classify pages</button>
+          <span id="auto-classify-status" class="muted small"></span>
+        </div>
+        <p class="muted small" id="auto-classify-privacy">
+          Page classification sends low-resolution page images to OpenAI. No PDFs are stored by this app.
+        </p>
         <label>Question pages
           <input id="question-pages" type="text" placeholder="e.g. 1-20" />
         </label>
@@ -88,6 +95,7 @@
         </label>
         <p class="muted">Page numbers are 1-based. Examples: <code>1-20</code>, <code>1,2,5-8</code>.</p>
         <p id="page-range-error" class="error" hidden></p>
+        <div id="page-classify-panel" hidden></div>
       </div>
 
       <div class="card">

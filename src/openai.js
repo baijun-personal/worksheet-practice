@@ -442,6 +442,68 @@ export async function compareVisualPair({
   return chatJson({ apiKey, model, system: COMPARE_VISUAL_PROMPT, content, signal, apiMode, proxyEndpoint, proxyToken });
 }
 
+// Page-type classification call. Vision; uses low-resolution contact
+// sheets so the cost stays small (page-level classification is forgiving
+// of low resolution — we only need to identify what KIND of page it is,
+// not read every word). The detection prompt is intentionally explicit
+// about compact answer-key grids because that case is easy to misread
+// as a question page.
+const PAGE_DETECTION_PROMPT = `Classify each PDF page.
+
+Types:
+- question: contains questions for the student to answer (printed Q numbers, blanks, MCQ option grids the student fills in).
+- answer_key: contains answers, marking scheme, or compact answer grids. Often packed densely as tables of question-number/answer pairs, numeric grids, or "Answer:" labelled rows. Also called marking scheme, mark scheme, answers, or solutions.
+- passage: reading passage / source text without answer blanks. The student reads but does not write.
+- composition: writing or composition page with mostly ruled lines or large writing space.
+- cover: cover or title page with school header, paper number, candidate name field, instructions block.
+- instruction: instruction page (rules, time allowed, marks distribution, student information).
+- section_divider: section title or marks page with little or no work — e.g. "Section A — 20 marks", "End of Booklet A".
+- blank: blank or nearly blank page.
+- unknown: page kind cannot be determined confidently.
+
+Rules:
+- Answer key pages often contain many short answers packed together, numeric grids, tables of question-number/answer pairs, or a marking scheme. If a page contains a tabular grid of question numbers and answer values packed in columns (for example 5 columns of "<Q#> <A>" pairs, or rows of small answers separated by short rulings), classify it as answer_key, NOT question — even if it visually resembles an MCQ-style grid. The presence of explicit headers like "Answers", "Marking scheme", "Suggested answers" is also a strong answer_key signal.
+- Question pages usually contain questions with space for student answers. They have larger blanks, ruled answer space, or option boxes the student would fill.
+- Each image may contain up to 4 PDF pages arranged in a contact sheet. Each tile is labelled with its source PDF page number above it (text like "PDF page 12"). Classify EACH labelled page separately and use the printed page label as the "page" value in the output.
+- Confidence is on a 0..1 scale. Be honest: if a page is genuinely ambiguous, set confidence below 0.7 and prefer "unknown" rather than guessing.
+- "reason" is a one-line human-readable note (e.g. "compact MCQ answer grid", "ruled lines for composition", "school header and rules block").
+
+Return JSON only:
+{
+  "pages": [
+    {
+      "page": 1,
+      "type": "question | answer_key | passage | composition | cover | instruction | section_divider | blank | unknown",
+      "confidence": 0,
+      "reason": ""
+    }
+  ]
+}`;
+
+export async function detectPages({
+  apiKey,
+  model,
+  pageImages,            // [{ contactSheet?: true, includedPageNumbers?: [], pageNumber?: 0, dataUrl }]
+  signal,
+  apiMode,
+  proxyEndpoint,
+  proxyToken,
+}) {
+  const content = [];
+  for (const p of pageImages) {
+    const label = (p.contactSheet && Array.isArray(p.includedPageNumbers))
+      ? `Contact-sheet image: pages ${p.includedPageNumbers.join(', ')} arranged on a single A4 sheet ` +
+        `(layout chosen for the page count). Each tile carries a small dark-grey label "PDF page N" above it. ` +
+        `Use that label as the "page" value when classifying that tile.`
+      : `PDF page ${p.pageNumber}`;
+    content.push({ type: 'text', text: label });
+    // 'low' detail is intentional: page-level classification doesn't
+    // need 'high'. Cuts input tokens substantially.
+    content.push({ type: 'image_url', image_url: { url: p.dataUrl, detail: 'low' } });
+  }
+  return chatJson({ apiKey, model, system: PAGE_DETECTION_PROMPT, content, signal, apiMode, proxyEndpoint, proxyToken });
+}
+
 // Final-stage TEXT comparison call. Text-only — no images. Receives the
 // matched (student, expected) pairs from the code-side matcher and
 // returns the final correct/incorrect/unclear judgment per question

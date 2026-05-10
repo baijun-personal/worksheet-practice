@@ -21,6 +21,7 @@ import { renderReport, exportReportPdf, exportCompletedAttemptPdf } from './repo
 import { loadCatalog, fetchBuiltinPdf, builtinAttemptId } from './builtin.js';
 import { composeFourUpA4, chunkInto } from './fourup.js';
 import { buildTaskRecord, aggregateTasks, TASK_TYPES } from './cost.js';
+import { runPageDetection, rangesFromPages } from './detect.js';
 
 const STAGES = ['unlock', 'setup', 'practice', 'marking', 'report'];
 
@@ -449,6 +450,10 @@ function bindSetupForm() {
   $('diag-text-btn').addEventListener('click', () => runDiagnostic('text'));
   $('diag-image-btn').addEventListener('click', () => runDiagnostic('image'));
   $('diag-page-btn').addEventListener('click', () => runDiagnostic('page'));
+
+  // Auto-classify pages — page-level AI detection (Stage F).
+  $('auto-classify-btn').addEventListener('click', onAutoClassifyClick);
+  updateAutoClassifyButton();
 }
 
 // --- Diagnostics: minimal OpenAI requests for narrowing down marking errors.
@@ -810,6 +815,9 @@ async function onBuiltinSelect() {
     // profile already exists, prefer its ranges over the catalog
     // metadata (the parent may have edited them).
     await resolvePaperProfile({ source: 'built_in', builtinId: w.id, catalogEntry: w });
+    state.detectionResult = null;
+    renderPageClassifyPanel();
+    updateAutoClassifyButton();
     // Color check (non-blocking).
     runColorCheck();
     // Resume prompt if a saved attempt exists.
@@ -919,6 +927,141 @@ async function resolvePaperProfile(opts) {
   return null;
 }
 
+// Enable / disable the Auto-classify button based on whether a PDF
+// is loaded. The button additionally requires either an API key (in
+// direct mode) or a proxy URL+token (proxy mode); we don't enforce
+// that here — the call itself surfaces a clear error if either is
+// missing.
+function updateAutoClassifyButton() {
+  const btn = $('auto-classify-btn');
+  if (!btn) return;
+  btn.disabled = !state.pdf;
+}
+
+async function onAutoClassifyClick() {
+  if (!state.pdf || !state.pdfBlob) {
+    setAutoClassifyStatus('Pick a PDF first.', 'error');
+    return;
+  }
+  const apiMode = state.settings.apiMode || 'direct';
+  if (apiMode === 'proxy') {
+    if (!state.settings.proxyEndpoint || !state.settings.proxyToken) {
+      setAutoClassifyStatus('Proxy URL and token must be set in Advanced settings.', 'error');
+      return;
+    }
+  } else if (!state.settings.openaiKey) {
+    setAutoClassifyStatus('OpenAI API key must be set in Advanced settings.', 'error');
+    return;
+  }
+  const btn = $('auto-classify-btn');
+  btn.disabled = true;
+  setAutoClassifyStatus(`Classifying ${state.pdf.numPages} pages…`, '');
+  try {
+    const detectionModel = state.settings.detectionModel || state.settings.openaiModel || DEFAULT_MODEL;
+    const result = await runPageDetection({
+      pdf: state.pdf,
+      apiKey: state.settings.openaiKey,
+      model: detectionModel,
+      apiMode,
+      proxyEndpoint: state.settings.proxyEndpoint,
+      proxyToken: state.settings.proxyToken,
+      settings: state.settings,
+    });
+    state.detectionResult = result;
+    // Stamp results onto the paper profile (in memory + IndexedDB).
+    // Kept as confirmed_by_user: false until the user clicks Confirm
+    // in the (Stage G) confirmation UI.
+    if (state.paperProfile) {
+      const merged = mergeDetectionIntoPaper(state.paperProfile, result);
+      state.paperProfile = await putPaper(merged);
+      // Reflect derived ranges in the form so the parent can see them
+      // and edit if needed even before the confirmation UI lands.
+      $('question-pages').value = pageArrayToRange(state.paperProfile.question_pages);
+      $('answer-pages').value = pageArrayToRange(state.paperProfile.answer_pages);
+    }
+    const counts = result.pages.reduce((acc, p) => {
+      acc[p.type] = (acc[p.type] || 0) + 1;
+      return acc;
+    }, {});
+    const summary = Object.entries(counts).map(([k, v]) => `${k}: ${v}`).join(', ');
+    setAutoClassifyStatus(
+      `Done. ${summary}. Detection cost: $${result.costRecord.estimated_cost_usd.toFixed(4)} ` +
+      `(model ${result.costRecord.model}). Review or edit ranges below; full confirmation UI is coming next.`,
+      'ok',
+    );
+    renderPageClassifyPanel();
+  } catch (e) {
+    console.error('Auto-classify failed:', e);
+    const msg = String(e?.message || e);
+    if (/429|rate.?limit/i.test(msg)) {
+      setAutoClassifyStatus('OpenAI is rate-limiting. Wait a moment and try again.', 'error');
+    } else {
+      setAutoClassifyStatus(`Detection failed: ${msg}`, 'error');
+    }
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function setAutoClassifyStatus(text, kind) {
+  const el = $('auto-classify-status');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = 'small ' + (kind === 'error' ? 'error' : kind === 'ok' ? 'muted' : 'muted');
+}
+
+// Merge a detection result into a paper profile, recomputing the
+// question/answer page-range arrays from the page types. Detection
+// cost is appended to setup_costs so the paper profile keeps a record
+// of how much each detection pass cost — separate from per-attempt
+// marking cost (Stage C).
+function mergeDetectionIntoPaper(paper, detectionResult) {
+  const pages = detectionResult.pages || [];
+  const { question_pages, answer_pages } = rangesFromPages(pages);
+  return {
+    ...paper,
+    pages,
+    question_pages,
+    answer_pages,
+    // Detection ran fresh — back to unconfirmed until the parent
+    // explicitly confirms in Stage G's UI.
+    confirmed_by_user: false,
+    setup_costs: [...(paper.setup_costs || []), detectionResult.costRecord],
+  };
+}
+
+// Lightweight inline summary of detected page types. Stage G will
+// replace this with a full per-page editor (highlight low-confidence,
+// allow type edits, Confirm / Re-detect / manual fallback buttons).
+function renderPageClassifyPanel() {
+  const panel = $('page-classify-panel');
+  if (!panel) return;
+  const result = state.detectionResult;
+  if (!result) {
+    panel.hidden = true;
+    panel.innerHTML = '';
+    return;
+  }
+  const rows = result.pages.map((p) => {
+    const lowConf = (p.confidence || 0) < 0.7;
+    const flag = (p.type === 'unknown' || lowConf) ? ' ⚠' : '';
+    return `<tr${lowConf || p.type === 'unknown' ? ' class="warning-row"' : ''}>
+      <td>p.${p.page}</td>
+      <td>${escapeAttr(p.type)}${flag}</td>
+      <td>${(p.confidence || 0).toFixed(2)}</td>
+      <td>${escapeAttr(p.reason || '')}</td>
+    </tr>`;
+  }).join('');
+  panel.hidden = false;
+  panel.innerHTML = `
+    <details open style="margin-top:8px">
+      <summary class="muted small">Detected page types (${result.pages.length}) — review and edit ranges above. Full editor coming next.</summary>
+      <table style="margin-top:8px"><thead>
+        <tr><th>Page</th><th>Type</th><th>Conf.</th><th>Reason</th></tr>
+      </thead><tbody>${rows}</tbody></table>
+    </details>`;
+}
+
 async function runColorCheck() {
   $('color-warning').hidden = true;
   if (!state.pdf) return;
@@ -962,6 +1105,9 @@ async function onPdfPicked(ev) {
         $('answer-pages').value = `${state.pdf.numPages - 3}-${state.pdf.numPages}`;
       }
     }
+    state.detectionResult = null;
+    renderPageClassifyPanel();
+    updateAutoClassifyButton();
     runColorCheck();
   } catch (e) {
     $('pdf-status').textContent = 'Failed to load PDF: ' + (e?.message || e);
