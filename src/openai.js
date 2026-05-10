@@ -349,9 +349,10 @@ export async function extractStudentAnswers({
   const content = [];
   for (const p of completedPageImages) {
     const label = (p.fourup && Array.isArray(p.includedPageNumbers))
-      ? `Completed 4-up image: pages ${p.includedPageNumbers.join(', ')} arranged 2x2 and labelled in the image. ` +
-        `Each tile carries a small dark-grey label "PDF page N — not student answer" above its quadrant. ` +
-        `Use that tile label to identify the page number for any answer in that quadrant. ` +
+      ? `Completed contact-sheet image: pages ${p.includedPageNumbers.join(', ')} arranged on a single A4 sheet ` +
+        `(layout chosen for the page count: 1 = full page, 2 = stacked, 3 = one wide on top + two below, 4 = 2x2 grid). ` +
+        `Each tile carries a small dark-grey label "PDF page N — not student answer" above it. ` +
+        `Use that tile label to identify the page number for any answer in that tile. ` +
         `The dark-grey labels are NOT student answers — student answers are blue.`
       : `Completed page ${p.pageNumber}`;
     content.push({ type: 'text', text: label });
@@ -371,7 +372,13 @@ export async function extractAnswerKey({
 }) {
   const content = [];
   for (const p of answerPageImages) {
-    content.push({ type: 'text', text: `Answer page ${p.pageNumber}` });
+    const label = (p.contactSheet && Array.isArray(p.includedPageNumbers))
+      ? `Answer-key contact-sheet image: pages ${p.includedPageNumbers.join(', ')} arranged on a single A4 sheet ` +
+        `(layout chosen for the page count: 1 = full page, 2 = stacked, 3 = one wide on top + two below, 4 = 2x2 grid). ` +
+        `Each tile carries a small dark-grey label "Answer page N" above it — that's the source PDF page number, ` +
+        `not part of the answer key.`
+      : `Answer page ${p.pageNumber}`;
+    content.push({ type: 'text', text: label });
     content.push({ type: 'image_url', image_url: { url: p.dataUrl, detail: 'high' } });
   }
   return chatJson({ apiKey, model, system: ANSWER_KEY_PROMPT, content, signal, apiMode, proxyEndpoint, proxyToken });
