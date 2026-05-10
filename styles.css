@@ -105,6 +105,35 @@ button.tool-btn.active { background: var(--accent); color: white; border-color: 
 tr.warning-row { background: var(--warning-bg); }
 tr.warning-row > td { border-top: 1px solid var(--warning-border); }
 
+/* "Add to Home Screen" hint banner for iPad Safari. Shows once on
+   first visit, dismissable. Hidden in standalone mode (the user
+   already followed the suggestion) and on non-iOS. */
+.ios-hint {
+  background: #fff5d6;
+  border-bottom: 1px solid #f0e2a8;
+  padding: 8px 14px;
+  font-size: 13px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  color: #5a4a00;
+}
+.ios-hint-body { flex: 1; }
+.ios-hint-body strong { color: #2a2200; }
+.ios-hint .link-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  font-size: 18px;
+  line-height: 1;
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+  border-radius: 4px;
+  color: #5a4a00;
+}
+.ios-hint .link-btn:hover { background: rgba(0, 0, 0, 0.06); }
+body.app-immersive .ios-hint { display: none; }
+
 /* Build-version badge in the topbar. Reads main.js's Last-Modified
    header and displays it as a relative time. Click to force a
    cache-bust reload — useful on Safari where Cmd-Shift-R isn't

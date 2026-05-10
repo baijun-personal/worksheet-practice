@@ -275,6 +275,36 @@ async function showBuildVersion() {
   }
 }
 
+// Show the "Add to Home Screen" banner on iPad Safari (regular tab
+// — not standalone). iPadOS edge gestures (URL bar reveal, dock,
+// multitasking, back swipe) override page touch handlers in normal
+// browser tabs; the only way to fully seal them off is to launch
+// the app from the home-screen icon (PWA-style standalone mode).
+//
+// Hint is dismissed permanently per-device by writing a flag to
+// localStorage so the parent isn't nagged on every visit.
+function setupIosAddToHomeHint() {
+  const banner = $('ios-add-to-home-hint');
+  if (!banner) return;
+  const dismissKey = 'wsp.iosAddToHomeDismissed.v1';
+  if (localStorage.getItem(dismissKey) === '1') return;
+  // navigator.standalone is set to true when running from the iOS
+  // home screen. Don't nag if they've already done it.
+  if (window.navigator.standalone === true) return;
+  // Detect iPad / iPhone / iPod. iPadOS 13+ reports as Mac with
+  // touch — sniff by ua + maxTouchPoints to catch the modern case.
+  const ua = navigator.userAgent || '';
+  const isIOS =
+    /iPad|iPhone|iPod/.test(ua) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (!isIOS) return;
+  banner.hidden = false;
+  $('ios-add-to-home-dismiss')?.addEventListener('click', () => {
+    banner.hidden = true;
+    try { localStorage.setItem(dismissKey, '1'); } catch {}
+  });
+}
+
 function relativeTime(date) {
   const diffMs = Date.now() - date.getTime();
   const diffSec = Math.round(diffMs / 1000);
@@ -345,6 +375,10 @@ async function init() {
   // reload — Safari's hard refresh is unreliable.
   showBuildVersion();
   $('build-version-btn')?.addEventListener('click', forceReloadWithCacheBust);
+
+  // Surface the Add-to-Home-Screen hint on iPad Safari (regular
+  // tab) — the only way to get truly sealed fullscreen on iPad.
+  setupIosAddToHomeHint();
 
   // Keep our `app-immersive` class in sync if the user exits full-screen via
   // the OS shortcut (Esc on desktop, swipe on iPad).

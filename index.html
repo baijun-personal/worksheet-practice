@@ -6,6 +6,16 @@
   <title>Worksheet Practice</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <meta name="theme-color" content="#1a4fc4" />
+  <!-- iOS Safari standalone (Add to Home Screen) flags. When the
+       parent installs the app to the home screen, iOS launches it
+       without Safari's URL bar / bottom toolbar and the edge
+       gestures stop revealing browser chrome — which is the only
+       way to get a fully sealed fullscreen experience on iPad
+       (regular Safari tabs cannot suppress those edge gestures). -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Worksheet" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -27,6 +37,18 @@
       <button id="reset-btn" type="button" class="link-btn" hidden>Start over</button>
     </div>
   </header>
+
+  <!-- Shown only in iOS Safari outside of standalone (Add to Home
+       Screen) mode. Hidden once the parent dismisses it OR runs
+       the app standalone. Wired in src/main.js. -->
+  <div id="ios-add-to-home-hint" class="ios-hint" hidden>
+    <div class="ios-hint-body">
+      <strong>Tip:</strong> on iPad, full-screen practice fights with Safari's edge gestures
+      (URL bar, multitasking). For a sealed app-like experience,
+      tap <strong>Share → Add to Home Screen</strong>, then launch from the home-screen icon.
+    </div>
+    <button id="ios-add-to-home-dismiss" type="button" class="link-btn" title="Dismiss">×</button>
+  </div>
 
   <main id="app">
 
