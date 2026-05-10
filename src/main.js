@@ -164,9 +164,22 @@ async function enterFullscreenPractice() {
   document.documentElement.classList.add('app-immersive-html');
   swapToolbarLabels(true);
   refreshFullscreenToggleLabel();
+  // CSS-only immersive on Safari (any flavour). Calling
+  // requestFullscreen on documentElement on Safari has two known
+  // problems for this app:
+  //   - position:fixed children of an HTML in :fullscreen sometimes
+  //     end up rendered outside the fullscreen layer, making the
+  //     toolbar non-interactive.
+  //   - Safari iOS doesn't actually hide its URL bar / bottom chrome
+  //     for non-video fullscreen — it only changes the layer
+  //     compositing, with no real visual gain.
+  // Both desktop Chrome and Edge handle the API cleanly, so we still
+  // call it there. Add-to-Home-Screen is the path for sealed iPad
+  // immersive (handled separately).
   const root = document.documentElement;
   const req = root.requestFullscreen || root.webkitRequestFullscreen;
-  if (typeof req === 'function') {
+  const isSafari = isSafariBrowser();
+  if (!isSafari && typeof req === 'function') {
     try {
       await req.call(root);
     } catch (e) {
@@ -181,6 +194,22 @@ async function enterFullscreenPractice() {
     setTimeout(() => loadCurrentPage(), 50);
   }
   setTimeout(refreshScrollRails, 100);
+}
+
+// Detect Safari (desktop or iOS). Chrome / Edge / Firefox spoof the
+// Safari UA on iOS but include "CriOS" / "EdgiOS" / "FxiOS" tokens
+// — exclude those. We use this to skip Fullscreen API calls that
+// trigger Safari-specific bugs (toolbar position:fixed children
+// rendered outside the fullscreen layer, becoming non-interactive).
+function isSafariBrowser() {
+  const ua = navigator.userAgent || '';
+  // Safari iOS / iPadOS reports "Safari" without "CriOS" / "EdgiOS" / "FxiOS".
+  // iPadOS 13+ also reports as Mac with touch points.
+  const isAppleDevice =
+    /iPad|iPhone|iPod/.test(ua) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const isMacSafari = /^((?!chrome|android|crios|edgios|fxios).)*safari/i.test(ua);
+  return isAppleDevice || isMacSafari;
 }
 
 // Update the Fullscreen toggle button's label to reflect the current

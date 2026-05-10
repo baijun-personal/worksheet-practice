@@ -418,6 +418,16 @@ body.app-immersive .practice-toolbar button {
   min-width: 36px;
   white-space: nowrap;
   flex-shrink: 0;
+  /* Defensive on Safari: explicit pointer-events:auto so the button
+     can never be turned off by an inherited rule, cursor:pointer to
+     enable Safari's native click-on-tap behaviour, and a transparent
+     tap-highlight to suppress the grey flash without disabling tap
+     events themselves. */
+  pointer-events: auto;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
 }
 body.app-immersive .practice-toolbar .sep {
   flex-shrink: 0;
