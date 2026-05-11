@@ -238,11 +238,13 @@ Output JSON only:
   "weak_points": []
 }`;
 
-const STUDENT_PROMPT = `Read what the child wrote on this completed worksheet.
-The printed worksheet is black. The child's writing is blue.
+const STUDENT_PROMPT = `Read the child's answers from this completed worksheet page.
 
-If a slot has no blue ink, it is BLANK. Do not guess. Do not invent
-an answer because nearby slots are filled.
+For each page you receive TWO images:
+- The PRINTED worksheet page (black text on white, no student writing).
+- The STROKES-ONLY image (white background, the student's blue marks only) at the same dimensions and positions as the printed page.
+
+For each question on the printed page, find the student's answer by looking at the strokes-only image at that question's location. If the strokes-only image has no ink in the question's answer area, the answer is BLANK — return answer_type "blank" and answer "". Do not return a printed option letter (e.g. "a." or "B.") as the student's answer; printed letters do NOT appear on the strokes-only image.
 
 Return JSON:
 {
@@ -286,14 +288,14 @@ answer_type:
 - "tick_box": one or more boxes ticked; "answer" lists which (e.g. "B and D").
 - "drawing": shaded fraction, circled item, underlined option, matching line, arrow, plotted point, drawn shape — anything where placement/shape carries the meaning.
 - "diagram_label": child labelled or annotated a diagram.
-- "blank": no ink in the slot. answer: "". confidence: 0.95.
-- "unknown": ink visible but illegible. answer: "unclear". confidence: 0.3.
+- "blank": no ink in the slot's area on the strokes-only image. answer: "". confidence: 0.95.
+- "unknown": ink visible on the strokes-only image but illegible. answer: "unclear". confidence: 0.3.
 
 Multi-part rule:
 - LIST-ANSWER question (one stem, several slots): one entry with is_multi_part: true and parts[]. Use printed slot labels for "part" ("i", "ii", "a", "b").
 - DISTINCT SUB-QUESTIONS (Q5a and Q5b are different questions with their own prompts): separate flat entries with question_number "5a" and "5b".
 
-For 4-up images: each tile has a dark-grey label "PDF page N — not student answer" above its quadrant. Use that to set "page". The label is not a student answer.
+For 4-up images: each tile has a dark-grey label "PDF page N — not student answer" above its quadrant. Use that to set "page". The label is not a student answer. (4-up batches receive only the printed contact-sheet image, not a strokes-only one — the "no ink = blank" rule above doesn't apply in that mode; fall back to reading the blue ink against the printed page as before.)
 
 Return JSON only.`;
 
@@ -353,7 +355,7 @@ Return JSON only.`;
 export async function extractStudentAnswers({
   apiKey,
   model,
-  completedPageImages, // [{ pageNumber, dataUrl, fourup?, includedPageNumbers? }]
+  completedPageImages, // [{ pageNumber, dataUrl, strokesDataUrl?, fourup?, includedPageNumbers? }]
   signal,
   apiMode,
   proxyEndpoint,
@@ -362,15 +364,36 @@ export async function extractStudentAnswers({
 }) {
   const content = [];
   for (const p of completedPageImages) {
-    const label = (p.fourup && Array.isArray(p.includedPageNumbers))
-      ? `Completed contact-sheet image: pages ${p.includedPageNumbers.join(', ')} arranged on a single A4 sheet ` +
+    if (p.fourup && Array.isArray(p.includedPageNumbers)) {
+      // 4-up contact sheets: single-image path. A matching 4-up
+      // strokes-only composite would need its own builder; the
+      // STUDENT_PROMPT explicitly tells the model the 4-up mode
+      // falls back to single-image "blue ink against the
+      // printed page" reading.
+      const label = `Completed contact-sheet image: pages ${p.includedPageNumbers.join(', ')} arranged on a single A4 sheet ` +
         `(layout chosen for the page count: 1 = full page, 2 = stacked, 3 = one wide on top + two below, 4 = 2x2 grid). ` +
         `Each tile carries a small dark-grey label "PDF page N — not student answer" above it. ` +
         `Use that tile label to identify the page number for any answer in that tile. ` +
-        `The dark-grey labels are NOT student answers — student answers are blue.`
-      : `Completed page ${p.pageNumber}`;
-    content.push({ type: 'text', text: label });
+        `The dark-grey labels are NOT student answers — student answers are blue.`;
+      content.push({ type: 'text', text: label });
+      content.push({ type: 'image_url', image_url: { url: p.dataUrl, detail: 'high' } });
+      continue;
+    }
+    // Per-page full-page path: send the printed page first, then
+    // the strokes-only image at identical dimensions. Order
+    // matters — the prompt refers to "the PRINTED worksheet page"
+    // first and "the STROKES-ONLY image" second. If strokesDataUrl
+    // is absent (older caller, future regression), we fall back
+    // to the single-image behaviour without crashing.
+    content.push({ type: 'text', text: `PDF page ${p.pageNumber} — PRINTED worksheet (no student writing).` });
     content.push({ type: 'image_url', image_url: { url: p.dataUrl, detail: 'high' } });
+    if (p.strokesDataUrl) {
+      content.push({
+        type: 'text',
+        text: `PDF page ${p.pageNumber} — STROKES ONLY (the student's blue ink on white, same dimensions as the printed page above).`,
+      });
+      content.push({ type: 'image_url', image_url: { url: p.strokesDataUrl, detail: 'high' } });
+    }
   }
   return chatJson({
     apiKey, model,
