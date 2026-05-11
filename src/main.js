@@ -2481,7 +2481,22 @@ async function onSubmit() {
       // (each ~795x1115 px) readable for typical worksheet text. If you
       // later expose a "4-up DPI" setting, plumb it in here. For now, this
       // is intentional and decoupled from settings.renderDpi.
+      //
+      // Two composites per batch:
+      //   composed         — printed pages with strokes overlaid (the
+      //                      existing 4-up output).
+      //   composedStrokes  — white background + strokes only, same layout
+      //                      and same per-tile labels. Sent alongside as
+      //                      a companion image so the extraction model
+      //                      can tell "no ink at all" apart from
+      //                      "printed option letter on the page" without
+      //                      being confused by the underlying printed
+      //                      text — same Q5-class fix as per-page mode.
       const composed = await composeFourUpA4(state.pdf, tilePages, { dpi: 200 });
+      const composedStrokes = await composeFourUpA4(state.pdf, tilePages, {
+        dpi: 200,
+        strokesOnly: true,
+      });
       // Use the first page of the group as the representative pageNumber
       // so the per-image text label naming still works; the per-tile
       // page labels are also baked into the image itself.
@@ -2489,17 +2504,16 @@ async function onSubmit() {
         completed: [{
           pageNumber: plan.pages[0],
           dataUrl: composed.dataUrl,
+          strokesDataUrl: composedStrokes.dataUrl,
           fourup: true,
           includedPageNumbers: composed.includedPageNumbers,
         }],
         plannedPages: plan.pages,
       });
     } else {
-      // Non-4-up path: send the printed page AND the strokes-only
-      // image to extraction. 4-up path above stays single-image
-      // (a matching 4-up strokes-only composite would be more work
-      // than this fix is worth; 4-up has its own legibility
-      // trade-offs tracked separately).
+      // Non-4-up per-page path: send printed + strokes-only per page.
+      // The 4-up branch above now ALSO sends both images, just
+      // composited as two contact sheets instead of two-per-page.
       batches.push({
         completed: plan.pages.map((n) => {
           const p = completedByPage.get(n);
