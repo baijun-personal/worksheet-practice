@@ -235,15 +235,15 @@
         </label>
         <label>Marking mode
           <select id="marking-mode">
-            <option value="auto">Auto (recommended)</option>
-            <option value="single_fullpage">Single combined request — full-page images</option>
-            <option value="batch4_fourup">Batch by 4 pages — 4-up A4 combined images (test)</option>
-            <option value="batch4_fullpage">Batch by 4 pages — full-page images</option>
+            <option value="single_fullpage">Best quality</option>
+            <option value="batch4_fourup" selected>Balanced</option>
+            <option value="batch4_fourup_single">Most economical</option>
           </select>
         </label>
         <p class="muted small">
-          Auto: single request when ≤ 4 question pages, otherwise batch by 4 pages with full-page images.
-          The 4-up A4 option packs 4 pages into one image to reduce image count and cost; treat it as a test layout.
+          Best quality: each page sent as one image plus a strokes-only companion. Highest accuracy. Most expensive.<br>
+          Balanced: 4 pages packed into one image plus a strokes-only companion. Half the cost. Slightly less accurate on dense MCQ rows.<br>
+          Most economical: 4 pages packed into one image, no strokes-only companion. Lowest cost. May miss some blank answers.
         </p>
         <label>Pages per batch <span class="muted small">(only used in legacy batch sizing — Marking mode now controls grouping)</span>
           <input id="batch-size" type="number" min="1" max="20" step="1" />
@@ -283,6 +283,12 @@
             <textarea id="custom-student-prompt" rows="8" class="prompt-textarea"></textarea>
             <button type="button" class="link-btn prompt-reset"
                     data-target="custom-student-prompt" data-builtin="student">Reset to default</button>
+          </div>
+          <div class="prompt-field">
+            <label for="custom-student-prompt-single">Student extraction (Most economical mode)</label>
+            <textarea id="custom-student-prompt-single" rows="6" class="prompt-textarea"></textarea>
+            <button type="button" class="link-btn prompt-reset"
+                    data-target="custom-student-prompt-single" data-builtin="studentSingle">Reset to default</button>
           </div>
           <div class="prompt-field">
             <label for="custom-answer-key-prompt">Answer key extraction</label>
