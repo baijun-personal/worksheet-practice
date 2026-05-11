@@ -713,17 +713,21 @@ export async function requestExplanation({
         ? `TARGET page ${p.pageNumber} — the red ✗ marks the question being explained.`
         : `Context page ${p.pageNumber}.`,
     });
-    // 'low' detail intentionally — explanation calls already
-    // receive structured metadata (question label, student
-    // answer, correct answer, status, short reason) plus the
-    // red ✗ on the target page. Low-detail is the cheap-and-
-    // fast starting point; we'll evaluate whether high is worth
-    // the cost only if low produces visibly worse output during
-    // testing. Marking-stage vision calls (extract / answer
-    // key / visual compare) keep their existing 'high' setting
-    // because they have to read printed text and the child's
-    // handwriting; explanation only needs to interpret a known
-    // question, not extract from scratch.
+    // detail: 'low' — verified on the wire via Network payload
+    // inspection. For patch-based models (gpt-5.4-mini included),
+    // "low" resizes the image before patching but the resulting
+    // token count is NOT the tile-model fixed 85-token rate.
+    // Real observation on gpt-5.4-mini: ~1,707 tokens per image at
+    // 'low' detail on a 150-DPI A4 page, vs ~2,490 expected at
+    // 'high'. Modest savings, not the 4× the tile-based docs
+    // would suggest.
+    //
+    // Tune cost via explanationRenderDpi in settings rather than
+    // flipping this to 'high' — lower DPI = smaller source image
+    // = fewer patches, even at the same detail setting. (Marking
+    // calls keep 'high' because they have to read printed text
+    // and the child's handwriting; explanation only needs to
+    // interpret a known question, not extract from scratch.)
     content.push({ type: 'image_url', image_url: { url: p.dataUrl, detail: 'low' } });
   }
   if (!model) throw new Error('Model not set');
