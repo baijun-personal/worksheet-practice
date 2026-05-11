@@ -266,17 +266,21 @@ function parseParenSubpart(qnumber) {
 // (e.g. "19(i)") aren't multi-part at this stage — they're handled
 // by normalizeMultiParts' second pass, which is correct for them.
 //
-// Why only on the answer-key side: the student side already emits
-// the flat shape (e.g. "9a"/"9b"). If the student side ever emits
-// multi-part, normalizeMultiParts handles it. Fanning out on both
-// sides would risk double-fanout and shape drift.
+// Applied to BOTH extraction sides in matchExtractions. The helper
+// is idempotent on flat entries (they pass through unchanged at the
+// out.push(a) below), so running it on both sides is safe and avoids
+// shape drift. The previous "answer-key only" application broke when
+// the student side emitted multi-part on inline-layout Math questions
+// (e.g. "9. Write the answers. a. ___ b. ___" read as one multi-part
+// question instead of two distinct sub-questions); this symmetric
+// version handles any combination of shapes either side produces.
 //
 // Open consideration: when parts use roman numerals stored without
 // parens (parts: [{part: "i"}, {part: "ii"}]), this produces "19i"
 // / "19ii" with no parens. If the student emitted "19(i)" those
-// won't match. We accept that limitation for the first cut — Math
-// "9a/9b" papers are unblocked, English parenthesised-suffix papers
-// keep using the normalizeMultiParts second-pass grouping path.
+// won't match. Math "9a/9b" papers work; English parenthesised-
+// suffix papers still rely on normalizeMultiParts' second-pass
+// grouping path that handles "19(i)" / "19(ii)" → grouped "19".
 function fanOutMultiPartKeys(answers) {
   const out = [];
   for (const a of answers) {
@@ -321,16 +325,17 @@ function fanOutMultiPartKeys(answers) {
 // because the student's pages are often a subset of the worksheet and
 // local indexes 1/2/3 would collide with the key's Q1/Q2/Q3.
 export function matchExtractions(studentBatchResults, answerKeyResults) {
-  // Pre-normalize so duplicate composite keys auto-merge into multi-part
-  // groups (rather than silently overwriting). After this, each composite
-  // key appears at most once in students/keys.
-  const students = normalizeMultiParts(flattenAnswers(studentBatchResults));
-  // Fan out grouped answer-key entries (Math papers commonly emit
-  // {question_number:"9", is_multi_part:true, parts:[{part:"a"},…]})
-  // into per-part flat rows ("9a","9b") so they line up with the
-  // flat shape the student side emits on those papers. Flat
-  // answer-key rows pass through fanOutMultiPartKeys unchanged.
-  // See fanOutMultiPartKeys for the asymmetry rationale.
+  // Fan out grouped multi-part entries on BOTH sides into per-part
+  // flat rows ("9a","9b") before normalising. Either side may emit
+  // multi-part on any given run — Math papers in particular are
+  // ambiguous: the model sometimes reads "9. Write the answers.
+  // a. ___ b. ___" as one multi-part question and sometimes as two
+  // distinct sub-questions, and the two sides don't always agree.
+  // Running fanOutMultiPartKeys on both sides canonicalises both to
+  // flat, so the matcher's question_number string equality works
+  // regardless of which shape either side produced. fanOutMultiPartKeys
+  // is idempotent on flat entries.
+  const students = normalizeMultiParts(fanOutMultiPartKeys(flattenAnswers(studentBatchResults)));
   const keys = normalizeMultiParts(fanOutMultiPartKeys(flattenAnswers(answerKeyResults)));
 
   const keyByKey = new Map();
