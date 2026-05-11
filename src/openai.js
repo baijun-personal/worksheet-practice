@@ -216,77 +216,15 @@ Return JSON only:
   "weak_points": []
 }`;
 
-const STUDENT_PROMPT = `Extract the child's answers from these completed worksheet pages.
+const STUDENT_PROMPT = `Read what the child wrote on this completed worksheet.
+The printed worksheet is black. The child's writing is blue.
 
-The printed worksheet is black. The child's answers are blue. Read only the blue answers.
+If a slot has no blue ink, it is BLANK. Do not guess. Do not invent
+an answer because nearby slots are filled.
 
-Do not mark. Do not compare with an answer key. Do not use printed page numbers, score boxes, marks, or footer numbers as answers.
-
-Preserve the printed question_number EXACTLY as it appears on the page — for example "17", "5a", "19(i)". Do not invent, renumber, skip, or replace it with the question text.
-
-There are TWO different kinds of subparts. Use the right schema for each:
-
-(A) LIST-ANSWER question — single stem asking for several items.
-    Examples: "Name two reasons", "List three examples", "What two things should…", "State two ways to stay safe".
-    Output ONE entry with:
-      question_number: the printed base number (e.g. "19" or "5")
-      is_multi_part: true
-      order_matters: false  (default for list-answer questions)
-      parts: [
-        { "part": "i",  "answer_type": "...", "answer": "...", "confidence": 0.9 },
-        { "part": "ii", "answer_type": "...", "answer": "...", "confidence": 0.9 }
-      ]
-    Use the printed slot label as the "part" value (e.g. "i", "ii", "a", "b"). If no slot label is printed, use "1", "2", "3"… in the order the child wrote them.
-
-    Set order_matters: TRUE only when the question explicitly requires sequence/order/arrangement, e.g. "arrange the events in the correct order", "sequence the steps", "first / next / last", "before / after", "find x, y and z" with named slots.
-
-(B) DISTINCT SUB-QUESTIONS — each subpart has its own different question text on the page (e.g. Q5a is one question, Q5b is a different question with its own prompt and answer).
-    Output SEPARATE flat entries with question_number "5a" and "5b" — DO NOT group these under a single "5" entry. Each is independent.
-
-Never duplicate the same "question_number" label without a subpart suffix. If you produce two entries with the same composite key, the later one will silently overwrite the earlier; use the multi-part form (A) instead.
-
-"display_question" is a SHORT label only — values like "Q17", "Q19", or "Section A Q1". Do NOT put the full question text into display_question; it's used as a heading in the report, not as the question prompt itself.
-
-For each answer, set "answer_type" to one of:
-- "text": short or long handwritten text answer.
-- "choice": MCQ option letter ("A", "B") or option number ("3"). For choice questions, if the selected option's text is visible next to the option number/letter, include both in "answer", e.g. "3 (scooped)" or "B (the dolphin jumped)". This helps later comparison when the answer key extraction may carry the option text instead of the number.
-- "number": numeric answer (units optional).
-- "tick_box": the child ticked one or more boxes; "answer" should list which (e.g. "B and D").
-- "drawing": the answer is a drawing or marking. Examples: shaded area, shaded fraction, circled item, underlined item, matching line, arrow, graph point, plotted point, clock hand, completed diagram, drawn shape, drawn angle.
-- "diagram_label": the child labelled or annotated a diagram visually.
-- "blank": the answer line / box is empty. No ink visible. The child did not attempt this question. This is DIFFERENT from "unknown" (see below).
-- "unknown": ink is visible but you cannot tell what was written, OR the answer kind genuinely cannot be classified.
-
-CLASSIFICATION RULE: if the answer cannot be FULLY represented as typed text — i.e. the visual placement / shape / mark on the page is what carries the meaning — classify it as "drawing" or "diagram_label", NOT "text". Forcing a drawing into a short text description and routing it through text-equality comparison reliably marks it wrong. For drawing/diagram_label answers, "answer" is just a brief human description for the parent to read; the final mark uses a separate visual comparison stage.
-
-BLANK VS UNCLEAR — two different states, do not conflate:
-
-  If the answer line / box is EMPTY (no ink visible, the student did
-  not write anything), return:
-    "answer_type": "blank"
-    "answer":      ""
-    "confidence":  0.95
-  The blank case is high-confidence — you can see the line is empty.
-
-  Only return "answer": "unclear" with "answer_type": "unknown" and
-  LOW confidence when ink IS visible but you cannot read what was
-  written (smudged handwriting, partially erased, illegible shapes).
-
-  Example — same question, two different students:
-    Student A wrote nothing →
-        { "answer_type": "blank",   "answer": "",        "confidence": 0.95 }
-    Student B wrote scribbles you can't decipher →
-        { "answer_type": "unknown", "answer": "unclear", "confidence": 0.3 }
-
-If a worksheet has multiple sections, capture the section label (e.g. "Section A - Vocabulary"). Use the page number from the image label.
-
-For 4-up images: each tile has a small dark-grey label "PDF page N — not student answer" above its quadrant. Use that tile label to set "page" for answers in that quadrant. The dark-grey labels are NOT student answers — student answers are blue.
-
-Return JSON only. Each entry is EITHER flat (single answer) OR multi-part:
-
+Return JSON:
 {
   "answers": [
-    // Flat entry:
     {
       "global_question_index": 1,
       "section": "",
@@ -296,65 +234,54 @@ Return JSON only. Each entry is EITHER flat (single answer) OR multi-part:
       "answer_type": "text | choice | number | tick_box | drawing | diagram_label | blank | unknown",
       "answer": "",
       "confidence": 0
-    },
-    // Multi-part entry (list-answer / sequence questions):
-    {
-      "global_question_index": 2,
-      "section": "",
-      "question_number": "",
-      "display_question": "",
-      "page": 0,
-      "is_multi_part": true,
-      "order_matters": false,
-      "parts": [
-        { "part": "i",  "answer_type": "text", "answer": "", "confidence": 0 },
-        { "part": "ii", "answer_type": "text", "answer": "", "confidence": 0 }
-      ]
     }
   ]
-}`;
+}
 
-const ANSWER_KEY_PROMPT = `Extract the expected answers from these answer sheet pages.
+Multi-part entry shape (one stem, several answer slots — e.g.
+"list two reasons", "name three examples"):
+{
+  ...
+  "is_multi_part": true,
+  "order_matters": false,
+  "parts": [
+    { "part": "i",  "answer_type": "text", "answer": "", "confidence": 0 },
+    { "part": "ii", "answer_type": "text", "answer": "", "confidence": 0 }
+  ]
+}
 
-CRITICAL — compact MCQ answer grids: many answer keys pack the MCQ section into a tight tabular grid where each cell holds a question number paired with its answer. For example:
+Field guide:
 
-    | 1  | 1  | 6  | 2  | 11 | 4  | 16 | 4  | 21 | 3  | 26 | 1 |
-    | 2  | 2  | 7  | 4  | 12 | 3  | 17 | 4  | 22 | 3  | 27 | 3 |
-    | 3  | 4  | 8  | 2  | 13 | 2  | 18 | 3  | 23 | 1  | 28 | 2 |
-    ...
+- question_number: as printed on the page ("1", "5a", "19(i)"). Don't renumber.
+- display_question: short label like "Q17" or "Section A Q1". Not the question text.
+- section: section header if the paper has them (e.g. "Section A: Grammar"). Empty otherwise.
+- page: from the page label on the image.
 
-Each "<number> <number>" pair in such a grid is ONE entry: the first number is the question_number and the second is the answer. The grid above carries 30 separate entries (Q1 answer 1, Q2 answer 2, Q3 answer 4, Q6 answer 2, Q7 answer 4, Q8 answer 2, Q11 answer 4, …). Output ALL of them, not just the open-ended answers below the grid. Do not skip the grid because it looks dense or repetitive — those compact pairs are the bulk of the answer key.
+answer_type:
+- "text": handwritten text answer.
+- "choice": MCQ option letter ("A", "B"). Return the letter only.
+- "number": numeric answer.
+- "tick_box": one or more boxes ticked; "answer" lists which (e.g. "B and D").
+- "drawing": shaded fraction, circled item, underlined option, matching line, arrow, plotted point, drawn shape — anything where placement/shape carries the meaning.
+- "diagram_label": child labelled or annotated a diagram.
+- "blank": no ink in the slot. answer: "". confidence: 0.95.
+- "unknown": ink visible but illegible. answer: "unclear". confidence: 0.3.
 
-Preserve the printed question_number EXACTLY as it appears (e.g. "17", "5a", "19(i)"). Do not renumber or skip questions.
+Multi-part rule:
+- LIST-ANSWER question (one stem, several slots): one entry with is_multi_part: true and parts[]. Use printed slot labels for "part" ("i", "ii", "a", "b").
+- DISTINCT SUB-QUESTIONS (Q5a and Q5b are different questions with their own prompts): separate flat entries with question_number "5a" and "5b".
 
-For LIST-ANSWER questions (single stem with several expected items, e.g. "Name two reasons"), output ONE entry with:
-  question_number: the base printed number (e.g. "19" or "5")
-  is_multi_part: true
-  order_matters: matches the question's requirement (false by default; true only for "arrange in order"/"sequence"/"first/next/last"/"x, y, z" named-slot questions)
-  parts: [{ "part": "i", "answer_type": "...", "answer": "...", "confidence": 0 }, ...]
+For 4-up images: each tile has a dark-grey label "PDF page N — not student answer" above its quadrant. Use that to set "page". The label is not a student answer.
 
-For DISTINCT sub-questions where each subpart has its own question text (e.g. Q5a and Q5b are independent), output SEPARATE flat entries with question_number "5a" and "5b". Do NOT group these.
+Return JSON only.`;
 
-Never produce two entries with the same composite key (section + question_number) — use the multi-part form when there are multiple expected items for the same printed question.
+const ANSWER_KEY_PROMPT = `Extract the printed answers from this answer-key page.
 
-"display_question" is a SHORT label only — e.g. "Q17", "Q19". Do NOT put the full question text or expected-answer text into display_question.
+These pages contain the model answers for grading. Answers may appear as a numbered list, a compact grid of question-number → answer pairs, or a marking scheme with sample answers. Read all of them.
 
-Note: answer-key pages may not always show full question wording; if order_matters is unclear from the answer key alone, leave order_matters: false (the student-side extraction will set it correctly).
-
-For each expected answer, set "answer_type" to one of the same values used for the student extraction:
-- "text", "choice", "number", "tick_box", "drawing", "diagram_label", "unknown".
-
-For choice questions, if the option text is visible next to the option number/letter on the answer sheet, include both in "answer", e.g. "3 (scooped)" or "B (the dolphin jumped)". This helps later comparison when the student's extraction may carry the option number while the key carries the option text or vice versa.
-
-CLASSIFICATION RULE: if the expected answer cannot be FULLY represented as typed text — shaded area, matching line, arrow, plotted point, clock hand, completed diagram, drawn shape, etc. — classify it as "drawing" or "diagram_label", NOT "text". For these visual expected answers, "answer" is a short description ("a clock showing 3:15", "the upper half shaded", "lines connecting A→3, B→1"); the final judgement is done by a separate visual comparison stage, not by text equality.
-
-If a worksheet has multiple sections, capture the section label. Use the page number from the image label.
-
-Return JSON only. Each entry is EITHER flat (single answer) OR multi-part (list-answer / sequence question):
-
+Return JSON:
 {
   "answers": [
-    // Flat entry:
     {
       "global_question_index": 1,
       "section": "",
@@ -364,23 +291,42 @@ Return JSON only. Each entry is EITHER flat (single answer) OR multi-part (list-
       "answer_type": "text | choice | number | tick_box | drawing | diagram_label | blank | unknown",
       "answer": "",
       "confidence": 0
-    },
-    // Multi-part entry:
-    {
-      "global_question_index": 2,
-      "section": "",
-      "question_number": "",
-      "display_question": "",
-      "page": 0,
-      "is_multi_part": true,
-      "order_matters": false,
-      "parts": [
-        { "part": "i",  "answer_type": "text", "answer": "", "confidence": 0 },
-        { "part": "ii", "answer_type": "text", "answer": "", "confidence": 0 }
-      ]
     }
   ]
-}`;
+}
+
+Multi-part entry shape (same as student extraction — when the printed
+answer has multiple parts under one question number):
+{
+  ...
+  "is_multi_part": true,
+  "order_matters": false,
+  "parts": [
+    { "part": "i",  "answer_type": "text", "answer": "", "confidence": 0 },
+    { "part": "ii", "answer_type": "text", "answer": "", "confidence": 0 }
+  ]
+}
+
+Field guide:
+
+- question_number: as printed on the answer key. If the key uses a compact grid (e.g. a 2-column table of question_number / answer pairs packed in columns), read the question_number from the printed grid, not from your own counting.
+- display_question: short label like "Q17". Not the question text.
+- section: section header if printed on the key. Empty if not.
+- page: from the page label on the image.
+
+answer_type:
+- "text": text answer (sentence or short).
+- "choice": MCQ option letter.
+- "number": numeric answer.
+- "tick_box": one or more boxes — "answer" lists which.
+- "drawing": describe briefly what the model answer is.
+- "diagram_label": describe the expected labeling.
+- "blank": no answer printed for this question.
+- "unknown": present but unreadable.
+
+For 4-up images: each tile has a dark-grey label "PDF page N — not student answer" above its quadrant. Use that to set "page".
+
+Return JSON only.`;
 
 export async function extractStudentAnswers({
   apiKey,
