@@ -40,12 +40,20 @@ const DEFAULT_DPI = 200;
 //
 //   pdf       : the pdf.js document
 //   pages     : [{ pageNumber, strokes? }] — 1..4 entries
-//   opts      : { dpi?, labelPrefix?, labelSuffix?, jpegQuality? }
+//   opts      : { dpi?, labelPrefix?, labelSuffix?, jpegQuality?, strokesOnly? }
 //
 //   labelPrefix defaults to "PDF page". labelSuffix defaults to
 //   " — not student answer" (suitable for student-page composites where
 //   the AI must distinguish blue student ink from this dark-grey label
 //   text). For answer-key composites pass labelSuffix: ''.
+//
+//   strokesOnly (default false): when true, each tile shows ONLY the
+//   student's strokes on a white background (no printed PDF content).
+//   Same layout, same labels, same dimensions — meant to be a companion
+//   to the printed-with-strokes composite so the extraction call can
+//   tell "no ink at all" apart from "printed option letter on the
+//   page". Same fix as the per-page mode's strokes-only image, applied
+//   to the contact-sheet path.
 //
 // Returns: { dataUrl, includedPageNumbers, widthPx, heightPx, layout }
 //   layout ∈ "single" | "stacked" | "one_plus_two" | "grid_2x2"
@@ -58,8 +66,15 @@ export async function composeContactSheetA4(pdf, pages, opts = {}) {
   }
 
   const dpi = opts.dpi || DEFAULT_DPI;
+  const strokesOnly = opts.strokesOnly === true;
   const labelPrefix = opts.labelPrefix || 'PDF page';
-  const labelSuffix = opts.labelSuffix == null ? ' — not student answer' : opts.labelSuffix;
+  // When strokesOnly, the default suffix changes from "— not student
+  // answer" (which is true on the printed composite, where the label
+  // text could be mistaken for ink) to "— strokes only" (which tells
+  // the model what this companion image is). Caller may still override.
+  const labelSuffix = opts.labelSuffix == null
+    ? (strokesOnly ? ' — strokes only' : ' — not student answer')
+    : opts.labelSuffix;
   const jpegQuality = opts.jpegQuality || 0.85;
 
   const ptToPx = dpi / 72;
@@ -101,7 +116,9 @@ export async function composeContactSheetA4(pdf, pages, opts = {}) {
     // area, then letterbox into the tile area.
     const tileW = slot.cellW;
     const tileH = slot.cellH - labelH;
-    const tileCanvas = await renderTile(pdf, pageNumber, strokes || [], tileW, tileH);
+    const tileCanvas = strokesOnly
+      ? await renderStrokesOnlyTile(pdf, pageNumber, strokes || [], tileW, tileH)
+      : await renderTile(pdf, pageNumber, strokes || [], tileW, tileH);
     const drawX = slot.x + Math.round((tileW - tileCanvas.width) / 2);
     const drawY = slot.y + labelH + Math.round((tileH - tileCanvas.height) / 2);
     ctx.drawImage(tileCanvas, drawX, drawY);
@@ -175,6 +192,34 @@ async function renderTile(pdf, pageNumber, strokes, maxW, maxH) {
   const fit = Math.min(maxW / baseViewport.width, maxH / baseViewport.height);
   const dpi = (fit * 72);
   const r = await renderPageOffscreen(pdf, pageNumber, dpi);
+  for (const s of strokes) {
+    drawStroke(r.ctx, s, {
+      pageWidthPts: r.pageWidthPts,
+      widthPx: r.widthPx,
+      heightPx: r.heightPx,
+    });
+  }
+  return r.canvas;
+}
+
+// Strokes-only sibling of renderTile. Same fit calc / DPI / canvas
+// dimensions — only the content differs: the printed PDF is wiped
+// with white before the strokes are drawn, so each tile shows only
+// the student's blue ink against white. Used as a companion to the
+// printed-with-strokes composite so the extraction model can tell
+// "no ink at all" apart from "printed option letter on the
+// underlying page". Same fix as the per-page renderStrokesOnlyPage
+// in flatten.js, applied to the contact-sheet path.
+async function renderStrokesOnlyTile(pdf, pageNumber, strokes, maxW, maxH) {
+  const page = await pdf.getPage(pageNumber);
+  const baseViewport = page.getViewport({ scale: 1 });
+  const fit = Math.min(maxW / baseViewport.width, maxH / baseViewport.height);
+  const dpi = (fit * 72);
+  const r = await renderPageOffscreen(pdf, pageNumber, dpi);
+  // renderPageOffscreen painted the printed PDF on the canvas.
+  // Wipe with white before drawing strokes.
+  r.ctx.fillStyle = 'white';
+  r.ctx.fillRect(0, 0, r.canvas.width, r.canvas.height);
   for (const s of strokes) {
     drawStroke(r.ctx, s, {
       pageWidthPts: r.pageWidthPts,
