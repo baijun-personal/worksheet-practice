@@ -172,6 +172,25 @@ body.app-immersive .ios-hint { display: none; }
   font-size: 12px;
   padding: 2px 6px;
 }
+/* ✓ saved chip that flashes next to a prompt textarea after a
+   keystroke / paste / Reset persists. Fades out via opacity
+   transition. Tiny — meant to confirm "yes, your edit landed"
+   without consuming layout space. */
+.saved-chip {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 11px;
+  color: #1e7a34;
+  background: #e6f4ea;
+  border: 1px solid #c8e3cf;
+  border-radius: 10px;
+  padding: 1px 8px;
+  opacity: 0;
+  transition: opacity 200ms ease-out;
+  pointer-events: none;
+  align-self: flex-start;
+}
+.saved-chip.visible { opacity: 1; }
 
 /* Build-version badge in the topbar. Reads main.js's Last-Modified
    header and displays it as a relative time. Click to force a

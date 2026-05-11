@@ -82,6 +82,33 @@ function setChecked(id, checked) {
   return true;
 }
 
+// Brief visual confirmation that a settings write landed. Used on
+// the prompt textareas specifically — the regular inputs / selects
+// were never ambiguous because focus moves quickly, but a long
+// textarea edit can run for minutes and the parent had no signal
+// that the keystrokes were being persisted. Flash a green ✓ chip
+// next to the element for ~800ms after each save.
+//
+// Implementation: lazily inject one .saved-chip element after the
+// target on first call, then toggle a .visible class. Restricted
+// to textareas via tagName check — no point flashing on selects
+// where focus loss is the natural confirmation.
+function flashSavedNear(el) {
+  if (!el || el.tagName !== 'TEXTAREA') return;
+  let chip = el.nextElementSibling && el.nextElementSibling.classList?.contains('saved-chip')
+    ? el.nextElementSibling
+    : null;
+  if (!chip) {
+    chip = document.createElement('span');
+    chip.className = 'saved-chip';
+    chip.textContent = '✓ saved';
+    el.parentNode?.insertBefore(chip, el.nextSibling);
+  }
+  chip.classList.add('visible');
+  clearTimeout(chip._fadeTimer);
+  chip._fadeTimer = setTimeout(() => chip.classList.remove('visible'), 800);
+}
+
 // Custom-prompt textareas in Settings pre-fill with the built-in
 // prompt text (BUILTIN_PROMPTS) so reviewers can see what's being
 // sent without grepping the source. When saving, if the textarea
@@ -783,9 +810,20 @@ function bindSetupForm() {
       console.warn(`bindSetupForm: missing element #${id} (stale HTML?). Skipping listener.`);
       continue;
     }
-    el.addEventListener('change', () => {
+    // Bind BOTH 'change' and 'input'. For <textarea>, 'change' only
+    // fires on blur — so a paste-then-switch-tabs flow (common with
+    // the prompt textareas) never persisted until the textarea lost
+    // focus. 'input' fires on every keystroke / paste / programmatic
+    // value-set, so we catch the mid-edit case too. For <select> and
+    // numeric/text <input>, 'input' and 'change' are effectively the
+    // same; the duplicate save is cheap (localStorage write of one
+    // settings object) and harmless.
+    const onPersist = () => {
       state.settings = saveSettings({ [key]: parser(el.value) });
-    });
+      flashSavedNear(el);
+    };
+    el.addEventListener('change', onPersist);
+    el.addEventListener('input', onPersist);
   }
   $('test-mode').addEventListener('change', () => {
     state.settings = saveSettings({ testMode: $('test-mode').checked });
