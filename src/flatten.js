@@ -21,6 +21,38 @@ export async function renderAnswerPage(pdf, pageNumber, dpi) {
   return r.canvas.toDataURL('image/jpeg', 0.85);
 }
 
+// Render ONLY the student's strokes on a white canvas at the same
+// dimensions as the rendered PDF page. Used by the extraction call
+// alongside the printed-page image: the model uses the printed
+// image for question structure, this one to see what was actually
+// written. Removes the "printed option letter mis-read as
+// handwriting" failure mode that affected MCQ rows with no
+// selection (Q5 on the English Mock: model returned
+// answer:"a"/confidence 0.98 by reading the printed option label,
+// even though the slot was empty).
+//
+// Same DPI / same pixel dimensions / same coordinate system as
+// flattenQuestionPage so the model can align this image against
+// the printed-page image at identical positions.
+export async function renderStrokesOnlyPage(pdf, pageNumber, strokes, dpi) {
+  const r = await renderPageOffscreen(pdf, pageNumber, dpi);
+  // renderPageOffscreen returns a canvas with the PDF already
+  // painted on it. Overpaint with white to drop the printed
+  // content before drawing strokes. The few ms of wasted page
+  // render is negligible vs the API call latency this image
+  // will join.
+  r.ctx.fillStyle = 'white';
+  r.ctx.fillRect(0, 0, r.canvas.width, r.canvas.height);
+  const size = {
+    pageWidthPts: r.pageWidthPts,
+    pageHeightPts: r.pageHeightPts,
+    widthPx: r.widthPx,
+    heightPx: r.heightPx,
+  };
+  for (const s of (strokes || [])) drawStroke(r.ctx, s, size);
+  return r.canvas.toDataURL('image/jpeg', 0.85);
+}
+
 // Quick black-and-white check: render a small thumbnail and sample pixels.
 // Returns ratio of pixels that are clearly chromatic (not grayscale).
 export async function colorContentRatio(pdf, sampleSize = 200) {
