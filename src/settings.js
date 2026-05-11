@@ -18,12 +18,19 @@ const DEFAULTS = {
   priceInPerMTokens: 0.75,
   priceCachedInPerMTokens: 0.075,
   priceOutPerMTokens: 4.50,
-  // Marking mode: how completed pages are grouped before sending to OpenAI.
-  // - "auto"            → single combined (≤4 question pages) or batch4_fullpage (>4)
-  // - "single_fullpage" → one request, all completed pages as separate full-page images
-  // - "batch4_fullpage" → groups of 4 pages, full-page images per page
-  // - "batch4_fourup"   → groups of 4 pages, composed into one 4-up A4 image per group
-  markingMode: 'auto',
+  // Marking modes:
+  // - "single_fullpage"      → one combined request, full-page images
+  //                            per page (printed + strokes-only pair)
+  // - "batch4_fourup"        → groups of 4 pages, composed into one
+  //                            4-up A4 image plus a strokes-only
+  //                            companion (default — Balanced)
+  // - "batch4_fourup_single" → groups of 4 pages, single 4-up A4
+  //                            image only (no strokes-only companion;
+  //                            cheapest)
+  // Older saved values ("auto", "batch4_fullpage") fall through to
+  // batch4_fourup in main.js — they no longer have a dropdown option
+  // and there's no migration code, by design.
+  markingMode: 'batch4_fourup',
   // API mode:
   // - "direct" → browser POSTs to api.openai.com with the OpenAI key.
   // - "proxy"  → browser POSTs to a Cloudflare Worker (or similar) that
@@ -68,6 +75,7 @@ const DEFAULTS = {
   // testing. Changes take effect on the next request — no
   // restart needed.
   customStudentPrompt: '',
+  customStudentPromptSingle: '',
   customAnswerKeyPrompt: '',
   customComparePrompt: '',
   customCompareVisualPrompt: '',
