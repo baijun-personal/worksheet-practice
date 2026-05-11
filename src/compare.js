@@ -85,6 +85,51 @@ function leadingInt(qnum) {
   return m ? parseInt(m[1], 10) : null;
 }
 
+// Try to split a flat answer-key value like "27, 32" or "alert; calm"
+// into `expectedCount` segments. Returns string[] of that length, or
+// null if a clean split isn't possible. The split is intentionally
+// strict: we only accept results that have the SAME number of
+// segments as the student has parts. Mismatches fall back to the
+// caller's flatten-or-pass-through path.
+//
+// Supports comma, semicolon, and the "X and Y" form (only when
+// exactly 2 are expected). Trims whitespace and a leading "and" /
+// "or" on each segment. Filters out empty strings.
+//
+// Used by matchExtractions' pair-builder when the student side is
+// multi-part but the answer-key side is flat — common on
+// list-answer questions ("Write the next two numbers") where the
+// printed key writes the answers as a single comma-separated row.
+// Without this, the AI comparator receives mismatched part counts
+// (student N parts vs key 1 part) and produces nonsense per-part
+// rows.
+function splitFlatListAnswer(text, expectedCount) {
+  const s = String(text || '').trim();
+  if (!s || expectedCount < 2) return null;
+
+  // Try comma split first, then semicolon. Both are common in
+  // Singapore answer keys ("27, 32" or "27; 32").
+  for (const delim of [',', ';']) {
+    if (s.includes(delim)) {
+      const parts = s.split(delim).map((x) =>
+        x.replace(/^\s*(?:and|or)\s+/i, '').trim()
+      ).filter(Boolean);
+      if (parts.length === expectedCount) return parts;
+    }
+  }
+
+  // "X and Y" — only when expectedCount is exactly 2.
+  if (expectedCount === 2) {
+    const m = s.match(/^(.+?)\s+and\s+(.+)$/i);
+    if (m) {
+      const parts = [m[1].trim(), m[2].trim()].filter(Boolean);
+      if (parts.length === 2) return parts;
+    }
+  }
+
+  return null;
+}
+
 // Assign a synthetic, 1-indexed section number to every entry in the
 // list based on backward jumps in the printed question-number sequence.
 // Papers with sections that restart numbering at 1 (e.g. Section A:
@@ -539,12 +584,14 @@ export function matchExtractions(studentBatchResults, answerKeyResults) {
     }
     if (key) usedKeyRefs.add(refOf(key));
 
-    // Determine whether this pair is multi-part. Either side being
-    // multi-part promotes the pair into a multi-part record so the
-    // comparison call can reason over parts coherently.
+    // Determine the shape of each side BEFORE the
+    // split/flatten logic below. The pair's final is_multi_part
+    // flag is recomputed after that block from the final
+    // studentParts/expectedParts arrays — the flatten branch can
+    // collapse a grouped student to length 1, so an early flag
+    // based only on studentGrouped/keyGrouped would lie.
     const studentGrouped = s.is_multi_part === true && Array.isArray(s.parts);
     const keyGrouped = !!key && key.is_multi_part === true && Array.isArray(key.parts);
-    const isMultiPart = studentGrouped || keyGrouped;
 
     // student-side wording is the more reliable source for order_matters
     // (the question wording is on the worksheet, not the answer sheet).
@@ -565,21 +612,81 @@ export function matchExtractions(studentBatchResults, answerKeyResults) {
           answer_type: s.answer_type || 'text',
           confidence: typeof s.confidence === 'number' ? s.confidence : null,
         }];
-    const expectedParts = keyGrouped
-      ? key.parts.map((p, i) => ({
-          part: p.part != null ? String(p.part) : String(i + 1),
-          answer: p.answer ?? '',
-          answer_type: p.answer_type || 'text',
-          confidence: typeof p.confidence === 'number' ? p.confidence : null,
-        }))
-      : (key
-          ? [{
-              part: '1',
-              answer: key.answer ?? '',
-              answer_type: key.answer_type || 'text',
-              confidence: typeof key.confidence === 'number' ? key.confidence : null,
-            }]
-          : []);
+    // Build expected_parts to match the student's part count where
+    // possible. Three branches:
+    //
+    //   1. Both sides grouped: per-part 1:1 — the existing happy path.
+    //   2. Student grouped, key flat: try to split the key's flat
+    //      answer ("27, 32") into the same number of segments as
+    //      studentParts. If splitting succeeds, pair positionally per
+    //      part. If splitting fails (single-value key like "blue"),
+    //      flatten the student side into one joined entry instead —
+    //      both sides become 1:1 and the comparator sees a clean
+    //      single-string compare. This case appeared on the Math
+    //      Mock Section A Q6 ("Write the next two numbers"): student
+    //      extracted as multi-part with two slots, key printed
+    //      "27, 32" as a single comma-separated flat answer. Without
+    //      the split/flatten, the AI compare received mismatched
+    //      part counts and produced nonsense per-part rows.
+    //   3. Key flat AND student also flat: today's single wrap.
+    let expectedParts;
+    if (keyGrouped) {
+      expectedParts = key.parts.map((p, i) => ({
+        part: p.part != null ? String(p.part) : String(i + 1),
+        answer: p.answer ?? '',
+        answer_type: p.answer_type || 'text',
+        confidence: typeof p.confidence === 'number' ? p.confidence : null,
+      }));
+    } else if (key && studentGrouped && studentParts.length > 1) {
+      const split = splitFlatListAnswer(key.answer, studentParts.length);
+      if (split) {
+        // Split worked — pair positionally per part. Student's
+        // part labels are preserved so the report's per-part rows
+        // line up with the student's printed labels (Q6(1), Q6(2)).
+        expectedParts = split.map((value, i) => ({
+          part: studentParts[i]?.part ?? String(i + 1),
+          answer: value,
+          answer_type: key.answer_type || 'text',
+          confidence: typeof key.confidence === 'number' ? key.confidence : null,
+        }));
+      } else {
+        // Flatten: join the student's parts into one comma-
+        // separated entry, leave the key flat. Both sides 1:1.
+        // We mutate studentParts in place (it's an array literal
+        // built above this branch — no external aliasing) so the
+        // pair record below sees the flattened shape.
+        const joined = studentParts.map((p) => p.answer).filter(Boolean).join(', ');
+        studentParts.length = 0;
+        studentParts.push({
+          part: '1',
+          answer: joined,
+          answer_type: 'text',
+          confidence: null,
+        });
+        expectedParts = [{
+          part: '1',
+          answer: key.answer ?? '',
+          answer_type: key.answer_type || 'text',
+          confidence: typeof key.confidence === 'number' ? key.confidence : null,
+        }];
+      }
+    } else if (key) {
+      expectedParts = [{
+        part: '1',
+        answer: key.answer ?? '',
+        answer_type: key.answer_type || 'text',
+        confidence: typeof key.confidence === 'number' ? key.confidence : null,
+      }];
+    } else {
+      expectedParts = [];
+    }
+
+    // Multi-part flag derived from the FINAL shapes after the
+    // split/flatten logic above. The flatten branch may have
+    // rewritten studentParts to length 1, in which case the pair
+    // is no longer multi-part regardless of the original
+    // studentGrouped flag.
+    const finalIsMultiPart = studentParts.length > 1 || expectedParts.length > 1;
 
     pairs.push({
       question: String(s.question_number || s.global_question_index || ''),
@@ -588,24 +695,29 @@ export function matchExtractions(studentBatchResults, answerKeyResults) {
       completed_page: s.page ?? null,
       answer_page: key?.page ?? null,
       // Multi-part fields (always populated; for flat pairs parts has length 1).
-      is_multi_part: isMultiPart,
+      is_multi_part: finalIsMultiPart,
       order_matters: orderMatters,
       student_parts: studentParts,
       expected_parts: expectedParts,
       // Flat convenience fields — preserved for the non-grouped flow so
       // existing readers (markPairs, fallback scoring) work unchanged.
-      // For grouped pairs these are derived for fallback display only.
-      student_answer: studentGrouped
+      // Derived from the (possibly mutated) studentParts/expectedParts
+      // arrays so the flatten branch's rewrite shows up cleanly here too.
+      student_answer: studentParts.length > 1
         ? studentParts.map((p) => p.answer).filter(Boolean).join('; ')
-        : (s.answer ?? ''),
-      student_confidence: studentGrouped
+        : (studentParts[0]?.answer ?? ''),
+      student_confidence: studentParts.length > 1
         ? null
-        : (typeof s.confidence === 'number' ? s.confidence : null),
-      student_type: studentGrouped ? '' : (s.answer_type || ''),
-      expected_answer: keyGrouped
+        : (studentParts[0]?.confidence ?? null),
+      student_type: studentParts.length > 1
+        ? ''
+        : (studentParts[0]?.answer_type || ''),
+      expected_answer: expectedParts.length > 1
         ? expectedParts.map((p) => p.answer).filter(Boolean).join('; ')
-        : (key ? (key.answer ?? '') : ''),
-      expected_type: keyGrouped ? '' : (key?.answer_type || ''),
+        : (expectedParts[0]?.answer ?? ''),
+      expected_type: expectedParts.length > 1
+        ? ''
+        : (expectedParts[0]?.answer_type || ''),
       match_confidence: +matchConfidence.toFixed(2),
       match_method: matchMethod,
     });
