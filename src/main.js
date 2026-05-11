@@ -14,7 +14,7 @@ import {
 } from './paper.js';
 import { loadPdfFromBlob, renderPageToCanvas } from './pdfRender.js';
 import { attachInkController, redrawAll } from './draw.js';
-import { flattenQuestionPage, renderAnswerPage, colorContentRatio } from './flatten.js';
+import { flattenQuestionPage, renderStrokesOnlyPage, renderAnswerPage, colorContentRatio } from './flatten.js';
 import { extractStudentAnswers, extractAnswerKey, markPairs, compareVisualPair, requestExplanation, MODEL_PRESETS, DEFAULT_MODEL, presetForModel } from './openai.js';
 import { matchExtractions, buildFinalReport, partitionPairsByModality } from './compare.js';
 import { renderReport, exportReportPdf, exportCompletedAttemptPdf } from './report.js';
@@ -2300,14 +2300,32 @@ async function onSubmit() {
   const dpi = state.settings.renderDpi || 150;
 
   // Flatten all completed question pages once (cache for "download attempt").
+  // Two images per page for the extraction call:
+  //   dataUrl         — printed page + strokes flattened. Also feeds
+  //                     the "Download completed attempt PDF" feature
+  //                     and the Why?/Show steps explanation context
+  //                     via state.flattenedCompletedPages below.
+  //   strokesDataUrl  — white background + strokes only. Sent
+  //                     alongside the printed page to the extraction
+  //                     call so the model has a clean view of what
+  //                     the student wrote, with no printed text to
+  //                     misread as handwriting (the Q5 / "a"-from-
+  //                     printed-option-label bug).
+  // Both images use the same DPI and identical pixel dimensions so
+  // the model can align them.
   const completedPagesAll = [];
   for (const pageNum of qPages) {
     if (state.cancelMarking) return abortMarking('Cancelled');
     const strokes = await getStrokesForPage(state.attempt.id, pageNum);
     const dataUrl = await flattenQuestionPage(state.pdf, pageNum, strokes, dpi);
-    completedPagesAll.push({ pageNumber: pageNum, dataUrl, strokes });
+    const strokesDataUrl = await renderStrokesOnlyPage(state.pdf, pageNum, strokes, dpi);
+    completedPagesAll.push({ pageNumber: pageNum, dataUrl, strokesDataUrl, strokes });
     $('marking-status').textContent = `Flattening ${completedPagesAll.length}/${qPages.length} pages…`;
   }
+  // flattenedCompletedPages feeds the download-attempt-PDF feature
+  // and the explanation context. Both want page+strokes composited;
+  // neither needs the strokes-only image. Intentionally omit
+  // strokesDataUrl from this snapshot.
   state.flattenedCompletedPages = completedPagesAll.map(({ pageNumber, dataUrl }) => ({ pageNumber, dataUrl }));
 
   // Render answer pages. ALWAYS render one full-page image per
@@ -2383,8 +2401,20 @@ async function onSubmit() {
         plannedPages: plan.pages,
       });
     } else {
+      // Non-4-up path: send the printed page AND the strokes-only
+      // image to extraction. 4-up path above stays single-image
+      // (a matching 4-up strokes-only composite would be more work
+      // than this fix is worth; 4-up has its own legibility
+      // trade-offs tracked separately).
       batches.push({
-        completed: plan.pages.map((n) => ({ pageNumber: n, dataUrl: completedByPage.get(n).dataUrl })),
+        completed: plan.pages.map((n) => {
+          const p = completedByPage.get(n);
+          return {
+            pageNumber: n,
+            dataUrl: p.dataUrl,
+            strokesDataUrl: p.strokesDataUrl,
+          };
+        }),
         plannedPages: plan.pages,
       });
     }
