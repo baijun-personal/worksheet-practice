@@ -655,42 +655,19 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
 //     short_reason,
 //     confidence:         0..1 numeric
 //     needs_human_review: confidence < 0.5
-//     question_start_location: { page, x, y }   x/y normalized 0..1
+//     question_page:      <integer>   // 1-based PDF page number
 //   }
 //
-// Coordinates: APPROXIMATE ORDINAL marker placement, not visual
-// snap-to-heading detection.
+// Placement: there are no coordinates here. The compare/marking
+// AI call is text-only — it never sees the rendered page — so
+// it can't locate a printed question heading, and the earlier
+// code-side ordinal-spread coordinate also drifted off questions
+// on any paper with non-uniform question density.
 //
-// The compare/marking AI call is text-only — it never sees the
-// rendered page — so it can't usefully locate a printed question
-// heading. The earlier "AI hint with code fallback" hybrid is
-// gone; placement is now 100% code-side ordinal: x sits at a
-// fixed left-margin band, y is the question's index among other
-// questions on the same page spread evenly between 0.12 and
-// 0.88 of page height. See synthLocation() below.
-//
-// Marker placement is intended to be visually close enough that
-// the parent can tell which question the red ✗ refers to. Not
-// pixel-accurate. Two-column layouts, comprehension passages,
-// and dense diagrams will all place markers off the actual
-// heading by some amount — accepted for MVP.
+// Review Mode now renders a side-rail list of review rows
+// alongside the page image, ordered by question number within
+// each page. question_page is all the rail needs to know.
 function buildReviewRecords({ pairs, questions, aiQByQ }) {
-  // Index pairs by base question for the position-on-page lookup.
-  const pairsByPage = new Map(); // page -> [{ qn, pair }]
-  for (const p of pairs) {
-    const pg = Number(p.completed_page);
-    if (!Number.isFinite(pg)) continue;
-    const qn = normalizeQNumber(p.display_question || p.question || '');
-    if (!qn) continue;
-    if (!pairsByPage.has(pg)) pairsByPage.set(pg, []);
-    pairsByPage.get(pg).push({ qn, pair: p });
-  }
-  // Sort each page's questions by their numeric prefix so y-position
-  // synthesis lines up with reading order.
-  for (const list of pairsByPage.values()) {
-    list.sort((a, b) => qnumNumericPrefix(a.qn) - qnumNumericPrefix(b.qn));
-  }
-
   // Group flat rows by base question so multi-part subparts that
   // share a base question (Q19(i), Q19(ii)) become one record.
   const groups = new Map(); // baseKey -> { row, parts: [] }
@@ -747,11 +724,7 @@ function buildReviewRecords({ pairs, questions, aiQByQ }) {
     const shortReason = localCommentWinsForUnanswered
       ? String(baseRow.comment).trim()
       : String(aiRow?.short_reason || baseRow.comment || '').trim();
-    const location = synthLocation({
-      page: baseRow.completed_page,
-      qn,
-      pairsByPage,
-    });
+    const anchorPage = synthAnchor({ page: baseRow.completed_page });
     const status = parts.length > 0 && parts.every((p) => p.status === 'correct')
       ? 'correct'
       : (parts.length > 0 ? worstStatusOf(parts) : baseRow.status);
@@ -760,13 +733,13 @@ function buildReviewRecords({ pairs, questions, aiQByQ }) {
     const rec = {
       question: baseKey,
       section: baseRow.section || '',
-      completed_page: location?.page ?? baseRow.completed_page ?? null,
+      completed_page: anchorPage ?? baseRow.completed_page ?? null,
       status,
       short_display_answer: shortAnswer,
       short_reason: shortReason,
       confidence: conf,
       needs_human_review: conf < 0.5,
-      question_start_location: location,
+      question_page: anchorPage,
     };
     if (parts.length > 0) {
       rec.parts = parts;
@@ -826,39 +799,19 @@ function qnumNumericPrefix(qn) {
   return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER;
 }
 
-// Review-marker placement — approximate ordinal positioning.
+// Anchor a review record to a page. The earlier x/y coordinate
+// path (ordinal-uniform placement) was removed when Review
+// Mode switched from on-page ✗ overlays to a side-rail list —
+// there's no coordinate to compute. The list orders rows by
+// question number within the record's page, which is all we
+// need here.
 //
-// The compare/marking call is text-only and cannot visually
-// locate the printed question heading. So coordinates here are
-// NOT visual snap-to-heading detection; they're a fully
-// code-side ordinal estimate:
-//   - page comes from the extraction's completed_page
-//     (definitive)
-//   - x is a fixed left-margin band (~0.08)
-//   - y is derived from the question's ordinal position among
-//     other questions on the same page, spread evenly between
-//     0.12 and 0.88 of page height
-//
-// The goal is "close enough that the parent can tell which
-// question the red ✗ refers to." Two-column layouts, dense
-// diagrams, comprehension passages, and long-followed-by-short
-// question patterns will all place the marker off the actual
-// heading by some amount — that's accepted for MVP.
-//
-// `source: 'ordinal'` is included in the returned object only
-// for debug-mode display (Review Mode's ?debug=1 toggle).
-function synthLocation({ page, qn, pairsByPage }) {
+// Returns the page number (or null if the input page is
+// invalid / missing).
+function synthAnchor({ page }) {
   const pg = Number(page);
   if (!Number.isFinite(pg) || pg < 1) return null;
-  const list = pairsByPage.get(pg) || [];
-  const idx = list.findIndex((e) => e.qn === qn);
-  const total = list.length;
-  const top = 0.12;
-  const bottom = 0.88;
-  const y = total > 0 && idx >= 0
-    ? Math.min(0.9, Math.max(0.12, top + (idx / Math.max(1, total)) * (bottom - top)))
-    : 0.5;
-  return { page: pg, x: 0.08, y, source: 'ordinal' };
+  return pg;
 }
 
 // Build per-part display rows for a grouped text pair. Walks the
