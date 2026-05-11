@@ -17,6 +17,13 @@
 
 const ENDPOINT = 'https://api.openai.com/v1/chat/completions';
 
+// Pick a custom override if the parent set one in Setup → Advanced,
+// otherwise use the built-in default. Trim before checking so a
+// textarea with only whitespace is treated as empty.
+function pickPrompt(custom, builtin) {
+  return (custom && String(custom).trim()) ? custom : builtin;
+}
+
 // Pluggable transport. In "direct" mode the browser POSTs to api.openai.com
 // with the user's OpenAI key in Authorization. In "proxy" mode the browser
 // POSTs to a Cloudflare Worker (URL + token configured per-device) that
@@ -336,6 +343,7 @@ export async function extractStudentAnswers({
   apiMode,
   proxyEndpoint,
   proxyToken,
+  customPrompt,         // override STUDENT_PROMPT when non-empty
 }) {
   const content = [];
   for (const p of completedPageImages) {
@@ -349,7 +357,11 @@ export async function extractStudentAnswers({
     content.push({ type: 'text', text: label });
     content.push({ type: 'image_url', image_url: { url: p.dataUrl, detail: 'high' } });
   }
-  return chatJson({ apiKey, model, system: STUDENT_PROMPT, content, signal, apiMode, proxyEndpoint, proxyToken });
+  return chatJson({
+    apiKey, model,
+    system: pickPrompt(customPrompt, STUDENT_PROMPT),
+    content, signal, apiMode, proxyEndpoint, proxyToken,
+  });
 }
 
 export async function extractAnswerKey({
@@ -360,6 +372,7 @@ export async function extractAnswerKey({
   apiMode,
   proxyEndpoint,
   proxyToken,
+  customPrompt,        // override ANSWER_KEY_PROMPT when non-empty
 }) {
   const content = [];
   for (const p of answerPageImages) {
@@ -372,7 +385,11 @@ export async function extractAnswerKey({
     content.push({ type: 'text', text: label });
     content.push({ type: 'image_url', image_url: { url: p.dataUrl, detail: 'high' } });
   }
-  return chatJson({ apiKey, model, system: ANSWER_KEY_PROMPT, content, signal, apiMode, proxyEndpoint, proxyToken });
+  return chatJson({
+    apiKey, model,
+    system: pickPrompt(customPrompt, ANSWER_KEY_PROMPT),
+    content, signal, apiMode, proxyEndpoint, proxyToken,
+  });
 }
 
 const COMPARE_VISUAL_PROMPT = `You are comparing one visual worksheet answer.
@@ -413,6 +430,7 @@ export async function compareVisualPair({
   apiMode,
   proxyEndpoint,
   proxyToken,
+  customPrompt,            // override COMPARE_VISUAL_PROMPT when non-empty
 }) {
   const headerLines = [
     `Question: ${pair.display_question || pair.question}`,
@@ -430,7 +448,11 @@ export async function compareVisualPair({
     content.push({ type: 'text', text: `Answer page ${pair.answer_page ?? ''}` });
     content.push({ type: 'image_url', image_url: { url: answerImageDataUrl, detail: 'high' } });
   }
-  return chatJson({ apiKey, model, system: COMPARE_VISUAL_PROMPT, content, signal, apiMode, proxyEndpoint, proxyToken });
+  return chatJson({
+    apiKey, model,
+    system: pickPrompt(customPrompt, COMPARE_VISUAL_PROMPT),
+    content, signal, apiMode, proxyEndpoint, proxyToken,
+  });
 }
 
 // Page-type classification call. Vision; uses low-resolution contact
@@ -479,6 +501,7 @@ export async function detectPages({
   apiMode,
   proxyEndpoint,
   proxyToken,
+  customPrompt,          // override PAGE_DETECTION_PROMPT when non-empty
 }) {
   const content = [];
   for (const p of pageImages) {
@@ -492,7 +515,11 @@ export async function detectPages({
     // need 'high'. Cuts input tokens substantially.
     content.push({ type: 'image_url', image_url: { url: p.dataUrl, detail: 'low' } });
   }
-  return chatJson({ apiKey, model, system: PAGE_DETECTION_PROMPT, content, signal, apiMode, proxyEndpoint, proxyToken });
+  return chatJson({
+    apiKey, model,
+    system: pickPrompt(customPrompt, PAGE_DETECTION_PROMPT),
+    content, signal, apiMode, proxyEndpoint, proxyToken,
+  });
 }
 
 // Final-stage TEXT comparison call. Text-only — no images. Receives the
@@ -512,6 +539,7 @@ export async function markPairs({
   apiMode,
   proxyEndpoint,
   proxyToken,
+  customPrompt,     // override COMPARE_PROMPT when non-empty
 }) {
   // Per-page question count + per-pair page index. Used to give
   // the AI enough metadata to synthesize a meaningful y-position
@@ -591,7 +619,11 @@ export async function markPairs({
     }),
   };
   const content = [{ type: 'text', text: JSON.stringify(payload, null, 2) }];
-  return chatJson({ apiKey, model, system: COMPARE_PROMPT, content, signal, apiMode, proxyEndpoint, proxyToken });
+  return chatJson({
+    apiKey, model,
+    system: pickPrompt(customPrompt, COMPARE_PROMPT),
+    content, signal, apiMode, proxyEndpoint, proxyToken,
+  });
 }
 
 // Per-question explanation calls for Review Mode. Three flavours
@@ -642,9 +674,19 @@ export async function requestExplanation({
   apiMode,
   proxyEndpoint,
   proxyToken,
+  customExplanationBase,       // optional override for EXPLANATION_PROMPT_BASE
+  customExplanationVariants,   // optional { why, show_steps, give_hint } —
+                               // only present keys override; the rest fall
+                               // through to the built-in variant strings
 }) {
-  const variant = EXPLANATION_VARIANTS[requestType] || EXPLANATION_VARIANTS.why;
-  const system = `${EXPLANATION_PROMPT_BASE}\n${variant}`;
+  const base = pickPrompt(customExplanationBase, EXPLANATION_PROMPT_BASE);
+  const variants = {
+    why:        pickPrompt(customExplanationVariants?.why,        EXPLANATION_VARIANTS.why),
+    show_steps: pickPrompt(customExplanationVariants?.show_steps, EXPLANATION_VARIANTS.show_steps),
+    give_hint:  pickPrompt(customExplanationVariants?.give_hint,  EXPLANATION_VARIANTS.give_hint),
+  };
+  const variant = variants[requestType] || variants.why;
+  const system = `${base}\n${variant}`;
   const headerLines = [
     `Question: ${question || '(unknown)'}`,
     `Student wrote: ${studentAnswer || '(blank)'}`,

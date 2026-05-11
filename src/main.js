@@ -2423,12 +2423,14 @@ async function onSubmit() {
         res = await extractStudentAnswers({
           ...transport,
           completedPageImages: t.completed,
+          customPrompt: state.settings.customStudentPrompt,
         });
         studentResults.push(res.parsed);
       } else {
         res = await extractAnswerKey({
           ...transport,
           answerPageImages: t.answer,
+          customPrompt: state.settings.customAnswerKeyPrompt,
         });
         keyResults.push(res.parsed);
       }
@@ -2506,6 +2508,7 @@ async function onSubmit() {
           pairs: textPairs,
           subject: state.attempt.subject,
           level: state.attempt.level,
+          customPrompt: state.settings.customComparePrompt,
         });
         aiTextReport = cmpRes.parsed;
         taskUsages.push(buildTaskRecord({
@@ -2575,6 +2578,7 @@ async function onSubmit() {
           pair,
           completedImageDataUrl: cPageEntry.dataUrl,
           answerImageDataUrl: aPageEntry.dataUrl,
+          customPrompt: state.settings.customCompareVisualPrompt,
         });
         visualResults.push({ pair, parsed: res.parsed });
         taskUsages.push(buildTaskRecord({
@@ -3112,6 +3116,12 @@ async function onExplanationClick(requestType) {
       shortReason: record.short_reason || record.comment || '',
       pageImages,
       signal: abort.signal,
+      customExplanationBase: state.settings.customExplanationPromptBase,
+      customExplanationVariants: {
+        why:        state.settings.customExplanationVariantWhy,
+        show_steps: state.settings.customExplanationVariantShowSteps,
+        give_hint:  state.settings.customExplanationVariantGiveHint,
+      },
     });
     // Bail if the user moved on while we were waiting. The fetch
     // may have already completed by the time the abort fires, so

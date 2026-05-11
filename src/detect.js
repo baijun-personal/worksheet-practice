@@ -74,6 +74,7 @@ export async function runPageDetection({
   const result = await detectPages({
     apiKey, model, apiMode, proxyEndpoint, proxyToken, signal,
     pageImages: sheets,
+    customPrompt: settings?.customPageDetectionPrompt,
   });
 
   const aiPages = Array.isArray(result?.parsed?.pages) ? result.parsed.pages : [];
