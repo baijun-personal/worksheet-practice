@@ -161,11 +161,15 @@ For ANY row or part where status is "incorrect" or "unclear", additionally produ
   short_display_answer  — a SHORT (≤24 character) form of the correct answer, suitable for inline display next to a marker on the printed page. Examples: "1/4", "B", "scooped", "30 cm", "True". Use the expected_answer as the source; trim explanation text.
   short_reason          — one short, parent-friendly sentence explaining why the answer is wrong or unclear. Example: "Wrote 4 instead of 1." or "Answer is unreadable."
   confidence            — a number in [0, 1] reflecting how confident you are in the comparison verdict. Use < 0.5 when something is genuinely ambiguous (e.g. unreadable handwriting, ambiguous question matching, units uncertain).
-  question_start_location — a best-effort page+coordinate hint of where the printed question heading begins. Schema:
+  question_start_location — a best-effort page+coordinate hint of where the printed question NUMBER (e.g. "1.", "Q5", "12") appears. Schema:
         { "page": <integer>, "x": <0..1>, "y": <0..1> }
-    "page" should equal the input item's "completed_page" exactly — that field is definitive (it comes from the per-answer page metadata produced during extraction). "x" is the horizontal position (origin = left edge), "y" is vertical (origin = top edge). You don't see the rendered page, so your coordinate guess is approximate — code-side post-processing replaces obvious garbage with an ordinal-based fallback. Provide a sensible band:
-       x = 0.06 (questions start near the left margin in every Singapore primary worksheet we've measured)
-       y = (page_question_index + 0.5) / questions_on_page, BUT bias upward when the question is short (one-line MCQ) and downward when the previous questions are long (list answers, comprehension). The two metadata fields tell you the ordinal position; your judgement adjusts for spacing.
+    "page" must equal the input item's "completed_page" exactly — that field is definitive (it comes from the per-answer page metadata produced during extraction).
+    "x" is the horizontal position of the question-number text, in normalised page width (origin = left edge).
+       Pick a value in [0.08, 0.15] — that's where the question number sits in the text column of a Singapore primary worksheet rendered at A4.
+       DO NOT use x < 0.05: that puts the marker in the left page margin, visually outside the text column, where it reads as "stray ink" rather than "this question". Margin anchoring was a recurring failure mode; the rule is "inside the text column".
+       Pick a value > 0.5 only for a worksheet you can tell has the question number on the right side (rare; e.g. centred or right-aligned numbering).
+    "y" is the vertical position of the question heading line (origin = top edge).
+       Use y ≈ (page_question_index + 0.5) / questions_on_page as a starting point, then bias upward when the question is short (one-line MCQ) and downward when the previous questions are long (list answers, comprehension passages). The two metadata fields tell you the ordinal position; your judgement adjusts for spacing.
     If "completed_page" is missing on the input item, omit the location entirely (don't fabricate one).
 
 For MULTI-PART rows where some parts are correct and others are incorrect/unclear, attach the row-level review fields ONCE on the row (not per-part). Per-part status / comment / matched_expected stay as before.

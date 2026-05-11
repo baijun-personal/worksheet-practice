@@ -808,6 +808,15 @@ function synthLocation({ aiLocation, page, qn, pairsByPage }) {
   const aiX = aiLocation && Number(aiLocation.x);
   const aiY = aiLocation && Number(aiLocation.y);
   const aiPage = aiLocation && Number(aiLocation.page);
+  // One-line diagnostic so a developer can see whether the AI is
+  // actually varying x across questions or just returning the
+  // same constant. v7 found x=0.06 stuck on every record on the
+  // English mock, which is the fallback's old value — either the
+  // AI was returning 0.06 uniformly, or none of its values
+  // passed validation. Logging both helps disambiguate.
+  if (typeof console !== 'undefined' && aiLocation) {
+    console.debug('[synthLocation]', { qn, aiPage, aiX, aiY, targetPage: pg });
+  }
   const aiValid =
     Number.isFinite(aiPage) && aiPage === pg &&
     Number.isFinite(aiX) && aiX >= 0 && aiX <= 1 &&
@@ -817,6 +826,13 @@ function synthLocation({ aiLocation, page, qn, pairsByPage }) {
   }
   // Ordinal fallback. Spread questions evenly down the page —
   // unreliable on irregular layouts, see comment above.
+  //
+  // x bumped from 0.06 to 0.08: 0.06 lands clearly in the left
+  // margin of every Singapore primary worksheet rendered at A4,
+  // visually reading as "something in the margin" rather than
+  // "this question is wrong here". 0.08 is just inside the
+  // typical text-column start so the ✗ sits next to the
+  // question number rather than next to the page edge.
   const list = pairsByPage.get(pg) || [];
   const idx = list.findIndex((e) => e.qn === qn);
   const total = list.length;
@@ -825,7 +841,7 @@ function synthLocation({ aiLocation, page, qn, pairsByPage }) {
   const y = total > 0 && idx >= 0
     ? top + ((idx + 0.5) / total) * (bottom - top)
     : 0.5;
-  return { page: pg, x: 0.06, y, source: 'ordinal_fallback' };
+  return { page: pg, x: 0.08, y, source: 'ordinal_fallback' };
 }
 
 // Build per-part display rows for a grouped text pair. Walks the
