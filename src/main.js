@@ -12,8 +12,8 @@ import {
   computePaperIdentity, paperFromBuiltinCatalog, paperFromAttempt,
   paperFreshness, snapshotPaperOntoAttempt, paperFromIdentity,
 } from './paper.js';
-import { loadPdfFromBlob, renderPageToCanvas, renderPageOffscreen } from './pdfRender.js';
-import { attachInkController, redrawAll, drawStroke } from './draw.js';
+import { loadPdfFromBlob, renderPageToCanvas } from './pdfRender.js';
+import { attachInkController, redrawAll } from './draw.js';
 import { flattenQuestionPage, renderAnswerPage, colorContentRatio } from './flatten.js';
 import { extractStudentAnswers, extractAnswerKey, markPairs, compareVisualPair, requestExplanation, MODEL_PRESETS, DEFAULT_MODEL, presetForModel } from './openai.js';
 import { matchExtractions, buildFinalReport, partitionPairsByModality } from './compare.js';
@@ -2959,8 +2959,8 @@ async function renderReviewCurrentPage() {
   const pageNumber = r.pages[r.pageIdx];
   const host = $('review-page-host');
   const canvas = $('review-pdf-canvas');
-  const layer = $('review-marker-layer');
-  if (!host || !canvas || !layer) return;
+  const listHost = $('review-list-rail');
+  if (!host || !canvas || !listHost) return;
   const hostWidth = Math.min(1000, host.parentElement?.clientWidth || 800) - 8;
   // Pull saved strokes for this page so renderReviewPage can flatten
   // them onto the rendered PDF — the parent sees the COMPLETED page,
@@ -2976,13 +2976,13 @@ async function renderReviewCurrentPage() {
     pageNumber,
     strokes,
     canvas,
-    markerLayer: layer,
+    listHost,
     hostWidth,
-    onMarkerClick: (record) => openReviewPopup(record),
+    onRowClick: (record) => openReviewPopup(record),
   });
   $('review-page-label').textContent = `Page ${pageNumber}`;
   // Counter: how many review records on this page / total records.
-  const onThisPage = r.records.filter((rec) => rec.question_start_location?.page === pageNumber);
+  const onThisPage = r.records.filter((rec) => Number(rec.question_page) === pageNumber);
   $('review-counter').textContent =
     `${onThisPage.length} on this page · ${r.records.length} total`;
   // Disable nav buttons at the ends.
@@ -3057,7 +3057,7 @@ async function navigateReviewRecord(delta) {
   const target = delta < 0 ? idx.prev : idx.next;
   if (!target) return;
   // If the target lives on a different page, navigate the page too.
-  const targetPage = target.question_start_location?.page;
+  const targetPage = Number(target.question_page);
   if (Number.isFinite(targetPage)) {
     const newPageIdx = r.pages.indexOf(targetPage);
     if (newPageIdx !== -1 && newPageIdx !== r.pageIdx) {
@@ -3407,8 +3407,6 @@ async function buildExplanationContext(pdf, record) {
   if (!Number.isFinite(targetPage) || targetPage < 1) {
     throw new Error('Review record has no anchor page — cannot build explanation context');
   }
-  const x = record.question_start_location?.x ?? 0.06;
-  const y = record.question_start_location?.y ?? 0.5;
 
   // Helper: render a page with strokes flattened in (returns the
   // dataURL). attemptId may be null if no attempt is loaded;
@@ -3422,38 +3420,12 @@ async function buildExplanationContext(pdf, record) {
     return { dataUrl };
   };
 
-  // Target page with strokes + ✗ overlay. Render via
-  // renderPageOffscreen so we keep the canvas reference for the
-  // overlay, then draw strokes, then stamp the X.
-  const r = await renderPageOffscreen(pdf, targetPage, dpi);
-  const targetStrokes = attemptId
-    ? await getStrokesForPage(attemptId, targetPage)
-    : [];
-  if (targetStrokes.length > 0) {
-    const size = {
-      pageWidthPts: r.pageWidthPts,
-      pageHeightPts: r.pageHeightPts,
-      widthPx: r.widthPx,
-      heightPx: r.heightPx,
-    };
-    for (const s of targetStrokes) drawStroke(r.ctx, s, size);
-  }
-  const ctx = r.ctx;
-  const cx = Math.round(x * r.widthPx);
-  const cy = Math.round(y * r.heightPx);
-  const xSize = Math.max(28, Math.round(r.heightPx * 0.04));
-  ctx.save();
-  ctx.strokeStyle = '#c0392b';
-  ctx.lineWidth = Math.max(4, Math.round(xSize * 0.18));
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(cx - xSize / 2, cy - xSize / 2);
-  ctx.lineTo(cx + xSize / 2, cy + xSize / 2);
-  ctx.moveTo(cx + xSize / 2, cy - xSize / 2);
-  ctx.lineTo(cx - xSize / 2, cy + xSize / 2);
-  ctx.stroke();
-  ctx.restore();
-  const targetDataUrl = r.canvas.toDataURL('image/jpeg', 0.85);
+  // No red ✗ overlay on the target page. The earlier design stamped
+  // one at the question's normalised coords; those coords were
+  // inaccurate (same root cause that retired the on-page markers
+  // in Review Mode), and the prompt already identifies the target
+  // page via the 'TARGET page N' text label below.
+  const targetDataUrl = (await renderWithStrokes(targetPage)).dataUrl;
 
   const pageImages = [];
   for (let p = Math.max(1, targetPage - 2); p < targetPage; p++) {

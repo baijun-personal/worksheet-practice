@@ -155,21 +155,17 @@ export function renderReport(report, mountNodes) {
       <details>
         <summary class="muted small">Review records (${reviewRecords.length}) — debug</summary>
         <table style="margin-top:8px; font-size:12px"><thead><tr>
-          <th>Q</th><th>Page</th><th>x</th><th>y</th><th>src</th>
+          <th>Q</th><th>Page</th>
           <th>Short answer</th><th>Reason</th>
           <th>Conf.</th><th>Review?</th><th>Status</th>
           <th>Parts</th>
         </tr></thead><tbody>${reviewRecords.map((r) => {
-          const loc = r.question_start_location || {};
           const partsCol = Array.isArray(r.parts) && r.parts.length > 0
             ? r.parts.map((pp) => `${escapeHtml(pp.part)}:${escapeHtml(pp.status)}`).join(', ')
             : '—';
           return `<tr>
             <td>${escapeHtml(r.question)}</td>
-            <td>${loc.page ?? '—'}</td>
-            <td>${loc.x != null ? loc.x.toFixed(3) : '—'}</td>
-            <td>${loc.y != null ? loc.y.toFixed(3) : '—'}</td>
-            <td>${escapeHtml(loc.source || '—')}</td>
+            <td>${r.question_page ?? '—'}</td>
             <td>${escapeHtml(r.short_display_answer || '')}</td>
             <td>${escapeHtml(r.short_reason || '')}</td>
             <td>${(r.confidence != null) ? r.confidence.toFixed(2) : '—'}</td>
