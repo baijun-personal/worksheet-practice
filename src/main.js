@@ -656,6 +656,7 @@ function bindSetupForm() {
   setVal('model-visual-compare', state.settings.visualComparisonModel || state.settings.openaiModel || DEFAULT_MODEL);
   setVal('model-explanation',    state.settings.explanationModel      || state.settings.openaiModel || DEFAULT_MODEL);
   setVal('render-dpi', String(state.settings.renderDpi || 150));
+  setVal('explanation-render-dpi', String(state.settings.explanationRenderDpi || 150));
   setVal('batch-size', String(state.settings.batchSize || 5));
   setChecked('test-mode', !!state.settings.testMode);
   setVal('price-in', String(state.settings.priceInPerMTokens ?? 0.75));
@@ -688,6 +689,7 @@ function bindSetupForm() {
     ['openai-key', 'openaiKey', (v) => v],
     ['openai-model', 'openaiModel', (v) => v.trim() || DEFAULT_MODEL],
     ['render-dpi', 'renderDpi', (v) => parseInt(v, 10) || 150],
+    ['explanation-render-dpi', 'explanationRenderDpi', (v) => parseInt(v, 10) || 150],
     ['batch-size', 'batchSize', (v) => Math.max(1, parseInt(v, 10) || 5)],
     ['price-in', 'priceInPerMTokens', (v) => Math.max(0, parseFloat(v) || 0)],
     ['price-cached-in', 'priceCachedInPerMTokens', (v) => Math.max(0, parseFloat(v) || 0)],
@@ -1802,6 +1804,7 @@ async function onStartPracticeImpl() {
     openaiKey: apiKey,
     openaiModel: $('openai-model').value.trim() || DEFAULT_MODEL,
     renderDpi: parseInt($('render-dpi').value, 10) || 150,
+    explanationRenderDpi: parseInt($('explanation-render-dpi').value, 10) || 150,
     batchSize: Math.max(1, parseInt($('batch-size').value, 10) || 5),
     testMode: $('test-mode').checked,
     priceInPerMTokens: Math.max(0, parseFloat($('price-in').value) || 0),
@@ -3335,7 +3338,13 @@ function pickExpectedAnswerForExplanation(record) {
 // pages actually carry the strokes. Reviewer-2 flagged the prior
 // version (clean PDF + stamped X) as a blocker for this reason.
 async function buildExplanationContext(pdf, record) {
-  const dpi = 150;
+  // Read from settings so we can tune without code changes. The
+  // default 150 matches marking DPI; 100 saves ~56% on image
+  // pixel area with negligible reading impact on most papers; 200
+  // is useful for dense math/science with small subscripts. We
+  // don't auto-tune per page — the parent picks one value for
+  // the paper's character.
+  const dpi = state.settings.explanationRenderDpi || 150;
   const targetPage = record.completed_page;
   if (!Number.isFinite(targetPage) || targetPage < 1) {
     throw new Error('Review record has no anchor page — cannot build explanation context');

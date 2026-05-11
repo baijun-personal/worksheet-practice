@@ -52,6 +52,15 @@ const DEFAULTS = {
   // also gets the surrounding 2 pages plus the next page so it
   // sees passage / context references.
   explanationModel: 'gpt-5.4',
+  // DPI for rendering pages sent to the explanation API. Separate
+  // from marking-submission DPI: explanation only needs to
+  // recognise the question and any reference passage; marking
+  // needs to read the child's handwriting in detail.
+  //   100 — ~44% of 150's pixel area; cheapest, fine for most
+  //         papers
+  //   150 — default, matches marking DPI
+  //   200 — useful for dense math/science with small subscripts
+  explanationRenderDpi: 150,
   passphrase: '', // empty = unlocked; first run sets it
   unlocked: false,
 };
