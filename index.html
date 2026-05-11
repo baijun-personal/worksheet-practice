@@ -496,6 +496,14 @@
     pdfjsLib.GlobalWorkerOptions.workerSrc =
       'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs';
     window.pdfjsLib = pdfjsLib;
+    // CJK / CID-keyed fonts need CMap data files to translate glyph
+    // codes to Unicode. Standard PostScript fonts (Helvetica, Times,
+    // etc.) need their substitution data. Both live in folders under
+    // the same pdfjs-dist@4.7.76 release. Expose globally so
+    // pdfRender.js can pass them to every getDocument() call.
+    // If the bundle version is bumped above, bump both URLs to match.
+    window.pdfjsCMapUrl = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/cmaps/';
+    window.pdfjsStandardFontDataUrl = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/standard_fonts/';
   </script>
   <!--
     Bootstrap: load src/main.js with a cache-busting query string
