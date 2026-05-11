@@ -325,7 +325,13 @@ export function matchExtractions(studentBatchResults, answerKeyResults) {
   // groups (rather than silently overwriting). After this, each composite
   // key appears at most once in students/keys.
   const students = normalizeMultiParts(flattenAnswers(studentBatchResults));
-  const keys = normalizeMultiParts(flattenAnswers(answerKeyResults));
+  // Fan out grouped answer-key entries (Math papers commonly emit
+  // {question_number:"9", is_multi_part:true, parts:[{part:"a"},…]})
+  // into per-part flat rows ("9a","9b") so they line up with the
+  // flat shape the student side emits on those papers. Flat
+  // answer-key rows pass through fanOutMultiPartKeys unchanged.
+  // See fanOutMultiPartKeys for the asymmetry rationale.
+  const keys = normalizeMultiParts(fanOutMultiPartKeys(flattenAnswers(answerKeyResults)));
 
   const keyByKey = new Map();
   const keyByKeyAmbiguous = new Set();
