@@ -245,6 +245,68 @@ function parseParenSubpart(qnumber) {
   return { base, part };
 }
 
+// Fan out multi-part answer-key entries into flat per-part entries.
+//
+// Math worksheet answer keys typically list multi-part answers in
+// the grouped form:
+//   { question_number: "9", is_multi_part: true,
+//     parts: [{part: "a", answer: "56"}, {part: "b", answer: "12"}] }
+//
+// Student extraction on the same paper emits the flat form, one
+// row per answer slot:
+//   { question_number: "9a", answer: "56" }
+//   { question_number: "9b", answer: "14" }
+//
+// matchExtractions pairs by question_number string equality, so the
+// shapes never line up without preprocessing. We canonicalise the
+// answer-key side to the flat shape before the matcher runs.
+//
+// Only fires when is_multi_part === true AND parts[] is non-empty.
+// Flat entries pass through unchanged. Parenthesised-suffix entries
+// (e.g. "19(i)") aren't multi-part at this stage — they're handled
+// by normalizeMultiParts' second pass, which is correct for them.
+//
+// Why only on the answer-key side: the student side already emits
+// the flat shape (e.g. "9a"/"9b"). If the student side ever emits
+// multi-part, normalizeMultiParts handles it. Fanning out on both
+// sides would risk double-fanout and shape drift.
+//
+// Open consideration: when parts use roman numerals stored without
+// parens (parts: [{part: "i"}, {part: "ii"}]), this produces "19i"
+// / "19ii" with no parens. If the student emitted "19(i)" those
+// won't match. We accept that limitation for the first cut — Math
+// "9a/9b" papers are unblocked, English parenthesised-suffix papers
+// keep using the normalizeMultiParts second-pass grouping path.
+function fanOutMultiPartKeys(answers) {
+  const out = [];
+  for (const a of answers) {
+    if (!a) continue;
+    if (a.is_multi_part === true && Array.isArray(a.parts) && a.parts.length > 0) {
+      const baseQNum = String(a.question_number || '').trim();
+      for (const p of a.parts) {
+        const partLabel = String(p?.part ?? '').trim();
+        if (!baseQNum && !partLabel) continue; // skip degenerate
+        out.push({
+          global_question_index: a.global_question_index,
+          section: a.section || '',
+          question_number: baseQNum + partLabel, // "9" + "a" → "9a"
+          display_question: undefined,            // rebuilt downstream
+          page: a.page,
+          answer_type: p?.answer_type || a.answer_type || 'text',
+          answer: p?.answer ?? '',
+          confidence: typeof p?.confidence === 'number'
+            ? p.confidence
+            : (typeof a.confidence === 'number' ? a.confidence : null),
+          _fanned_from_multipart: true,
+        });
+      }
+      continue;
+    }
+    out.push(a);
+  }
+  return out;
+}
+
 // matchExtractions(studentBatchResults, answerKeyResults)
 //   → { pairs, not_in_attempt, keysProvided }
 //
