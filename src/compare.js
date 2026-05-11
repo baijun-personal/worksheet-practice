@@ -461,8 +461,14 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
     }
   }
 
-  let correct = 0, incorrect = 0, unclear = 0;
+  let correct = 0, incorrect = 0, unclear = 0, unanswered = 0;
   const questions = [];
+  const tally = (s) => {
+    if (s === 'correct')        correct++;
+    else if (s === 'incorrect') incorrect++;
+    else if (s === 'unanswered') unanswered++;
+    else                        unclear++;
+  };
   for (const p of match.pairs) {
     const qn = normalizeQNumber(p.display_question || p.question);
     const base = {
@@ -501,9 +507,7 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
           comment: `Visual comparison: ${v?.error || 'not run.'}`,
         };
       }
-      if (row.status === 'correct') correct++;
-      else if (row.status === 'incorrect') incorrect++;
-      else unclear++;
+      tally(row.status);
       questions.push(row);
       continue;
     }
@@ -515,9 +519,7 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
       const aiParts = ai && Array.isArray(ai.parts) ? ai.parts : null;
       const partRows = buildMultiPartRows(p, aiParts, match.keysProvided);
       for (const row of partRows) {
-        if (row.status === 'correct') correct++;
-        else if (row.status === 'incorrect') incorrect++;
-        else unclear++;
+        tally(row.status);
         questions.push(row);
       }
       continue;
@@ -526,33 +528,55 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
     // Flat text pair
     const ai = aiQByQ.get(qn);
     if (ai) {
-      const status = normalizeStatus(ai.status);
-      if (status === 'correct') correct++;
-      else if (status === 'incorrect') incorrect++;
-      else unclear++;
+      let status = normalizeStatus(ai.status);
+      let comment = ai.comment ? String(ai.comment) : '';
+      // Blank-vs-unclear: the extraction stage now tags genuinely
+      // empty answer lines as answer_type='blank'. Override the AI's
+      // verdict in that case — the AI couldn't tell blank from
+      // unreadable from its text-only payload (no images, no
+      // answer_type), so it would otherwise label these as
+      // incorrect or unclear. We surface the distinction here so
+      // the report can count them as "unanswered" separately.
+      if (p.student_type === 'blank' && match.keysProvided) {
+        status = 'unanswered';
+        comment = 'No answer was written.';
+      }
+      tally(status);
       questions.push({
         ...base,
         student_answer: ai.student_answer ?? p.student_answer,
         expected_answer: ai.expected_answer ?? p.expected_answer,
         status,
-        comment: ai.comment ? String(ai.comment) : '',
+        comment,
       });
       continue;
     }
 
     // No AI text result for this pair (or AI text call failed) — local fallback.
     const local = scoreOnePairLocally(p, match.keysProvided);
-    if (local.status === 'correct') correct++;
-    else if (local.status === 'incorrect') incorrect++;
-    else unclear++;
+    // Same blank-vs-unclear override in the fallback path so a
+    // failed AI call doesn't mask the unanswered distinction.
+    if (p.student_type === 'blank' && match.keysProvided) {
+      local.status = 'unanswered';
+      local.comment = 'No answer was written.';
+    }
+    tally(local.status);
     questions.push({ ...base, ...local });
   }
 
+  // "attempted" = questions where the student tried something
+  // (graded by the AI), regardless of correct/wrong/unclear.
+  // Unanswered rows are NOT attempted by definition. The
+  // estimated_score denominator follows the same convention so
+  // skipping questions doesn't artificially inflate the
+  // percentage (10/10 with 7 skipped reads cleaner than 10/17
+  // including 7 unanswered).
   const attempted = correct + incorrect + unclear;
+  const total = attempted + unanswered;
   const summary = {
     estimated_score: attempted > 0 && match.keysProvided ? `${correct}/${attempted}` : '',
     comment: buildSummaryComment({
-      correct, incorrect, unclear, attempted,
+      correct, incorrect, unclear, unanswered, attempted, total,
       notInAttempt: match.not_in_attempt,
       keysProvided: match.keysProvided,
     }),
@@ -668,7 +692,12 @@ function buildReviewRecords({ pairs, questions, aiQByQ }) {
   // share a base question (Q19(i), Q19(ii)) become one record.
   const groups = new Map(); // baseKey -> { row, parts: [] }
   for (const row of questions) {
-    if (row.status !== 'incorrect' && row.status !== 'unclear') continue;
+    // unanswered joins incorrect + unclear: the parent still
+    // wants a marker for "this one was skipped — here's the
+    // expected answer, here's how to think about it" via the
+    // Review popup. Visually it stays the same red ✗ as
+    // incorrect, matching the agreed unify-as-wrong rule.
+    if (row.status !== 'incorrect' && row.status !== 'unclear' && row.status !== 'unanswered') continue;
     // Exclude visual-comparison rows from Review Mode for the MVP.
     // Their student_answer / expected_answer are placeholder
     // "[visual answer]" strings; the popup would show
@@ -706,7 +735,15 @@ function buildReviewRecords({ pairs, questions, aiQByQ }) {
     const aiRow = aiQByQ.get(qn);
     const conf = clampConfidence(aiRow?.confidence);
     const shortAnswer = trimToCap(aiRow?.short_display_answer || baseRow.expected_answer || '', 24);
-    const shortReason = String(aiRow?.short_reason || baseRow.comment || '').trim();
+    // Prefer the local 'No answer was written.' override for
+    // unanswered rows over the AI's text-compare comment (which
+    // typically reads "Answer is unreadable." — wrong for blanks
+    // and the whole reason this fix exists).
+    const localCommentWinsForUnanswered =
+      baseRow.status === 'unanswered' && baseRow.comment;
+    const shortReason = localCommentWinsForUnanswered
+      ? String(baseRow.comment).trim()
+      : String(aiRow?.short_reason || baseRow.comment || '').trim();
     const location = synthLocation({
       aiLocation: aiRow?.question_start_location,
       page: baseRow.completed_page,
@@ -772,9 +809,13 @@ function trimToCap(s, max) {
 }
 
 function worstStatusOf(parts) {
-  // incorrect > unclear > correct. Returns the most-severe.
-  if (parts.some((p) => p.status === 'incorrect')) return 'incorrect';
-  if (parts.some((p) => p.status === 'unclear'))   return 'unclear';
+  // incorrect > unanswered > unclear > correct. unanswered ranks
+  // above unclear because a blank-but-graded part is a definitive
+  // miss (no attempt), whereas unclear is "couldn't tell". Both
+  // surface as red ✗ in Review Mode regardless.
+  if (parts.some((p) => p.status === 'incorrect'))   return 'incorrect';
+  if (parts.some((p) => p.status === 'unanswered')) return 'unanswered';
+  if (parts.some((p) => p.status === 'unclear'))     return 'unclear';
   return 'correct';
 }
 
@@ -876,8 +917,17 @@ function buildMultiPartRows(p, aiParts, keysProvided) {
     const partLabel = sp.part != null ? String(sp.part) : String(i + 1);
     const display = `${baseDisplay}(${partLabel})`;
     const ai = aiByPart.get(partLabel) || (Array.isArray(aiParts) ? aiParts[i] : null);
+    // Per-part blank-vs-unclear: same override as the flat path —
+    // if extraction tagged this subpart's answer_type as 'blank',
+    // override status to 'unanswered' regardless of what the AI
+    // text-compare said. The AI sees no answer_type and would
+    // otherwise mis-classify.
+    const partIsBlank = sp.answer_type === 'blank' && keysProvided;
     if (ai) {
-      const status = normalizeStatus(ai.status);
+      const status = partIsBlank ? 'unanswered' : normalizeStatus(ai.status);
+      const comment = partIsBlank
+        ? 'No answer was written.'
+        : (ai.comment ? String(ai.comment) : '');
       // expected_answer falls through to '' rather than the
       // literal '(see comment)' marker the previous code used —
       // that string was leaking into both the All-questions table
@@ -891,7 +941,7 @@ function buildMultiPartRows(p, aiParts, keysProvided) {
         student_answer: ai.student_answer ?? sp.answer ?? '',
         expected_answer: ai.matched_expected ?? '',
         status,
-        comment: ai.comment ? String(ai.comment) : '',
+        comment,
       });
     } else if (localStatuses) {
       const local = localStatuses[i] || { status: 'unclear', comment: 'Local fallback could not score this part.' };
@@ -900,8 +950,8 @@ function buildMultiPartRows(p, aiParts, keysProvided) {
         display_question: display,
         student_answer: sp.answer || '',
         expected_answer: local.matchedExpected || '',
-        status: local.status,
-        comment: local.comment || '',
+        status: partIsBlank ? 'unanswered' : local.status,
+        comment: partIsBlank ? 'No answer was written.' : (local.comment || ''),
       });
     } else {
       rows.push({
@@ -909,8 +959,10 @@ function buildMultiPartRows(p, aiParts, keysProvided) {
         display_question: display,
         student_answer: sp.answer || '',
         expected_answer: '',
-        status: 'unclear',
-        comment: 'AI compare did not return a per-part status for this part.',
+        status: partIsBlank ? 'unanswered' : 'unclear',
+        comment: partIsBlank
+          ? 'No answer was written.'
+          : 'AI compare did not return a per-part status for this part.',
       });
     }
   });
@@ -1032,10 +1084,22 @@ function normalizeStatus(s) {
   return 'unclear';
 }
 
-function buildSummaryComment({ correct, incorrect, unclear, attempted, notInAttempt, keysProvided }) {
-  if (attempted === 0 && (!notInAttempt || notInAttempt.length === 0)) return '';
-  if (attempted === 0) return 'No answers were extracted from the completed pages.';
-  let s = `${correct} correct, ${incorrect} incorrect, ${unclear} unclear out of ${attempted} attempted question(s).`;
+function buildSummaryComment({ correct, incorrect, unclear, unanswered = 0, attempted, total, notInAttempt, keysProvided }) {
+  if (attempted === 0 && unanswered === 0 && (!notInAttempt || notInAttempt.length === 0)) return '';
+  if (attempted === 0 && unanswered === 0) return 'No answers were extracted from the completed pages.';
+  // Order: correct, incorrect, unclear (only if any), unanswered
+  // (only if any), out of <total>. Suppress zero buckets — saying
+  // "0 unclear" on a paper with no unclear items is noise.
+  const totalForLine = Number.isFinite(total) ? total : (attempted + unanswered);
+  const parts = [];
+  parts.push(`${correct} correct`);
+  parts.push(`${incorrect} incorrect`);
+  if (unclear > 0)    parts.push(`${unclear} unclear`);
+  if (unanswered > 0) parts.push(`${unanswered} unanswered`);
+  let s = parts.join(', ') + ` out of ${totalForLine} question(s).`;
+  if (attempted > 0 && unanswered > 0) {
+    s += ` (Score is based on ${attempted} attempted; ${unanswered} were skipped.)`;
+  }
   if (!keysProvided) {
     s += ' No answer pages were specified, so questions are listed but not graded.';
   } else if (notInAttempt && notInAttempt.length > 0) {

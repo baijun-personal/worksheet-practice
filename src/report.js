@@ -41,6 +41,32 @@ export function renderReport(report, mountNodes) {
   wrongEl.innerHTML = `<h2>Incorrect (${wrong.length})</h2>` +
     (wrong.length === 0 ? '<p class="muted">None.</p>' : `<ul>${wrong.map(qBullet).join('')}</ul>`);
 
+  // "Unanswered" lives between Incorrect and Unclear so the
+  // parent reads severity top-down: wrong → skipped → unsure.
+  // Render only when there's at least one — empty bucket is
+  // noise. Uses the existing "report-not-attempted" mount slot
+  // for now via dedicated section: we inject a new <section>
+  // ahead of the uncertain card so the visual flow is correct
+  // without an HTML schema change.
+  const unanswered = results.filter((r) => r.status === 'unanswered');
+  // Find or create an unanswered card adjacent to wrongEl.
+  let unansweredEl = wrongEl.parentElement?.querySelector('#report-unanswered');
+  if (unanswered.length > 0) {
+    if (!unansweredEl) {
+      unansweredEl = document.createElement('div');
+      unansweredEl.id = 'report-unanswered';
+      unansweredEl.className = 'card';
+      wrongEl.parentElement.insertBefore(unansweredEl, uncertainEl);
+    }
+    unansweredEl.hidden = false;
+    unansweredEl.innerHTML = `<h2>Unanswered (${unanswered.length})</h2>` +
+      `<p class="muted small">The student didn't write anything for these questions.</p>` +
+      `<ul>${unanswered.map(qBullet).join('')}</ul>`;
+  } else if (unansweredEl) {
+    unansweredEl.hidden = true;
+    unansweredEl.innerHTML = '';
+  }
+
   const uncertain = results.filter(isUncertain);
   uncertainEl.innerHTML = `<h2>Unclear (${uncertain.length})</h2>` +
     (uncertain.length === 0 ? '<p class="muted">None.</p>' : `<ul>${uncertain.map(qBullet).join('')}</ul>`);

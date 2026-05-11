@@ -254,15 +254,33 @@ For each answer, set "answer_type" to one of:
 - "tick_box": the child ticked one or more boxes; "answer" should list which (e.g. "B and D").
 - "drawing": the answer is a drawing or marking. Examples: shaded area, shaded fraction, circled item, underlined item, matching line, arrow, graph point, plotted point, clock hand, completed diagram, drawn shape, drawn angle.
 - "diagram_label": the child labelled or annotated a diagram visually.
-- "unknown": cannot determine confidently.
+- "blank": the answer line / box is empty. No ink visible. The child did not attempt this question. This is DIFFERENT from "unknown" (see below).
+- "unknown": ink is visible but you cannot tell what was written, OR the answer kind genuinely cannot be classified.
 
 CLASSIFICATION RULE: if the answer cannot be FULLY represented as typed text — i.e. the visual placement / shape / mark on the page is what carries the meaning — classify it as "drawing" or "diagram_label", NOT "text". Forcing a drawing into a short text description and routing it through text-equality comparison reliably marks it wrong. For drawing/diagram_label answers, "answer" is just a brief human description for the parent to read; the final mark uses a separate visual comparison stage.
+
+BLANK VS UNCLEAR — two different states, do not conflate:
+
+  If the answer line / box is EMPTY (no ink visible, the student did
+  not write anything), return:
+    "answer_type": "blank"
+    "answer":      ""
+    "confidence":  0.95
+  The blank case is high-confidence — you can see the line is empty.
+
+  Only return "answer": "unclear" with "answer_type": "unknown" and
+  LOW confidence when ink IS visible but you cannot read what was
+  written (smudged handwriting, partially erased, illegible shapes).
+
+  Example — same question, two different students:
+    Student A wrote nothing →
+        { "answer_type": "blank",   "answer": "",        "confidence": 0.95 }
+    Student B wrote scribbles you can't decipher →
+        { "answer_type": "unknown", "answer": "unclear", "confidence": 0.3 }
 
 If a worksheet has multiple sections, capture the section label (e.g. "Section A - Vocabulary"). Use the page number from the image label.
 
 For 4-up images: each tile has a small dark-grey label "PDF page N — not student answer" above its quadrant. Use that tile label to set "page" for answers in that quadrant. The dark-grey labels are NOT student answers — student answers are blue.
-
-If an answer is unreadable, set "answer" to "unclear" and a low confidence.
 
 Return JSON only. Each entry is EITHER flat (single answer) OR multi-part:
 
@@ -275,7 +293,7 @@ Return JSON only. Each entry is EITHER flat (single answer) OR multi-part:
       "question_number": "",
       "display_question": "",
       "page": 0,
-      "answer_type": "text | choice | number | tick_box | drawing | diagram_label | unknown",
+      "answer_type": "text | choice | number | tick_box | drawing | diagram_label | blank | unknown",
       "answer": "",
       "confidence": 0
     },
@@ -343,7 +361,7 @@ Return JSON only. Each entry is EITHER flat (single answer) OR multi-part (list-
       "question_number": "",
       "display_question": "",
       "page": 0,
-      "answer_type": "text | choice | number | tick_box | drawing | diagram_label | unknown",
+      "answer_type": "text | choice | number | tick_box | drawing | diagram_label | blank | unknown",
       "answer": "",
       "confidence": 0
     },
