@@ -365,14 +365,23 @@ function parseParenSubpart(qnumber) {
 // question instead of two distinct sub-questions); the symmetric
 // version handles any combination of shapes either side produces.
 //
-// Roman-numeral part labels (i, ii, iii, iv, v, vi, vii, viii, ix, x):
-// we emit dual forms — "19i" AND "19(i)" — so the matcher finds a
-// match whichever variant the other side used. The normalizeMultiParts
-// second pass also auto-groups parenthesised-suffix entries into a
-// base multi-part on the side that emitted them flat-with-parens;
-// emitting both forms from the fanout covers the asymmetry in both
-// directions.
-const ROMAN_PART_RE = /^(i{1,3}|iv|v|vi{1,3}|ix|x)$/i;
+// Part labels that signal a list-answer slot rather than a distinct
+// sub-question. When fanOutMultiPartKeys sees these, it emits BOTH
+// a parenthesised form ("6(1)", "19(i)") and a bare form ("61",
+// "19i") so the second-pass auto-grouping in normalizeMultiParts
+// can regroup against whichever shape the OTHER side emitted.
+//   - Roman: i, ii, iii, iv, v, vi, vii, viii, ix, x
+//   - Numeric: any positive integer (covers list-answer questions
+//     like "Write the next two numbers" where the student-side
+//     extraction emits parts: [{part: "1"}, {part: "2"}] but the
+//     printed answer key gives a single comma-separated answer).
+// Alphabetic parts (a, b, c) intentionally do NOT match — those
+// are typically distinct sub-questions on Singapore P4/P5 papers
+// (Q9a vs Q9b are separate questions with their own prompts),
+// not slots in one list answer. Bundling them into a multi-part
+// would change the matching semantics and risk regressions on
+// every paper with 9a/9b-style sub-questions.
+const PARENTHESISABLE_PART_RE = /^(\d+|i{1,3}|iv|v|vi{1,3}|ix|x)$/i;
 
 // Build a flat per-part entry from a parent multi-part record and
 // one of its parts, using `qnum` as the synthesised question_number
@@ -403,20 +412,20 @@ function fanOutMultiPartKeys(answers) {
       for (const p of a.parts) {
         const partLabel = String(p?.part ?? '').trim();
         if (!baseQNum && !partLabel) continue; // skip degenerate
-        // Roman parts emit the parenthesised form FIRST and the
-        // bare form second. normalizeMultiParts first-pass dedupes
-        // by composite key — since both forms normalize to the same
-        // qnum ("19(i)" and "19i" both → "19i" via normalizeQNumber),
-        // the second arrival is dropped silently as a fanned-out
-        // duplicate. Keeping the parens form means the second pass
-        // can auto-group "19(i)" + "19(ii)" back into a base "19"
-        // multi-part so the matcher pairs against the other side
-        // whether IT emitted grouped, flat-with-parens, or flat-no-
-        // parens (the last case still loses if the other side
-        // didn't go through fanout — known limitation).
-        // Non-roman parts (a/b/c/d) emit a single bare form; the
+        // Parenthesisable parts (roman OR numeric) emit the
+        // parenthesised form FIRST and the bare form second.
+        // normalizeMultiParts first-pass dedupes by composite key —
+        // both forms normalize to the same qnum ("19(i)" and "19i"
+        // both → "19i" via normalizeQNumber; "6(1)" and "61" both →
+        // "61"), so the second arrival drops silently as a fanned-
+        // out duplicate. Keeping the parens form lets the second
+        // pass auto-group "19(i)" + "19(ii)" — or "6(1)" + "6(2)" —
+        // back into a base multi-part so the matcher pairs against
+        // the other side whether IT emitted grouped, flat-with-
+        // parens, or flat-no-parens.
+        // Alphabetic parts (a/b/c/d) emit a single bare form; the
         // matcher pairs them positionally via question_number.
-        if (ROMAN_PART_RE.test(partLabel)) {
+        if (PARENTHESISABLE_PART_RE.test(partLabel)) {
           out.push(buildFannedEntry(a, p, baseQNum + '(' + partLabel + ')'));
           out.push(buildFannedEntry(a, p, baseQNum + partLabel));
         } else {
