@@ -194,9 +194,20 @@ body.app-immersive .build-badge { display: none; }
   font-size: 13px;
 }
 .review-page-label { font-weight: 600; min-width: 80px; }
+/* Review stage is now a two-column layout: left side carries the
+   list rail, right side carries the rendered page. The earlier
+   on-page ✗ overlay design is gone — without per-question
+   coordinates, the markers drifted off their questions. The
+   list rail makes the data structure explicit. */
+.review-stage-frame {
+  display: flex;
+  gap: 16px;
+  max-width: 1160px;
+  margin: 0 auto;
+}
 .review-page-host {
-  position: relative;
   margin: 16px auto;
+  flex: 1 1 auto;
   max-width: 1000px;
   background: white;
   box-shadow: 0 4px 24px rgba(0,0,0,0.15);
@@ -206,43 +217,47 @@ body.app-immersive .build-badge { display: none; }
   width: 100%;
   height: auto;
 }
-.review-marker-layer {
-  position: absolute;
-  inset: 0;
-  pointer-events: none; /* children re-enable per-marker */
-}
-.review-marker {
-  position: absolute;
+.review-list-rail {
+  flex: 0 0 140px;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 0;
+}
+.review-list-row {
+  display: flex;
+  align-items: baseline;
   gap: 8px;
-  pointer-events: auto;
-  cursor: pointer;
-  user-select: none;
-  -webkit-tap-highlight-color: transparent;
-  -webkit-touch-callout: none;
-  /* Center the marker on its (x, y) anchor. The X glyph and label
-     sit on a horizontal row anchored to the left of the question. */
-  transform: translate(-12px, -50%);
-}
-.review-marker-x {
-  font-size: 22px;
-  line-height: 1;
-  font-weight: bold;
-  color: #c0392b;
-  text-shadow: 0 0 3px rgba(255,255,255,0.9), 0 0 6px rgba(255,255,255,0.6);
-}
-.review-marker-label {
-  background: rgba(255,255,255,0.92);
+  padding: 8px 10px;
+  background: white;
   border: 1px solid #c0392b;
-  border-radius: 4px;
-  padding: 2px 8px;
-  font-size: 13px;
-  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  -webkit-tap-highlight-color: transparent;
+}
+.review-list-row:hover { background: #fff5f4; }
+.review-list-q {
+  font-weight: 700;
+  color: #c0392b;
+  min-width: 36px;
+}
+.review-list-ans {
   color: #2a2200;
-  white-space: nowrap;
-  max-width: 240px;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+  font-weight: 500;
+}
+/* Narrow viewports: stack list above the page rather than
+   side-by-side. The rail wraps to a horizontal chip row. */
+@media (max-width: 720px) {
+  .review-stage-frame { flex-direction: column; }
+  .review-list-rail {
+    flex: 0 0 auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding: 8px 16px;
+  }
 }
 
 #review-empty-state {
