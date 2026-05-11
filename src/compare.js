@@ -63,8 +63,72 @@ function normalizeQNumber(q) {
   return s;
 }
 
-function compositeKey(section, qnum) {
-  return `${normalizeKeyPart(section)}|${normalizeQNumber(qnum)}`;
+// Composite matching key. Uses the synthetic section index when
+// present (set by assignSyntheticSections — covers section-restart
+// papers where the printed `section` field is unreliable), otherwise
+// falls back to the printed section string. The qnum portion is the
+// existing normalised question_number.
+function compositeKey(entry) {
+  const synth = entry && entry._syntheticSection;
+  const sec = synth != null
+    ? `S${synth}`
+    : normalizeKeyPart(entry?.section || '');
+  const qnum = normalizeQNumber(entry?.question_number || '');
+  return `${sec}|${qnum}`;
+}
+
+// Extract the leading integer from a question_number like "9",
+// "9a", "9(i)", "Q9b". Returns null for purely alphabetic or
+// roman labels (rare).
+function leadingInt(qnum) {
+  const m = String(qnum || '').match(/(\d+)/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+// Assign a synthetic, 1-indexed section number to every entry in the
+// list based on backward jumps in the printed question-number sequence.
+// Papers with sections that restart numbering at 1 (e.g. Section A:
+// Q1-Q10, Section B: Q1-Q5) produce collisions on the printed
+// (section, qnum) composite key because the extracted `section` field
+// is unreliable — the answer-key page often labels every entry just
+// "Answer Key", and student-side section text is partial / stale.
+//
+// Walk the list in printed (top-to-bottom) order. Track the maximum
+// numeric prefix seen so far. When the next entry's prefix goes
+// BACKWARD (strict <), treat it as the start of a new section and
+// increment. Forward / equal stays in the current section.
+//
+// Multi-part within the same Q (Q9, Q9a, Q9b → leadingInt 9, 9, 9):
+// equal, no reset. Skipped numbers (1, 2, 3, 5): forward, no reset.
+// Section reset (… 10, 1, 2, …): backward, reset.
+//
+// Roman-only or alphabetic labels return null from leadingInt and
+// just inherit the running section.
+//
+// Known limitation: a single-question Section A followed by Section
+// B starting at Q1 (sequence: 1, 1) is NOT detected — strict <
+// requires a backward jump. Mitigation: tighten to <= if a real
+// paper surfaces it, accepting false-positive resets on duplicate
+// numbers within a section. For the current scope, strict <.
+function assignSyntheticSections(answers) {
+  let currentSection = 1;
+  let maxSeen = 0;
+  for (const a of answers) {
+    if (!a) continue;
+    const n = leadingInt(a.question_number);
+    if (n == null) {
+      a._syntheticSection = currentSection;
+      continue;
+    }
+    if (n < maxSeen) {
+      currentSection += 1;
+      maxSeen = n;
+    } else if (n > maxSeen) {
+      maxSeen = n;
+    }
+    a._syntheticSection = currentSection;
+  }
+  return answers;
 }
 
 function flattenAnswers(stageResults) {
@@ -115,7 +179,7 @@ function normalizeMultiParts(answers) {
 
   for (const a of answers) {
     if (!a) continue;
-    const ck = compositeKey(a.section || '', a.question_number || '');
+    const ck = compositeKey(a);
 
     if (a.is_multi_part === true && Array.isArray(a.parts)) {
       const existing = byKey.get(ck);
@@ -136,6 +200,16 @@ function normalizeMultiParts(answers) {
     const existing = byKey.get(ck);
     if (!existing) {
       getOrCreate(ck, a);
+    } else if (a._fanned_from_multipart === true) {
+      // Duplicate of a fanned-out entry. fanOutMultiPartKeys emits
+      // dual roman forms ("19(i)" + "19i") that normalize to the
+      // same composite key — they represent the SAME part, not two
+      // parts of a multi-part question, so don't merge them into a
+      // duplicate-parts multi-part record. Drop silently. The
+      // parens form was emitted first, so the entry kept in byKey
+      // is the parenthesised one — that lets the second pass auto-
+      // group "19(i)" + "19(ii)" back into a base "19" multi-part.
+      continue;
     } else {
       // Duplicate composite key with flat shape — promote to multi-part.
       const merged = ensureMultiPart(existing);
@@ -167,11 +241,16 @@ function normalizeMultiParts(answers) {
       survivors.push(entry);
       continue;
     }
-    const baseCk = compositeKey(entry.section || '', sub.base);
+    const baseCk = compositeKey({
+      section: entry.section || '',
+      question_number: sub.base,
+      _syntheticSection: entry._syntheticSection,
+    });
     if (!baseGroups.has(baseCk)) {
       baseGroups.set(baseCk, {
         global_question_index: entry.global_question_index,
         section: entry.section || '',
+        _syntheticSection: entry._syntheticSection, // inherit so downstream matching works
         question_number: sub.base,
         page: entry.page,
         is_multi_part: true,
@@ -210,7 +289,15 @@ function ensureMultiPart(entry) {
   return entry;
 }
 
-function buildDisplayQuestion(a) {
+// Build the human-facing label for a question. On papers without
+// section restarts (paperHasSections=false — the common case) the
+// label is just "Q<n>" or "<section> Q<n>". On section-restart
+// papers (paperHasSections=true — detected by assignSyntheticSections)
+// every label is prefixed with the synthetic section ("S1Q1", "S2Q1")
+// so the parent can disambiguate Section A Q1 from Section B Q1.
+// The flag is computed once per match run in matchExtractions and
+// threaded through both call sites.
+function buildDisplayQuestion(a, paperHasSections = false) {
   // Always rebuild from question_number / section. The AI's
   // display_question is unreliable — it sometimes returns the full
   // question text ("In paragraph 3, what two things..."), which is
@@ -220,6 +307,9 @@ function buildDisplayQuestion(a) {
   const s = a.section ? String(a.section).trim() : '';
   if (q) {
     const qLabel = /^Q/i.test(q) ? q : `Q${q}`;
+    if (paperHasSections && a._syntheticSection != null) {
+      return `S${a._syntheticSection}${qLabel}`;
+    }
     return s ? `${s} ${qLabel}` : qLabel;
   }
   if (a.display_question) {
@@ -258,8 +348,8 @@ function parseParenSubpart(qnumber) {
 //   { question_number: "9b", answer: "14" }
 //
 // matchExtractions pairs by question_number string equality, so the
-// shapes never line up without preprocessing. We canonicalise the
-// answer-key side to the flat shape before the matcher runs.
+// shapes never line up without preprocessing. We canonicalise BOTH
+// sides to the flat shape before the matcher runs.
 //
 // Only fires when is_multi_part === true AND parts[] is non-empty.
 // Flat entries pass through unchanged. Parenthesised-suffix entries
@@ -269,18 +359,41 @@ function parseParenSubpart(qnumber) {
 // Applied to BOTH extraction sides in matchExtractions. The helper
 // is idempotent on flat entries (they pass through unchanged at the
 // out.push(a) below), so running it on both sides is safe and avoids
-// shape drift. The previous "answer-key only" application broke when
+// shape drift. An earlier "answer-key only" application broke when
 // the student side emitted multi-part on inline-layout Math questions
 // (e.g. "9. Write the answers. a. ___ b. ___" read as one multi-part
-// question instead of two distinct sub-questions); this symmetric
+// question instead of two distinct sub-questions); the symmetric
 // version handles any combination of shapes either side produces.
 //
-// Open consideration: when parts use roman numerals stored without
-// parens (parts: [{part: "i"}, {part: "ii"}]), this produces "19i"
-// / "19ii" with no parens. If the student emitted "19(i)" those
-// won't match. Math "9a/9b" papers work; English parenthesised-
-// suffix papers still rely on normalizeMultiParts' second-pass
-// grouping path that handles "19(i)" / "19(ii)" → grouped "19".
+// Roman-numeral part labels (i, ii, iii, iv, v, vi, vii, viii, ix, x):
+// we emit dual forms — "19i" AND "19(i)" — so the matcher finds a
+// match whichever variant the other side used. The normalizeMultiParts
+// second pass also auto-groups parenthesised-suffix entries into a
+// base multi-part on the side that emitted them flat-with-parens;
+// emitting both forms from the fanout covers the asymmetry in both
+// directions.
+const ROMAN_PART_RE = /^(i{1,3}|iv|v|vi{1,3}|ix|x)$/i;
+
+// Build a flat per-part entry from a parent multi-part record and
+// one of its parts, using `qnum` as the synthesised question_number
+// (the caller decides whether to emit "19i" or "19(i)" or both).
+function buildFannedEntry(parent, part, qnum) {
+  return {
+    global_question_index: parent.global_question_index,
+    section: parent.section || '',
+    _syntheticSection: parent._syntheticSection, // inherit synthetic section for matching
+    question_number: qnum,
+    display_question: undefined,                  // rebuilt downstream
+    page: parent.page,
+    answer_type: part?.answer_type || parent.answer_type || 'text',
+    answer: part?.answer ?? '',
+    confidence: typeof part?.confidence === 'number'
+      ? part.confidence
+      : (typeof parent.confidence === 'number' ? parent.confidence : null),
+    _fanned_from_multipart: true,
+  };
+}
+
 function fanOutMultiPartKeys(answers) {
   const out = [];
   for (const a of answers) {
@@ -290,19 +403,25 @@ function fanOutMultiPartKeys(answers) {
       for (const p of a.parts) {
         const partLabel = String(p?.part ?? '').trim();
         if (!baseQNum && !partLabel) continue; // skip degenerate
-        out.push({
-          global_question_index: a.global_question_index,
-          section: a.section || '',
-          question_number: baseQNum + partLabel, // "9" + "a" → "9a"
-          display_question: undefined,            // rebuilt downstream
-          page: a.page,
-          answer_type: p?.answer_type || a.answer_type || 'text',
-          answer: p?.answer ?? '',
-          confidence: typeof p?.confidence === 'number'
-            ? p.confidence
-            : (typeof a.confidence === 'number' ? a.confidence : null),
-          _fanned_from_multipart: true,
-        });
+        // Roman parts emit the parenthesised form FIRST and the
+        // bare form second. normalizeMultiParts first-pass dedupes
+        // by composite key — since both forms normalize to the same
+        // qnum ("19(i)" and "19i" both → "19i" via normalizeQNumber),
+        // the second arrival is dropped silently as a fanned-out
+        // duplicate. Keeping the parens form means the second pass
+        // can auto-group "19(i)" + "19(ii)" back into a base "19"
+        // multi-part so the matcher pairs against the other side
+        // whether IT emitted grouped, flat-with-parens, or flat-no-
+        // parens (the last case still loses if the other side
+        // didn't go through fanout — known limitation).
+        // Non-roman parts (a/b/c/d) emit a single bare form; the
+        // matcher pairs them positionally via question_number.
+        if (ROMAN_PART_RE.test(partLabel)) {
+          out.push(buildFannedEntry(a, p, baseQNum + '(' + partLabel + ')'));
+          out.push(buildFannedEntry(a, p, baseQNum + partLabel));
+        } else {
+          out.push(buildFannedEntry(a, p, baseQNum + partLabel));
+        }
       }
       continue;
     }
@@ -335,16 +454,40 @@ export function matchExtractions(studentBatchResults, answerKeyResults) {
   // flat, so the matcher's question_number string equality works
   // regardless of which shape either side produced. fanOutMultiPartKeys
   // is idempotent on flat entries.
-  const students = normalizeMultiParts(fanOutMultiPartKeys(flattenAnswers(studentBatchResults)));
-  const keys = normalizeMultiParts(fanOutMultiPartKeys(flattenAnswers(answerKeyResults)));
+  // assignSyntheticSections runs FIRST so every entry carries a
+  // _syntheticSection index that survives through fanOutMultiPartKeys
+  // (which preserves it on fanned children) and into normalizeMultiParts
+  // (which reads it via compositeKey). Section-restart papers (Section
+  // A: Q1-Q10, Section B: Q1-Q5) get distinct S1/S2 prefixes so the
+  // composite key no longer collapses Section A Q1 and Section B Q1
+  // into the same bucket on the answer-key side.
+  const students = normalizeMultiParts(
+    fanOutMultiPartKeys(
+      assignSyntheticSections(flattenAnswers(studentBatchResults))
+    )
+  );
+  const keys = normalizeMultiParts(
+    fanOutMultiPartKeys(
+      assignSyntheticSections(flattenAnswers(answerKeyResults))
+    )
+  );
+
+  // Did at least one side actually have a section reset? If neither
+  // side sees a backward jump, every entry is _syntheticSection=1
+  // and we keep the familiar "Q1"/"Q9a" display labels. Otherwise
+  // every label gets an S-prefix ("S1Q1","S2Q1") so the parent can
+  // tell Section A Q1 apart from Section B Q1.
+  const paperHasSections =
+    students.some((s) => (s._syntheticSection || 1) > 1) ||
+    keys.some((k) => (k._syntheticSection || 1) > 1);
 
   const keyByKey = new Map();
   const keyByKeyAmbiguous = new Set();
   const keyByQNum = new Map();
   const keyByQNumAmbiguous = new Set();
   for (const k of keys) {
-    if (k.section || k.question_number) {
-      const ck = compositeKey(k.section || '', k.question_number || '');
+    if (k.section || k.question_number || k._syntheticSection != null) {
+      const ck = compositeKey(k);
       if (keyByKey.has(ck)) keyByKeyAmbiguous.add(ck);
       else keyByKey.set(ck, k);
     }
@@ -362,7 +505,7 @@ export function matchExtractions(studentBatchResults, answerKeyResults) {
     let key = null;
     let matchMethod = 'unmatched';
     let matchConfidence = 0.5;
-    const ck = compositeKey(s.section || '', s.question_number || '');
+    const ck = compositeKey(s);
     if (keyByKeyAmbiguous.has(ck)) {
       // Composite key collides with another answer-key entry —
       // refuse to pick one. Pair has no expected answer; AI compare
@@ -432,7 +575,7 @@ export function matchExtractions(studentBatchResults, answerKeyResults) {
     pairs.push({
       question: String(s.question_number || s.global_question_index || ''),
       section: s.section || '',
-      display_question: buildDisplayQuestion(s),
+      display_question: buildDisplayQuestion(s, paperHasSections),
       completed_page: s.page ?? null,
       answer_page: key?.page ?? null,
       // Multi-part fields (always populated; for flat pairs parts has length 1).
@@ -465,7 +608,7 @@ export function matchExtractions(studentBatchResults, answerKeyResults) {
     notInAttempt.push({
       question: String(k.question_number || k.global_question_index || ''),
       section: k.section || '',
-      display_question: buildDisplayQuestion(k),
+      display_question: buildDisplayQuestion(k, paperHasSections),
       answer_page: k.page ?? null,
       expected_answer: k.answer ?? '',
     });

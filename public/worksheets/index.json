@@ -89,6 +89,17 @@
       "questionPages": "1-2",
       "answerPages": "3",
       "description": "Short mock paper used for end-to-end pipeline testing. Section A (MCQ) and Section B (Open-ended) on pages 1-2. Answer key on page 3."
+    },
+    {
+      "id": "p4-p5-math-mock-3section",
+      "title": "P4/P5 Math Mock — section-restart (test)",
+      "subject": "P4/P5 Maths",
+      "level": "Primary 4/5",
+      "pdfPath": "public/worksheets/p4-p5-math-mock-3section.pdf",
+      "totalPages": 3,
+      "questionPages": "1-2",
+      "answerPages": "3",
+      "description": "Synthetic 3-page Math paper with multiple sections that each restart question numbering at 1. Used to exercise the synthetic-section detection added by the multipart-hardening fix. Adjust page ranges if your copy differs."
     }
   ]
 }
