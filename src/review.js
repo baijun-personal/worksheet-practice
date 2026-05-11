@@ -345,11 +345,35 @@ export function popupBodyHtml(record) {
 
 export function popupTitle(record) {
   if (!record) return 'Review';
-  const baseLabel = /^Q/i.test(record.question) ? record.question : `Q${record.question}`;
+  // record.question carries the already-display-ready label
+  // (e.g. "Section A: Grammar Multiple Choice Q1" or just "Q19"
+  // or, in single-section papers, "5"). The previous code
+  // prepended "Q" whenever the label didn't start with Q, which
+  // produced "QSection A:..." on section-prefixed labels —
+  // visible bug. Use the label as-is. For the bare-number
+  // case ("5" → "Q5"), prepend ONLY when the label is purely
+  // a number / number-with-trailing-letter (5, 5a) and has no
+  // section colon.
+  const baseLabel = qNumPrefixedLabel(record.question);
   if (Array.isArray(record.parts) && record.parts.length > 0) {
     return `${baseLabel} — ${record.parts.length} part${record.parts.length === 1 ? '' : 's'} to review`;
   }
   return baseLabel;
+}
+
+// Add a "Q" prefix only when the label is clearly a bare
+// question number (digits, optionally followed by a letter or
+// roman-numeral suffix) AND doesn't already start with Q AND
+// doesn't carry a section colon. Section-prefixed and Q-prefixed
+// labels pass through unchanged.
+function qNumPrefixedLabel(raw) {
+  const lbl = String(raw || '').trim();
+  if (!lbl) return '';
+  if (/^Q/i.test(lbl)) return lbl;
+  if (/:/.test(lbl)) return lbl;
+  // Bare numeric form like "5", "12a", "19(i)"
+  if (/^\d+[a-z]?(\([ivx]+\))?$/i.test(lbl)) return `Q${lbl}`;
+  return lbl;
 }
 
 // Build the inline low-confidence summary banner — used by Review
@@ -364,10 +388,9 @@ export function popupTitle(record) {
 export function lowConfidenceBannerHtml(reviewRecords) {
   const flagged = (reviewRecords || []).filter((r) => r.needs_human_review);
   if (flagged.length === 0) return '';
-  const names = flagged.map((r) => {
-    const lbl = /^Q/i.test(r.question) ? r.question : `Q${r.question}`;
-    return escapeHtml(lbl);
-  }).join(', ');
+  // Same label-rendering rule as popupTitle — don't blindly
+  // prepend Q to section-prefixed labels.
+  const names = flagged.map((r) => escapeHtml(qNumPrefixedLabel(r.question))).join(', ');
   return `<strong>${names}</strong> ${flagged.length === 1 ? 'was' : 'were'} marked with lower confidence. ` +
     `Tap each to verify before relying on the score.`;
 }
