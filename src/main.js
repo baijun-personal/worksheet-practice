@@ -2249,6 +2249,19 @@ async function onSubmit() {
   $('batch-list').innerHTML = '';
   state.cancelMarking = false;
 
+  // Re-marking starts a fresh report — clear the previous run's
+  // explanation-cost history so the cost card on the new report
+  // doesn't carry over Why? / Show steps / Give hint taps from
+  // before. The previous report is being replaced; its
+  // explanation costs go with it. The attempt record is the
+  // canonical store for these, so blanking the array AND
+  // persisting it ensures a reload after this point won't
+  // resurrect the old taps either.
+  state.attempt.explanation_costs = [];
+  try { await putAttempt(state.attempt); } catch (e) {
+    console.warn('Could not persist explanation-costs reset:', e);
+  }
+
   const dpi = state.settings.renderDpi || 150;
 
   // Flatten all completed question pages once (cache for "download attempt").
