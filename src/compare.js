@@ -658,19 +658,22 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
 //     question_start_location: { page, x, y }   x/y normalized 0..1
 //   }
 //
-// Coordinates: APPROXIMATE marker placement, not visual
+// Coordinates: APPROXIMATE ORDINAL marker placement, not visual
 // snap-to-heading detection.
 //
-// The AI-suggested location (if any) is taken as a hint and always
-// validated; on any out-of-bounds / NaN / page-mismatch value we
-// fall back to a code-side ordinal estimate based on the question's
-// position among other questions on the same page. The fallback
-// puts x at a fixed left-margin band (questions start near the
-// left in every worksheet we've seen) and y proportional to the
-// question's numeric ordering on the page. Fully deterministic but
-// blind to actual page layout — see synthLocation() below for the
-// caveats. Marker placement is intended to be visually acceptable
-// on most pages, NOT pixel-accurate.
+// The compare/marking AI call is text-only — it never sees the
+// rendered page — so it can't usefully locate a printed question
+// heading. The earlier "AI hint with code fallback" hybrid is
+// gone; placement is now 100% code-side ordinal: x sits at a
+// fixed left-margin band, y is the question's index among other
+// questions on the same page spread evenly between 0.12 and
+// 0.88 of page height. See synthLocation() below.
+//
+// Marker placement is intended to be visually close enough that
+// the parent can tell which question the red ✗ refers to. Not
+// pixel-accurate. Two-column layouts, comprehension passages,
+// and dense diagrams will all place markers off the actual
+// heading by some amount — accepted for MVP.
 function buildReviewRecords({ pairs, questions, aiQByQ }) {
   // Index pairs by base question for the position-on-page lookup.
   const pairsByPage = new Map(); // page -> [{ qn, pair }]
@@ -745,7 +748,6 @@ function buildReviewRecords({ pairs, questions, aiQByQ }) {
       ? String(baseRow.comment).trim()
       : String(aiRow?.short_reason || baseRow.comment || '').trim();
     const location = synthLocation({
-      aiLocation: aiRow?.question_start_location,
       page: baseRow.completed_page,
       qn,
       pairsByPage,
@@ -824,65 +826,39 @@ function qnumNumericPrefix(qn) {
   return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER;
 }
 
-// Estimate an approximate question_start_location for Review Mode.
-// This is NOT visual snap-to-heading detection. The marker
-// position is approximate and based on (in priority order):
+// Review-marker placement — approximate ordinal positioning.
 //
-//   1. The AI's coordinate hint, when it passes strict validation
-//      (page matches the extraction's page, x and y are finite
-//      numbers in [0, 1]).
-//   2. An ordinal fallback when the AI hint is missing or out of
-//      range. The fallback spreads questions evenly between
-//      [0.05, 0.95] of page height by ordinal position. It does
-//      not detect headings, columns, passages, diagrams, or page
-//      layout — on worksheets with two-column layouts, large
-//      diagrams, comprehension passages, or one long question
-//      followed by short ones, the fallback will be visibly
-//      off.
+// The compare/marking call is text-only and cannot visually
+// locate the printed question heading. So coordinates here are
+// NOT visual snap-to-heading detection; they're a fully
+// code-side ordinal estimate:
+//   - page comes from the extraction's completed_page
+//     (definitive)
+//   - x is a fixed left-margin band (~0.08)
+//   - y is derived from the question's ordinal position among
+//     other questions on the same page, spread evenly between
+//     0.12 and 0.88 of page height
 //
-// The caller can tell which branch was used via `source`:
-//   'ai' | 'ordinal_fallback'.
-// Use ?debug=1 in Review Mode to surface this on every marker.
-function synthLocation({ aiLocation, page, qn, pairsByPage }) {
+// The goal is "close enough that the parent can tell which
+// question the red ✗ refers to." Two-column layouts, dense
+// diagrams, comprehension passages, and long-followed-by-short
+// question patterns will all place the marker off the actual
+// heading by some amount — that's accepted for MVP.
+//
+// `source: 'ordinal'` is included in the returned object only
+// for debug-mode display (Review Mode's ?debug=1 toggle).
+function synthLocation({ page, qn, pairsByPage }) {
   const pg = Number(page);
   if (!Number.isFinite(pg) || pg < 1) return null;
-  const aiX = aiLocation && Number(aiLocation.x);
-  const aiY = aiLocation && Number(aiLocation.y);
-  const aiPage = aiLocation && Number(aiLocation.page);
-  // One-line diagnostic so a developer can see whether the AI is
-  // actually varying x across questions or just returning the
-  // same constant. v7 found x=0.06 stuck on every record on the
-  // English mock, which is the fallback's old value — either the
-  // AI was returning 0.06 uniformly, or none of its values
-  // passed validation. Logging both helps disambiguate.
-  if (typeof console !== 'undefined' && aiLocation) {
-    console.debug('[synthLocation]', { qn, aiPage, aiX, aiY, targetPage: pg });
-  }
-  const aiValid =
-    Number.isFinite(aiPage) && aiPage === pg &&
-    Number.isFinite(aiX) && aiX >= 0 && aiX <= 1 &&
-    Number.isFinite(aiY) && aiY >= 0 && aiY <= 1;
-  if (aiValid) {
-    return { page: pg, x: aiX, y: aiY, source: 'ai' };
-  }
-  // Ordinal fallback. Spread questions evenly down the page —
-  // unreliable on irregular layouts, see comment above.
-  //
-  // x bumped from 0.06 to 0.08: 0.06 lands clearly in the left
-  // margin of every Singapore primary worksheet rendered at A4,
-  // visually reading as "something in the margin" rather than
-  // "this question is wrong here". 0.08 is just inside the
-  // typical text-column start so the ✗ sits next to the
-  // question number rather than next to the page edge.
   const list = pairsByPage.get(pg) || [];
   const idx = list.findIndex((e) => e.qn === qn);
   const total = list.length;
-  const top = 0.05;
-  const bottom = 0.95;
+  const top = 0.12;
+  const bottom = 0.88;
   const y = total > 0 && idx >= 0
-    ? top + ((idx + 0.5) / total) * (bottom - top)
+    ? Math.min(0.9, Math.max(0.12, top + (idx / Math.max(1, total)) * (bottom - top)))
     : 0.5;
-  return { page: pg, x: 0.08, y, source: 'ordinal_fallback' };
+  return { page: pg, x: 0.08, y, source: 'ordinal' };
 }
 
 // Build per-part display rows for a grouped text pair. Walks the

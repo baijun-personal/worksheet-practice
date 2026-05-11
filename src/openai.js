@@ -120,75 +120,94 @@ Each item in "items" is EITHER:
 
 For multi-part items:
   • If order_matters: true — compare each student part against the expected part with the SAME "part" label, or by index when labels are missing.
-  • If order_matters: false — POOL MATCH. The student may have written list items in any order, so do NOT assume student_parts[i] should be compared with expected_parts[i]. Walk each student part and look for ANY expected_part (regardless of part label or index) whose meaning matches. Each expected_part may be matched at most once across the whole question. A student part is correct if some unused expected_part means the same; otherwise incorrect.
-  • For each student part, set "matched_expected" to the expected text it matched (or "" / null if none).
+  • If order_matters: false — POOL MATCH. The student may have written list items in any order, so do NOT assume student_parts[i] should be compared with expected_parts[i]. Walk each student part and look for ANY unused expected_part whose meaning matches. Each expected_part may be matched at most once across the whole question. A student part is correct if some unused expected_part means the same; otherwise incorrect.
+  • For each student part, set "matched_expected" to the expected text it matched, or "" if none.
 
 WORKED EXAMPLE — pool match (order_matters: false):
 
-  Input item:
+Input item:
+{
+  "question": "Q19",
+  "is_multi_part": true,
+  "order_matters": false,
+  "student_parts": [
+    {"part":"i","answer":"No"},
+    {"part":"ii","answer":"stay alert"}
+  ],
+  "expected_parts": [
+    {"part":"i","answer":"To be alert"},
+    {"part":"ii","answer":"Avoid eye contact with them"}
+  ]
+}
+
+Reasoning:
+- "No" does not mean "To be alert" or "Avoid eye contact with them" → incorrect.
+- "stay alert" means the same as "To be alert" → correct, even though it appears in a different part position.
+- Position is irrelevant when order_matters is false.
+
+Correct output:
+{
+  "question": "Q19",
+  "is_multi_part": true,
+  "parts": [
     {
-      "question": "Q19",
-      "is_multi_part": true,
-      "order_matters": false,
-      "student_parts":  [{"part":"i","answer":"No"}, {"part":"ii","answer":"stay alert"}],
-      "expected_parts": [{"part":"i","answer":"To be alert"}, {"part":"ii","answer":"Avoid eye contact with them"}]
-    }
-
-  Reasoning:
-    - "No" doesn't mean "To be alert" or "Avoid eye contact with them" → incorrect.
-    - "stay alert" means the same as "To be alert" → correct, even though the student wrote it as part (ii) and the matching expected is at part (i). Position is irrelevant when order_matters is false.
-
-  Correct output:
+      "part": "i",
+      "student_answer": "No",
+      "matched_expected": "",
+      "status": "incorrect",
+      "comment": "'No' does not match any expected item."
+    },
     {
-      "question": "Q19",
-      "is_multi_part": true,
-      "parts": [
-        {"part":"i",  "student_answer":"No",         "matched_expected":"",            "status":"incorrect", "comment":"'No' does not match any expected item."},
-        {"part":"ii", "student_answer":"stay alert", "matched_expected":"To be alert", "status":"correct",   "comment":"Same meaning as 'To be alert' (matched across positions because order_matters is false)."}
-      ]
+      "part": "ii",
+      "student_answer": "stay alert",
+      "matched_expected": "To be alert",
+      "status": "correct",
+      "comment": "Same meaning as 'To be alert'."
     }
+  ],
+  "short_display_answer": "To be alert",
+  "short_reason": "One listed answer does not match the expected points.",
+  "confidence": 0.9
+}
 
-  WRONG output (do not produce this):
-    parts where part:'ii' is paired with expected_parts[1] "Avoid eye contact with them" just because they share index 1. Pool matching means "stay alert" can match "To be alert" at any position.
+Do NOT pair student_parts[i] with expected_parts[i] just because they have the same index when order_matters is false.
 
-Status rules (apply to flat rows AND to each part of multi-part rows):
-- correct: same answer or same meaning (paraphrases, equivalent forms, equivalent units, minor formatting differences are correct).
-- incorrect: different meaning, wrong choice, irrelevant answer, OR student answer is blank/missing while expected is present.
-- unclear: expected answer is missing, the student answer reads "unclear" or is unreadable, the question matching is uncertain, or judgement genuinely cannot be made from the extracted text.
+Status rules:
+- correct: same answer or same meaning. Accept paraphrases, equivalent forms, equivalent units, and minor formatting differences.
+- incorrect: different meaning, wrong choice, irrelevant answer, or student answer is blank/missing while expected answer is present.
+- unclear: expected answer is missing, student answer is unreadable, question matching is uncertain, or judgement genuinely cannot be made from the extracted text.
 
-Confidence rule: treat match_confidence >= 0.8 as reliable — do not mark an item "unclear" solely because of match_confidence in that range. Only use "unclear" when the answer text itself is missing/unreadable or the comparison genuinely cannot be made.
+Confidence rule:
+- Use numeric confidence from 0 to 1.
+- Do not mark an item "unclear" solely because match_confidence is below 1.
+- If match_confidence >= 0.8 and the extracted answer text is readable, judge the answer normally.
 
-For MCQ-style answers, "3 (scooped)" should be considered the same as "3" or "scooped" alone — match by either component.
+For MCQ-style answers:
+- "3 (scooped)" can match "3" or "scooped".
+- Match by either component if the meaning is clear.
 
-The 'question' field carries the printed question label (e.g. "Q17", "Q19"); preserve it exactly in your output.
+The "question" field carries the printed question label, e.g. "Q17" or "Q19". Preserve it exactly.
 
-REVIEW FIELDS (Phase 1 of Review Mode):
-For ANY row or part where status is "incorrect" or "unclear", additionally produce these fields. They drive a parent-facing review surface that highlights wrong answers on the printed paper image and lets the parent open a popup explaining what went wrong.
+Review fields:
+For any flat row with status "incorrect" or "unclear", return:
+- short_display_answer: short correct-answer preview, ideally <=24 characters
+- short_reason: one short parent/child-friendly reason
+- confidence: numeric confidence from 0 to 1
 
-  short_display_answer  — a SHORT (≤24 character) form of the correct answer, suitable for inline display next to a marker on the printed page. Examples: "1/4", "B", "scooped", "30 cm", "True". Use the expected_answer as the source; trim explanation text.
-  short_reason          — one short, parent-friendly sentence explaining why the answer is wrong or unclear. Example: "Wrote 4 instead of 1." or "Answer is unreadable."
-  confidence            — a number in [0, 1] reflecting how confident you are in the comparison verdict. Use < 0.5 when something is genuinely ambiguous (e.g. unreadable handwriting, ambiguous question matching, units uncertain).
-  question_start_location — a best-effort page+coordinate hint of where the printed question NUMBER (e.g. "1.", "Q5", "12") appears. Schema:
-        { "page": <integer>, "x": <0..1>, "y": <0..1> }
-    "page" must equal the input item's "completed_page" exactly — that field is definitive (it comes from the per-answer page metadata produced during extraction).
-    "x" is the horizontal position of the question-number text, in normalised page width (origin = left edge).
-       Pick a value in [0.08, 0.15] — that's where the question number sits in the text column of a Singapore primary worksheet rendered at A4.
-       DO NOT use x < 0.05: that puts the marker in the left page margin, visually outside the text column, where it reads as "stray ink" rather than "this question". Margin anchoring was a recurring failure mode; the rule is "inside the text column".
-       Pick a value > 0.5 only for a worksheet you can tell has the question number on the right side (rare; e.g. centred or right-aligned numbering).
-    "y" is the vertical position of the question heading line (origin = top edge).
-       Use y ≈ (page_question_index + 0.5) / questions_on_page as a starting point, then bias upward when the question is short (one-line MCQ) and downward when the previous questions are long (list answers, comprehension passages). The two metadata fields tell you the ordinal position; your judgement adjusts for spacing.
-    If "completed_page" is missing on the input item, omit the location entirely (don't fabricate one).
+For any multi-part row where at least one part is "incorrect" or "unclear", return:
+- short_display_answer: short correct-answer preview, ideally <=24 characters
+- short_reason: one short parent/child-friendly reason
+- confidence: numeric confidence from 0 to 1
 
-For MULTI-PART rows where some parts are correct and others are incorrect/unclear, attach the row-level review fields ONCE on the row (not per-part). Per-part status / comment / matched_expected stay as before.
+weak_points (optional): a short array of one-line strings describing recurring themes you noticed across the wrong answers (e.g. "verb tense agreement", "unit conversion errors"). Omit or return [] if nothing specific stands out — do not invent themes.
 
-Return JSON only:
+Output JSON only:
 {
   "summary": {
     "estimated_score": "",
     "comment": ""
   },
   "questions": [
-    // Flat row (incorrect or unclear adds review fields):
     {
       "question": "",
       "student_answer": "",
@@ -197,10 +216,8 @@ Return JSON only:
       "comment": "",
       "short_display_answer": "",
       "short_reason": "",
-      "confidence": 0,
-      "question_start_location": { "page": 0, "x": 0, "y": 0 }
+      "confidence": 0
     },
-    // Multi-part row (review fields once at row level when any part is wrong):
     {
       "question": "",
       "is_multi_part": true,
@@ -215,11 +232,9 @@ Return JSON only:
       ],
       "short_display_answer": "",
       "short_reason": "",
-      "confidence": 0,
-      "question_start_location": { "page": 0, "x": 0, "y": 0 }
+      "confidence": 0
     }
   ],
-  "redo": [],
   "weak_points": []
 }`;
 
@@ -541,47 +556,13 @@ export async function markPairs({
   proxyToken,
   customPrompt,     // override COMPARE_PROMPT when non-empty
 }) {
-  // Per-page question count + per-pair page index. Used to give
-  // the AI enough metadata to synthesize a meaningful y-position
-  // for question_start_location — without page+ordinal context,
-  // the AI's coordinate output was a guess in [0,1] with no
-  // grounding. Reviewer-2 flagged this in the v4 round.
-  const pageQuestionCounts = new Map();
-  for (const p of pairs) {
-    const pg = Number(p.completed_page);
-    if (Number.isFinite(pg)) {
-      pageQuestionCounts.set(pg, (pageQuestionCounts.get(pg) || 0) + 1);
-    }
-  }
-  // Sort pairs per page to compute each pair's index-on-page.
-  const pairsOnPage = new Map(); // page -> [pair, ...]
-  for (const p of pairs) {
-    const pg = Number(p.completed_page);
-    if (!Number.isFinite(pg)) continue;
-    if (!pairsOnPage.has(pg)) pairsOnPage.set(pg, []);
-    pairsOnPage.get(pg).push(p);
-  }
-  for (const list of pairsOnPage.values()) {
-    // Sort by numeric prefix only. Q5a / Q5b / Q5c will tie on
-    // their leading "5" — we rely on Array.sort being stable
-    // (ES2019+) so they keep the input order, which traces back
-    // through matchExtractions → studentResults flattening →
-    // extraction. The pipeline preserves document order today.
-    // If you ever introduce a re-sort earlier in the pipeline,
-    // make this comparator a full tie-breaker instead.
-    list.sort((a, b) => {
-      const ka = String(a.display_question || a.question || '');
-      const kb = String(b.display_question || b.question || '');
-      const na = (ka.match(/\d+/) || ['0'])[0];
-      const nb = (kb.match(/\d+/) || ['0'])[0];
-      return Number(na) - Number(nb);
-    });
-  }
-  const indexOnPage = new Map(); // pair → index within page
-  for (const list of pairsOnPage.values()) {
-    list.forEach((p, i) => indexOnPage.set(p, i));
-  }
-
+  // Build the payload sent to the AI. Earlier versions added
+  // completed_page / page_question_index / questions_on_page so
+  // the AI could synthesise question_start_location coordinates.
+  // That output path is gone now (marker placement is fully
+  // code-side ordinal in compare.js) — those metadata fields
+  // would just be unused token bloat in the AI payload, so they
+  // are dropped here.
   const payload = {
     subject: subject || '',
     level: level || '',
@@ -590,16 +571,6 @@ export async function markPairs({
         question: p.display_question || p.question,
         match_confidence: typeof p.match_confidence === 'number' ? p.match_confidence : 1,
       };
-      // Page metadata so the AI can return a non-fake
-      // question_start_location. completed_page is from extraction
-      // (definitive); page_question_index + questions_on_page let
-      // the AI compute a sensible y for "this is question N of K
-      // on the page".
-      if (Number.isFinite(Number(p.completed_page))) {
-        item.completed_page = Number(p.completed_page);
-        item.page_question_index = indexOnPage.get(p) ?? null;
-        item.questions_on_page = pageQuestionCounts.get(Number(p.completed_page)) || null;
-      }
       if (p.is_multi_part) {
         item.is_multi_part = true;
         item.order_matters = !!p.order_matters;

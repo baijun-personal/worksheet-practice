@@ -197,9 +197,9 @@ export async function renderReviewPage(ctx) {
     const first = g.records[0];
     const labelText = formatMarkerLabel(first);
     // Debug toggle: when ?debug=1 is in the URL, append the
-    // coordinate source so we can see at a glance how often
-    // markers come from the AI vs the ordinal fallback. Useful
-    // for the Phase 1 gate decision the original plan called for.
+    // coordinate source. Single value now ('ordinal') — kept
+    // as a tag so a future per-paper smart-placement strategy
+    // can be introduced and labelled without touching the UI.
     const debug = isDebugMode();
     const sourceTag = debug
       ? ` (${first.question_start_location?.source || '?'})`
@@ -247,10 +247,11 @@ function formatMarkerLabel(record) {
 
 // Debug mode: enabled via ?debug=1 in the URL. Used by Review
 // Mode to surface coordinate-source provenance on every marker
-// label, so a developer can run the marking pipeline on real
-// papers and see how many markers came from the AI vs from the
-// ordinal fallback. (The Phase 1 gate from the plan was supposed
-// to give this answer; the toggle gives it after the fact.)
+// label. Marker placement is now always 'ordinal' (the AI no
+// longer produces coordinates) but the tag stays in case a
+// future per-paper smart-placement strategy introduces a second
+// source value — surface-on/surface-off doesn't need a code
+// change then.
 function isDebugMode() {
   try {
     return new URL(window.location.href).searchParams.get('debug') === '1';
