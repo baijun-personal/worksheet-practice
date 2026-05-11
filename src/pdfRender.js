@@ -4,8 +4,21 @@
 
 export async function loadPdfFromBlob(blob) {
   const buf = await blob.arrayBuffer();
-  // window.pdfjsLib is set up by index.html
-  const loadingTask = window.pdfjsLib.getDocument({ data: buf });
+  // window.pdfjsLib, window.pdfjsCMapUrl, window.pdfjsStandardFontDataUrl
+  // are set up by index.html. The cMap parameters are mandatory for
+  // any PDF that uses CID-keyed fonts (Chinese, Japanese, Korean,
+  // and many subset-embedded fonts). Without them, glyph translation
+  // silently fails and pages render blank — which is what happened to
+  // the P4/P5 Chinese Mock paper. standardFontDataUrl enables
+  // substitution for PDFs that reference standard PostScript fonts
+  // (Helvetica, Times, …) without embedding them. cMapPacked must be
+  // true because the distributed CMaps are bzip2-packed.
+  const loadingTask = window.pdfjsLib.getDocument({
+    data: buf,
+    cMapUrl: window.pdfjsCMapUrl,
+    cMapPacked: true,
+    standardFontDataUrl: window.pdfjsStandardFontDataUrl,
+  });
   return loadingTask.promise;
 }
 
