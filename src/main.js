@@ -15,7 +15,11 @@ import {
 import { loadPdfFromBlob, renderPageToCanvas } from './pdfRender.js';
 import { attachInkController, redrawAll } from './draw.js';
 import { flattenQuestionPage, renderStrokesOnlyPage, renderAnswerPage, colorContentRatio } from './flatten.js';
-import { extractStudentAnswers, extractAnswerKey, markPairs, compareVisualPair, requestExplanation, MODEL_PRESETS, DEFAULT_MODEL, presetForModel } from './openai.js';
+import {
+  extractStudentAnswers, extractAnswerKey, markPairs, compareVisualPair,
+  requestExplanation, MODEL_PRESETS, DEFAULT_MODEL, presetForModel,
+  BUILTIN_PROMPTS,
+} from './openai.js';
 import { matchExtractions, buildFinalReport, partitionPairsByModality } from './compare.js';
 import { renderReport, exportReportPdf, exportCompletedAttemptPdf } from './report.js';
 import { loadCatalog, fetchBuiltinPdf, builtinAttemptId } from './builtin.js';
@@ -76,6 +80,23 @@ function setChecked(id, checked) {
   }
   el.checked = !!checked;
   return true;
+}
+
+// Custom-prompt textareas in Settings pre-fill with the built-in
+// prompt text (BUILTIN_PROMPTS) so reviewers can see what's being
+// sent without grepping the source. When saving, if the textarea
+// content matches the built-in verbatim (after trimming trailing
+// whitespace on each line — textareas often add/strip a trailing
+// newline), persist '' instead of the full built-in text. This
+// preserves the pickPrompt(custom, builtin) semantic where empty
+// = follow built-in, so future edits to the built-in prompt in
+// openai.js keep flowing through to users who haven't customised.
+function normalizeCustomPrompt(textareaValue, builtin) {
+  const v = String(textareaValue ?? '');
+  if (!v.trim()) return '';
+  if (v === builtin) return '';
+  if (v.replace(/\s+$/, '') === String(builtin || '').replace(/\s+$/, '')) return '';
+  return v;
 }
 
 // --- Helpers for shuttling attempt metadata into the setup form ----------
@@ -663,18 +684,48 @@ function bindSetupForm() {
   setVal('price-cached-in', String(state.settings.priceCachedInPerMTokens ?? 0.075));
   setVal('price-out', String(state.settings.priceOutPerMTokens ?? 4.50));
   setVal('marking-mode', state.settings.markingMode || 'auto');
-  // Custom prompt overrides — empty string = use the built-in
-  // default; non-empty replaces it on the next request. See the
-  // 9-textarea fieldset in Setup → Advanced.
-  setVal('custom-student-prompt',            state.settings.customStudentPrompt            || '');
-  setVal('custom-answer-key-prompt',         state.settings.customAnswerKeyPrompt          || '');
-  setVal('custom-compare-prompt',            state.settings.customComparePrompt            || '');
-  setVal('custom-compare-visual-prompt',     state.settings.customCompareVisualPrompt      || '');
-  setVal('custom-page-detection-prompt',     state.settings.customPageDetectionPrompt      || '');
-  setVal('custom-explanation-prompt-base',   state.settings.customExplanationPromptBase    || '');
-  setVal('custom-explanation-variant-why',   state.settings.customExplanationVariantWhy    || '');
-  setVal('custom-explanation-variant-show-steps', state.settings.customExplanationVariantShowSteps || '');
-  setVal('custom-explanation-variant-give-hint',  state.settings.customExplanationVariantGiveHint  || '');
+  // Custom prompt overrides — pre-fill with the built-in prompt
+  // text so reviewers can see what's being sent without grepping
+  // the source. Saved overrides win when present; empty falls
+  // back to the built-in. normalizeCustomPrompt at save time
+  // detects an unchanged textarea (matches built-in verbatim)
+  // and persists '' so future edits to the built-in propagate
+  // automatically. See the 9-textarea fieldset in Setup →
+  // Advanced.
+  setVal('custom-student-prompt',                  state.settings.customStudentPrompt            || BUILTIN_PROMPTS.student);
+  setVal('custom-answer-key-prompt',               state.settings.customAnswerKeyPrompt          || BUILTIN_PROMPTS.answerKey);
+  setVal('custom-compare-prompt',                  state.settings.customComparePrompt            || BUILTIN_PROMPTS.compare);
+  setVal('custom-compare-visual-prompt',           state.settings.customCompareVisualPrompt      || BUILTIN_PROMPTS.compareVisual);
+  setVal('custom-page-detection-prompt',           state.settings.customPageDetectionPrompt      || BUILTIN_PROMPTS.pageDetection);
+  setVal('custom-explanation-prompt-base',         state.settings.customExplanationPromptBase    || BUILTIN_PROMPTS.explanationBase);
+  setVal('custom-explanation-variant-why',         state.settings.customExplanationVariantWhy    || BUILTIN_PROMPTS.explanationVariantWhy);
+  setVal('custom-explanation-variant-show-steps',  state.settings.customExplanationVariantShowSteps || BUILTIN_PROMPTS.explanationVariantShowSteps);
+  setVal('custom-explanation-variant-give-hint',   state.settings.customExplanationVariantGiveHint  || BUILTIN_PROMPTS.explanationVariantGiveHint);
+
+  // Reset-to-default buttons next to each prompt textarea: re-fill
+  // the textarea with the built-in prompt. The user still has to
+  // confirm-and-save (Start practice persists the form state via
+  // saveSettings); after that the on-change normalizer notices the
+  // textarea matches BUILTIN_PROMPTS again and persists '' so the
+  // setting falls back to following the built-in.
+  for (const btn of document.querySelectorAll('.prompt-reset')) {
+    btn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      const targetId = btn.getAttribute('data-target');
+      const key = btn.getAttribute('data-builtin');
+      const ta = targetId ? document.getElementById(targetId) : null;
+      const builtin = key ? BUILTIN_PROMPTS[key] : null;
+      if (ta && builtin != null) {
+        ta.value = builtin;
+        // Dispatch a synthetic 'change' so the change-listener
+        // loop above persists the reset immediately via
+        // normalizeCustomPrompt (textarea matches built-in →
+        // saved as '').
+        ta.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+  }
+
   // API mode + proxy fields
   const apiMode = state.settings.apiMode || 'direct';
   for (const r of document.querySelectorAll('input[name="api-mode"]')) {
@@ -712,18 +763,20 @@ function bindSetupForm() {
     ['model-text-compare',   'textComparisonModel',   (v) => v.trim() || DEFAULT_MODEL],
     ['model-visual-compare', 'visualComparisonModel', (v) => v.trim() || DEFAULT_MODEL],
     ['model-explanation',    'explanationModel',      (v) => v.trim() || DEFAULT_MODEL],
-    // Custom prompt overrides — no trim (whitespace-only is
-    // treated as "empty" by pickPrompt, so persisting it does
-    // no harm). Cast to String defensively.
-    ['custom-student-prompt',                'customStudentPrompt',               (v) => String(v ?? '')],
-    ['custom-answer-key-prompt',             'customAnswerKeyPrompt',             (v) => String(v ?? '')],
-    ['custom-compare-prompt',                'customComparePrompt',               (v) => String(v ?? '')],
-    ['custom-compare-visual-prompt',         'customCompareVisualPrompt',         (v) => String(v ?? '')],
-    ['custom-page-detection-prompt',         'customPageDetectionPrompt',         (v) => String(v ?? '')],
-    ['custom-explanation-prompt-base',       'customExplanationPromptBase',       (v) => String(v ?? '')],
-    ['custom-explanation-variant-why',       'customExplanationVariantWhy',       (v) => String(v ?? '')],
-    ['custom-explanation-variant-show-steps','customExplanationVariantShowSteps', (v) => String(v ?? '')],
-    ['custom-explanation-variant-give-hint', 'customExplanationVariantGiveHint',  (v) => String(v ?? '')],
+    // Custom prompt overrides — route every textarea-change save
+    // through normalizeCustomPrompt so an unchanged pre-filled
+    // textarea persists as '' (= "use built-in") rather than as
+    // the full built-in text. Keeps future built-in edits in
+    // openai.js flowing to users who haven't customised.
+    ['custom-student-prompt',                'customStudentPrompt',               (v) => normalizeCustomPrompt(v, BUILTIN_PROMPTS.student)],
+    ['custom-answer-key-prompt',             'customAnswerKeyPrompt',             (v) => normalizeCustomPrompt(v, BUILTIN_PROMPTS.answerKey)],
+    ['custom-compare-prompt',                'customComparePrompt',               (v) => normalizeCustomPrompt(v, BUILTIN_PROMPTS.compare)],
+    ['custom-compare-visual-prompt',         'customCompareVisualPrompt',         (v) => normalizeCustomPrompt(v, BUILTIN_PROMPTS.compareVisual)],
+    ['custom-page-detection-prompt',         'customPageDetectionPrompt',         (v) => normalizeCustomPrompt(v, BUILTIN_PROMPTS.pageDetection)],
+    ['custom-explanation-prompt-base',       'customExplanationPromptBase',       (v) => normalizeCustomPrompt(v, BUILTIN_PROMPTS.explanationBase)],
+    ['custom-explanation-variant-why',       'customExplanationVariantWhy',       (v) => normalizeCustomPrompt(v, BUILTIN_PROMPTS.explanationVariantWhy)],
+    ['custom-explanation-variant-show-steps','customExplanationVariantShowSteps', (v) => normalizeCustomPrompt(v, BUILTIN_PROMPTS.explanationVariantShowSteps)],
+    ['custom-explanation-variant-give-hint', 'customExplanationVariantGiveHint',  (v) => normalizeCustomPrompt(v, BUILTIN_PROMPTS.explanationVariantGiveHint)],
   ]) {
     const el = document.getElementById(id);
     if (!el) {
@@ -1838,17 +1891,20 @@ async function onStartPracticeImpl() {
     apiMode: (document.querySelector('input[name="api-mode"]:checked')?.value) || 'direct',
     proxyEndpoint: $('proxy-endpoint').value.trim(),
     proxyToken: $('proxy-token').value,
-    // Custom prompt overrides — value as-typed (no trim). Empty
-    // string means "use the default" per pickPrompt's contract.
-    customStudentPrompt:                $('custom-student-prompt').value                || '',
-    customAnswerKeyPrompt:              $('custom-answer-key-prompt').value             || '',
-    customComparePrompt:                $('custom-compare-prompt').value                || '',
-    customCompareVisualPrompt:          $('custom-compare-visual-prompt').value         || '',
-    customPageDetectionPrompt:          $('custom-page-detection-prompt').value         || '',
-    customExplanationPromptBase:        $('custom-explanation-prompt-base').value       || '',
-    customExplanationVariantWhy:        $('custom-explanation-variant-why').value       || '',
-    customExplanationVariantShowSteps:  $('custom-explanation-variant-show-steps').value || '',
-    customExplanationVariantGiveHint:   $('custom-explanation-variant-give-hint').value  || '',
+    // Custom prompt overrides — value as-typed, but route through
+    // normalizeCustomPrompt: when the textarea matches the built-in
+    // verbatim (modulo trailing whitespace), persist '' so future
+    // edits to the built-in in openai.js propagate automatically.
+    // pickPrompt(custom, builtin) treats '' as "use built-in".
+    customStudentPrompt:                normalizeCustomPrompt($('custom-student-prompt').value,                BUILTIN_PROMPTS.student),
+    customAnswerKeyPrompt:              normalizeCustomPrompt($('custom-answer-key-prompt').value,             BUILTIN_PROMPTS.answerKey),
+    customComparePrompt:                normalizeCustomPrompt($('custom-compare-prompt').value,                BUILTIN_PROMPTS.compare),
+    customCompareVisualPrompt:          normalizeCustomPrompt($('custom-compare-visual-prompt').value,         BUILTIN_PROMPTS.compareVisual),
+    customPageDetectionPrompt:          normalizeCustomPrompt($('custom-page-detection-prompt').value,         BUILTIN_PROMPTS.pageDetection),
+    customExplanationPromptBase:        normalizeCustomPrompt($('custom-explanation-prompt-base').value,       BUILTIN_PROMPTS.explanationBase),
+    customExplanationVariantWhy:        normalizeCustomPrompt($('custom-explanation-variant-why').value,       BUILTIN_PROMPTS.explanationVariantWhy),
+    customExplanationVariantShowSteps:  normalizeCustomPrompt($('custom-explanation-variant-show-steps').value, BUILTIN_PROMPTS.explanationVariantShowSteps),
+    customExplanationVariantGiveHint:   normalizeCustomPrompt($('custom-explanation-variant-give-hint').value,  BUILTIN_PROMPTS.explanationVariantGiveHint),
   });
 
   const subject = $('meta-subject').value.trim();

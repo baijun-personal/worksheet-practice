@@ -655,6 +655,29 @@ Give 1–2 sentences nudging the child toward the right approach WITHOUT reveali
 Do NOT state, paraphrase, or trivially imply the correct answer in any form.`,
 };
 
+// Built-in prompts exposed for the Settings UI. Lets the
+// custom-prompt textareas pre-fill with the current built-in
+// text so reviewers can see what's being sent without grepping
+// the source. pickPrompt() still treats empty / whitespace
+// custom strings as "use built-in", so an unmodified textarea
+// (visible text matches the built-in) saves as empty and stays
+// in sync with future built-in edits.
+//
+// Keys mirror the settings field names without the "custom"
+// prefix (customStudentPrompt → student, etc.) so the wiring
+// in main.js is mechanical.
+export const BUILTIN_PROMPTS = {
+  student:                     STUDENT_PROMPT,
+  answerKey:                   ANSWER_KEY_PROMPT,
+  compare:                     COMPARE_PROMPT,
+  compareVisual:               COMPARE_VISUAL_PROMPT,
+  pageDetection:               PAGE_DETECTION_PROMPT,
+  explanationBase:             EXPLANATION_PROMPT_BASE,
+  explanationVariantWhy:       EXPLANATION_VARIANTS.why,
+  explanationVariantShowSteps: EXPLANATION_VARIANTS.show_steps,
+  explanationVariantGiveHint:  EXPLANATION_VARIANTS.give_hint,
+};
+
 export async function requestExplanation({
   apiKey,
   model,

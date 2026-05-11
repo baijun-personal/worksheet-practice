@@ -270,45 +270,74 @@
         <details style="margin-top:12px; border:1px solid var(--border); border-radius:6px; padding:8px 12px">
           <summary><strong>Custom prompt overrides</strong> <span class="muted small">(advanced — leave blank to use defaults)</span></summary>
           <p class="muted small">
-            Empty = use the built-in default in <code>src/openai.js</code>.
-            Override only when iterating on prompt wording for testing.
-            Changes take effect on the next API call.
+            Each textarea pre-fills with the built-in prompt from <code>src/openai.js</code>.
+            Edit a textarea to override that prompt; click <em>Reset to default</em> to
+            restore it. An unmodified textarea is automatically treated as "use the
+            built-in" — future updates to the built-in prompt in the source flow
+            through without needing a re-save.
           </p>
 
           <h4 class="muted small" style="margin:12px 0 4px">Extraction</h4>
-          <label>Student extraction
-            <textarea id="custom-student-prompt" rows="6" placeholder="(blank = default)" class="prompt-textarea"></textarea>
-          </label>
-          <label>Answer key extraction
-            <textarea id="custom-answer-key-prompt" rows="6" placeholder="(blank = default)" class="prompt-textarea"></textarea>
-          </label>
+          <div class="prompt-field">
+            <label for="custom-student-prompt">Student extraction</label>
+            <textarea id="custom-student-prompt" rows="8" class="prompt-textarea"></textarea>
+            <button type="button" class="link-btn prompt-reset"
+                    data-target="custom-student-prompt" data-builtin="student">Reset to default</button>
+          </div>
+          <div class="prompt-field">
+            <label for="custom-answer-key-prompt">Answer key extraction</label>
+            <textarea id="custom-answer-key-prompt" rows="8" class="prompt-textarea"></textarea>
+            <button type="button" class="link-btn prompt-reset"
+                    data-target="custom-answer-key-prompt" data-builtin="answerKey">Reset to default</button>
+          </div>
 
           <h4 class="muted small" style="margin:12px 0 4px">Comparison</h4>
-          <label>Text comparison
-            <textarea id="custom-compare-prompt" rows="6" placeholder="(blank = default)" class="prompt-textarea"></textarea>
-          </label>
-          <label>Visual comparison
-            <textarea id="custom-compare-visual-prompt" rows="6" placeholder="(blank = default)" class="prompt-textarea"></textarea>
-          </label>
+          <div class="prompt-field">
+            <label for="custom-compare-prompt">Text comparison</label>
+            <textarea id="custom-compare-prompt" rows="8" class="prompt-textarea"></textarea>
+            <button type="button" class="link-btn prompt-reset"
+                    data-target="custom-compare-prompt" data-builtin="compare">Reset to default</button>
+          </div>
+          <div class="prompt-field">
+            <label for="custom-compare-visual-prompt">Visual comparison</label>
+            <textarea id="custom-compare-visual-prompt" rows="6" class="prompt-textarea"></textarea>
+            <button type="button" class="link-btn prompt-reset"
+                    data-target="custom-compare-visual-prompt" data-builtin="compareVisual">Reset to default</button>
+          </div>
 
           <h4 class="muted small" style="margin:12px 0 4px">Setup</h4>
-          <label>Page detection
-            <textarea id="custom-page-detection-prompt" rows="6" placeholder="(blank = default)" class="prompt-textarea"></textarea>
-          </label>
+          <div class="prompt-field">
+            <label for="custom-page-detection-prompt">Page detection</label>
+            <textarea id="custom-page-detection-prompt" rows="8" class="prompt-textarea"></textarea>
+            <button type="button" class="link-btn prompt-reset"
+                    data-target="custom-page-detection-prompt" data-builtin="pageDetection">Reset to default</button>
+          </div>
 
           <h4 class="muted small" style="margin:12px 0 4px">Review explanations</h4>
-          <label>Explanation base prompt
-            <textarea id="custom-explanation-prompt-base" rows="6" placeholder="(blank = default)" class="prompt-textarea"></textarea>
-          </label>
-          <label>Why? variant
-            <textarea id="custom-explanation-variant-why" rows="4" placeholder="(blank = default)" class="prompt-textarea"></textarea>
-          </label>
-          <label>Show steps variant
-            <textarea id="custom-explanation-variant-show-steps" rows="4" placeholder="(blank = default)" class="prompt-textarea"></textarea>
-          </label>
-          <label>Give hint variant
-            <textarea id="custom-explanation-variant-give-hint" rows="4" placeholder="(blank = default)" class="prompt-textarea"></textarea>
-          </label>
+          <div class="prompt-field">
+            <label for="custom-explanation-prompt-base">Explanation base prompt</label>
+            <textarea id="custom-explanation-prompt-base" rows="8" class="prompt-textarea"></textarea>
+            <button type="button" class="link-btn prompt-reset"
+                    data-target="custom-explanation-prompt-base" data-builtin="explanationBase">Reset to default</button>
+          </div>
+          <div class="prompt-field">
+            <label for="custom-explanation-variant-why">Why? variant</label>
+            <textarea id="custom-explanation-variant-why" rows="4" class="prompt-textarea"></textarea>
+            <button type="button" class="link-btn prompt-reset"
+                    data-target="custom-explanation-variant-why" data-builtin="explanationVariantWhy">Reset to default</button>
+          </div>
+          <div class="prompt-field">
+            <label for="custom-explanation-variant-show-steps">Show steps variant</label>
+            <textarea id="custom-explanation-variant-show-steps" rows="4" class="prompt-textarea"></textarea>
+            <button type="button" class="link-btn prompt-reset"
+                    data-target="custom-explanation-variant-show-steps" data-builtin="explanationVariantShowSteps">Reset to default</button>
+          </div>
+          <div class="prompt-field">
+            <label for="custom-explanation-variant-give-hint">Give hint variant</label>
+            <textarea id="custom-explanation-variant-give-hint" rows="4" class="prompt-textarea"></textarea>
+            <button type="button" class="link-btn prompt-reset"
+                    data-target="custom-explanation-variant-give-hint" data-builtin="explanationVariantGiveHint">Reset to default</button>
+          </div>
         </details>
       </details>
 
