@@ -663,6 +663,18 @@ function bindSetupForm() {
   setVal('price-cached-in', String(state.settings.priceCachedInPerMTokens ?? 0.075));
   setVal('price-out', String(state.settings.priceOutPerMTokens ?? 4.50));
   setVal('marking-mode', state.settings.markingMode || 'auto');
+  // Custom prompt overrides — empty string = use the built-in
+  // default; non-empty replaces it on the next request. See the
+  // 9-textarea fieldset in Setup → Advanced.
+  setVal('custom-student-prompt',            state.settings.customStudentPrompt            || '');
+  setVal('custom-answer-key-prompt',         state.settings.customAnswerKeyPrompt          || '');
+  setVal('custom-compare-prompt',            state.settings.customComparePrompt            || '');
+  setVal('custom-compare-visual-prompt',     state.settings.customCompareVisualPrompt      || '');
+  setVal('custom-page-detection-prompt',     state.settings.customPageDetectionPrompt      || '');
+  setVal('custom-explanation-prompt-base',   state.settings.customExplanationPromptBase    || '');
+  setVal('custom-explanation-variant-why',   state.settings.customExplanationVariantWhy    || '');
+  setVal('custom-explanation-variant-show-steps', state.settings.customExplanationVariantShowSteps || '');
+  setVal('custom-explanation-variant-give-hint',  state.settings.customExplanationVariantGiveHint  || '');
   // API mode + proxy fields
   const apiMode = state.settings.apiMode || 'direct';
   for (const r of document.querySelectorAll('input[name="api-mode"]')) {
@@ -700,6 +712,18 @@ function bindSetupForm() {
     ['model-text-compare',   'textComparisonModel',   (v) => v.trim() || DEFAULT_MODEL],
     ['model-visual-compare', 'visualComparisonModel', (v) => v.trim() || DEFAULT_MODEL],
     ['model-explanation',    'explanationModel',      (v) => v.trim() || DEFAULT_MODEL],
+    // Custom prompt overrides — no trim (whitespace-only is
+    // treated as "empty" by pickPrompt, so persisting it does
+    // no harm). Cast to String defensively.
+    ['custom-student-prompt',                'customStudentPrompt',               (v) => String(v ?? '')],
+    ['custom-answer-key-prompt',             'customAnswerKeyPrompt',             (v) => String(v ?? '')],
+    ['custom-compare-prompt',                'customComparePrompt',               (v) => String(v ?? '')],
+    ['custom-compare-visual-prompt',         'customCompareVisualPrompt',         (v) => String(v ?? '')],
+    ['custom-page-detection-prompt',         'customPageDetectionPrompt',         (v) => String(v ?? '')],
+    ['custom-explanation-prompt-base',       'customExplanationPromptBase',       (v) => String(v ?? '')],
+    ['custom-explanation-variant-why',       'customExplanationVariantWhy',       (v) => String(v ?? '')],
+    ['custom-explanation-variant-show-steps','customExplanationVariantShowSteps', (v) => String(v ?? '')],
+    ['custom-explanation-variant-give-hint', 'customExplanationVariantGiveHint',  (v) => String(v ?? '')],
   ]) {
     const el = document.getElementById(id);
     if (!el) {
@@ -1814,6 +1838,17 @@ async function onStartPracticeImpl() {
     apiMode: (document.querySelector('input[name="api-mode"]:checked')?.value) || 'direct',
     proxyEndpoint: $('proxy-endpoint').value.trim(),
     proxyToken: $('proxy-token').value,
+    // Custom prompt overrides — value as-typed (no trim). Empty
+    // string means "use the default" per pickPrompt's contract.
+    customStudentPrompt:                $('custom-student-prompt').value                || '',
+    customAnswerKeyPrompt:              $('custom-answer-key-prompt').value             || '',
+    customComparePrompt:                $('custom-compare-prompt').value                || '',
+    customCompareVisualPrompt:          $('custom-compare-visual-prompt').value         || '',
+    customPageDetectionPrompt:          $('custom-page-detection-prompt').value         || '',
+    customExplanationPromptBase:        $('custom-explanation-prompt-base').value       || '',
+    customExplanationVariantWhy:        $('custom-explanation-variant-why').value       || '',
+    customExplanationVariantShowSteps:  $('custom-explanation-variant-show-steps').value || '',
+    customExplanationVariantGiveHint:   $('custom-explanation-variant-give-hint').value  || '',
   });
 
   const subject = $('meta-subject').value.trim();

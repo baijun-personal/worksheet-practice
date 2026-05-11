@@ -61,6 +61,21 @@ const DEFAULTS = {
   //   150 — default, matches marking DPI
   //   200 — useful for dense math/science with small subscripts
   explanationRenderDpi: 150,
+  // Custom prompt overrides. Each empty string = use the
+  // built-in default in src/openai.js. Set via Setup → Advanced
+  // → "Custom prompt overrides". Useful for per-subject tuning
+  // or when iterating on prompt language during real-paper
+  // testing. Changes take effect on the next request — no
+  // restart needed.
+  customStudentPrompt: '',
+  customAnswerKeyPrompt: '',
+  customComparePrompt: '',
+  customCompareVisualPrompt: '',
+  customPageDetectionPrompt: '',
+  customExplanationPromptBase: '',
+  customExplanationVariantWhy: '',
+  customExplanationVariantShowSteps: '',
+  customExplanationVariantGiveHint: '',
   passphrase: '', // empty = unlocked; first run sets it
   unlocked: false,
 };

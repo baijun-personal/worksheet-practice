@@ -266,6 +266,50 @@
             <input id="price-out" type="number" min="0" step="0.01" />
           </label>
         </fieldset>
+
+        <details style="margin-top:12px; border:1px solid var(--border); border-radius:6px; padding:8px 12px">
+          <summary><strong>Custom prompt overrides</strong> <span class="muted small">(advanced — leave blank to use defaults)</span></summary>
+          <p class="muted small">
+            Empty = use the built-in default in <code>src/openai.js</code>.
+            Override only when iterating on prompt wording for testing.
+            Changes take effect on the next API call.
+          </p>
+
+          <h4 class="muted small" style="margin:12px 0 4px">Extraction</h4>
+          <label>Student extraction
+            <textarea id="custom-student-prompt" rows="6" placeholder="(blank = default)" class="prompt-textarea"></textarea>
+          </label>
+          <label>Answer key extraction
+            <textarea id="custom-answer-key-prompt" rows="6" placeholder="(blank = default)" class="prompt-textarea"></textarea>
+          </label>
+
+          <h4 class="muted small" style="margin:12px 0 4px">Comparison</h4>
+          <label>Text comparison
+            <textarea id="custom-compare-prompt" rows="6" placeholder="(blank = default)" class="prompt-textarea"></textarea>
+          </label>
+          <label>Visual comparison
+            <textarea id="custom-compare-visual-prompt" rows="6" placeholder="(blank = default)" class="prompt-textarea"></textarea>
+          </label>
+
+          <h4 class="muted small" style="margin:12px 0 4px">Setup</h4>
+          <label>Page detection
+            <textarea id="custom-page-detection-prompt" rows="6" placeholder="(blank = default)" class="prompt-textarea"></textarea>
+          </label>
+
+          <h4 class="muted small" style="margin:12px 0 4px">Review explanations</h4>
+          <label>Explanation base prompt
+            <textarea id="custom-explanation-prompt-base" rows="6" placeholder="(blank = default)" class="prompt-textarea"></textarea>
+          </label>
+          <label>Why? variant
+            <textarea id="custom-explanation-variant-why" rows="4" placeholder="(blank = default)" class="prompt-textarea"></textarea>
+          </label>
+          <label>Show steps variant
+            <textarea id="custom-explanation-variant-show-steps" rows="4" placeholder="(blank = default)" class="prompt-textarea"></textarea>
+          </label>
+          <label>Give hint variant
+            <textarea id="custom-explanation-variant-give-hint" rows="4" placeholder="(blank = default)" class="prompt-textarea"></textarea>
+          </label>
+        </details>
       </details>
 
       <details class="card">

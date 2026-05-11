@@ -144,6 +144,19 @@ tr.warning-row > td { border-top: 1px solid var(--warning-border); }
 .ios-hint .link-btn:hover { background: rgba(0, 0, 0, 0.06); }
 body.app-immersive .ios-hint { display: none; }
 
+/* Custom-prompt textareas in Setup → Advanced. Monospace so the
+   technical prompt text reads sanely; full-width to match the
+   model dropdowns above. */
+.prompt-textarea {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 6px 8px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
 /* Build-version badge in the topbar. Reads main.js's Last-Modified
    header and displays it as a relative time. Click to force a
    cache-bust reload — useful on Safari where Cmd-Shift-R isn't
