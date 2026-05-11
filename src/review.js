@@ -87,40 +87,8 @@ async function renderToCanvas(pdf, pageNumber, canvas, hostWidth, strokes) {
 // question label match. y-tolerance is no longer used as a merge
 // criterion. Reviewer-2 flagged this: y-only grouping silently
 // merges unrelated questions in two-column layouts.
-function groupReviewRecords(records) {
-  const groups = new Map(); // key = `${page}::${baseQuestion}`
-  const order = [];
-  for (const rec of records) {
-    const loc = rec.question_start_location;
-    if (!loc) continue;
-    const baseKey = canonicalBaseQuestion(rec.question);
-    const groupKey = `${loc.page}::${baseKey}`;
-    if (groups.has(groupKey)) {
-      groups.get(groupKey).records.push(rec);
-    } else {
-      const g = { page: loc.page, x: loc.x, y: loc.y, records: [rec] };
-      groups.set(groupKey, g);
-      order.push(g);
-    }
-  }
-  return order;
-}
-
-// Drop any printed-subpart suffix (Q19(i) → Q19, "5a" → "5a") and
-// normalise to lowercase for matching. We don't drop alphabetic
-// subpart letters because Q5a and Q5b ARE distinct printed
-// questions on the worksheet — they should each get their own
-// marker. Only the "(...)" subpart from list-answer questions
-// collapses here.
-function canonicalBaseQuestion(label) {
-  return String(label || '')
-    .replace(/\s*\([^)]*\)\s*$/, '')
-    .trim()
-    .toLowerCase();
-}
-
-// Decide whether a given page should host markers. Rules:
-//  - If no paper profile, render markers (no info to gate on).
+// Decide whether a given page should host a list rail. Rules:
+//  - If no paper profile, render the rail (no info to gate on).
 //  - If page type is in NON_QUESTION_TYPES, skip.
 //  - 'unknown' or 'question' → render.
 function shouldRenderMarkersOnPage(paperProfile, pageNumber) {
@@ -131,9 +99,9 @@ function shouldRenderMarkersOnPage(paperProfile, pageNumber) {
 }
 
 // Public: render one page in the Review-mode UI. Replaces the host's
-// page canvas with the COMPLETED page (PDF + saved strokes) and the
-// marker layer with the markers for any review_records anchored to
-// this page.
+// page canvas with the COMPLETED page (PDF + saved strokes) and
+// populates the side-rail list with one row per review_record
+// anchored to this page.
 //
 //   ctx = {
 //     pdf,                    // pdf.js doc
@@ -145,118 +113,97 @@ function shouldRenderMarkersOnPage(paperProfile, pageNumber) {
 //                             //   getStrokesForPage); empty array
 //                             //   if no ink — page renders clean
 //     canvas,                 // <canvas> for the page render
-//     markerLayer,            // <div> overlay for markers
-//     onMarkerClick(record),  // called with the single record
-//                             //   for that marker. compare.js
-//                             //   produces one record per base
-//                             //   question (parts[] inside), so
-//                             //   no grouped-records argument is
-//                             //   passed — see comment in click
-//                             //   handler below.
+//     listHost,               // <aside> element to populate with
+//                             //   row buttons
+//     onRowClick(record),     // called when a list row is tapped
 //     hostWidth,              // CSS pixels for the rendered page
 //   }
 export async function renderReviewPage(ctx) {
   const {
     pdf, paperProfile, reviewRecords, pageNumber, strokes,
-    canvas, markerLayer, onMarkerClick, hostWidth,
+    canvas, listHost, onRowClick, hostWidth,
   } = ctx;
   await renderToCanvas(pdf, pageNumber, canvas, hostWidth, strokes);
-  markerLayer.innerHTML = '';
+  if (listHost) listHost.innerHTML = '';
 
-  // Records anchored to this page only.
-  const onThisPage = (reviewRecords || []).filter((r) => {
-    const loc = r.question_start_location;
-    return loc && loc.page === pageNumber;
-  });
-  // Page-type gate runs AFTER the per-page filter. The gate now
-  // only fires if (a) there are records here AND (b) the page
-  // type is in the trimmed NON_QUESTION_TYPES set (cover or
-  // blank — impossible to genuinely host a question). If
-  // records anchor to a 'passage' or 'composition' page, we
-  // render — those types CAN host questions in real worksheets,
-  // and the upstream pipeline thinks there's something to
-  // review. Only the very-not-a-question types still suppress.
-  if (onThisPage.length === 0) return;
+  // Page-type gate: cover / blank / etc. pages get no list, even
+  // if a stray record somehow anchors there.
   if (!shouldRenderMarkersOnPage(paperProfile, pageNumber)) return;
-  const groups = groupReviewRecords(onThisPage);
+  if (!listHost) return;
 
-  for (const g of groups) {
-    const marker = document.createElement('div');
-    // Unclear and incorrect both render as red ✗ per the agreed
-    // decision: a confusing answer is usually wrong; the parent
-    // sees one consistent "needs attention" cue and the
-    // low-confidence summary alert at the top names which were
-    // borderline. Earlier amber-for-unclear styling is gone.
-    marker.className = 'review-marker';
-    marker.style.left = (g.x * 100).toFixed(3) + '%';
-    marker.style.top  = (g.y * 100).toFixed(3) + '%';
-
-    // The label is built from the FIRST record in the group.
-    // Multi-part: short_display_answer is the row-level answer; the
-    // popup unpacks parts. Single-part: same.
-    const first = g.records[0];
-    const labelText = formatMarkerLabel(first);
-    // Debug toggle: when ?debug=1 is in the URL, append the
-    // coordinate source. Single value now ('ordinal') — kept
-    // as a tag so a future per-paper smart-placement strategy
-    // can be introduced and labelled without touching the UI.
-    const debug = isDebugMode();
-    const sourceTag = debug
-      ? ` (${first.question_start_location?.source || '?'})`
-      : '';
-    marker.innerHTML =
-      `<span class="review-marker-x">✗</span>` +
-      `<span class="review-marker-label">${escapeHtml(labelText)}${escapeHtml(sourceTag)}</span>`;
-    // Pass only the first record. compare.js already collapses
-    // multi-part subparts into one record (parts[] inside), so
-    // each group reliably has one record. groupReviewRecords()
-    // is defensive against an upstream regression that ever
-    // produces two records for the same base question — if that
-    // happened we'd lose visibility into the second one here.
-    // Acceptable trade-off: the popup model is one-record-at-a-
-    // time, and we'd rather know about a regression via missing
-    // record than handle a malformed group structurally.
-    marker.addEventListener('click', (ev) => {
+  const rows = buildPageListRows(reviewRecords, pageNumber);
+  for (const row of rows) {
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = 'review-list-row';
+    el.innerHTML =
+      `<span class="review-list-q">${escapeHtml(row.questionLabel)}</span>` +
+      `<span class="review-list-ans">${escapeHtml(row.inline)}</span>`;
+    el.addEventListener('click', (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
-      onMarkerClick(first);
+      onRowClick(row.record);
     });
-    markerLayer.appendChild(marker);
+    listHost.appendChild(el);
   }
 }
 
-// Build the inline marker label. Caps to 24 characters total
-// including the "Correct: " prefix; if the cap would truncate,
-// shows a generic "Click to view answer" instead so the parent
-// doesn't see a half-truncated answer that misleads.
+// Build the side-rail list of review rows for the page currently
+// being shown. Each row carries the original record plus a short
+// label for the question and the inline preview text.
 //
-// Both incorrect and unclear records use the same "Correct: <X>"
-// preview — the agreed treatment is that unclear is shown as
-// wrong (one consistent red ✗ + same label format), with the
-// low-confidence summary alert at the top of the stage naming
-// which questions were borderline.
-function formatMarkerLabel(record) {
-  const FALLBACK = 'Click to view answer';
-  const CAP = 24;
-  const ans = String(record.short_display_answer || '').trim();
-  if (!ans) return FALLBACK;
-  const candidate = 'Correct: ' + ans;
-  if (candidate.length <= CAP) return candidate;
-  return FALLBACK;
+// `inline` is short_display_answer when it fits inline; otherwise
+// 'Tap'. Multi-part rows always read 'Tap' because they have
+// multiple correct answers that can't be previewed in one row.
+//
+// Rows arrive in question-number order so the list reads
+// top-to-bottom like the page does.
+export function buildPageListRows(reviewRecords, pageNumber) {
+  const onThisPage = (reviewRecords || []).filter((r) =>
+    Number(r.question_page) === Number(pageNumber)
+  );
+  onThisPage.sort((a, b) => qnPrefix(a.question) - qnPrefix(b.question));
+  return onThisPage.map((r) => ({
+    record: r,
+    questionLabel: shortQLabel(r.question),
+    inline: inlinePreview(r),
+  }));
 }
 
-// Debug mode: enabled via ?debug=1 in the URL. Used by Review
-// Mode to surface coordinate-source provenance on every marker
-// label. Marker placement is now always 'ordinal' (the AI no
-// longer produces coordinates) but the tag stays in case a
-// future per-paper smart-placement strategy introduces a second
-// source value — surface-on/surface-off doesn't need a code
-// change then.
-function isDebugMode() {
-  try {
-    return new URL(window.location.href).searchParams.get('debug') === '1';
-  } catch { return false; }
+// Shrink a raw question label to "Q<num>[a-z]" form for the rail.
+// Examples:
+//   "Section A: Grammar Multiple Choice Q1" → "Q1"
+//   "Q19(i)" → "Q19"   (multi-part collapses to base)
+//   "Q5a"    → "Q5a"
+//   "5a"     → "Q5a"
+//   "5"      → "Q5"
+function shortQLabel(raw) {
+  const s = String(raw || '').trim();
+  const m = s.match(/Q\s*(\d+[a-z]?)/i) || s.match(/^(\d+[a-z]?)/);
+  return m ? `Q${m[1]}` : s;
 }
+
+// Inline-preview rule: keep it strict for v1 — answer must be
+// non-empty, ≤8 chars, and contain no whitespace. Multi-part
+// records always read 'Tap' because no single short answer
+// represents the whole row. Loosen later if real-paper testing
+// shows the threshold is too tight.
+function inlinePreview(record) {
+  if (Array.isArray(record.parts) && record.parts.length > 0) return 'Tap';
+  const ans = String(record.short_display_answer || '').trim();
+  if (!ans || ans.length > 8 || /\s/.test(ans)) return 'Tap';
+  return ans;
+}
+
+function qnPrefix(raw) {
+  const m = String(raw || '').match(/(\d+)/);
+  return m ? Number(m[1]) : 0;
+}
+
+// (Earlier versions had isDebugMode() + formatMarkerLabel() here
+// to feed the on-page ✗ overlay. Both are gone — the side-rail
+// list doesn't need a per-marker debug tag or a 24-char label
+// cap. shortQLabel + inlinePreview above cover their roles.)
 
 function escapeHtml(s) {
   return String(s == null ? '' : s)
@@ -264,14 +211,13 @@ function escapeHtml(s) {
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-// Build the per-page navigable list of pages that have at least one
-// review record. Pages with markers gated off (non-question types)
-// are still navigable — the parent might want to flip past them.
-// MVP: include every page from question_start_location, sorted.
+// Build the per-page navigable list of pages that have at least
+// one review record. Reads the simplified question_page field
+// (just a number; the prior {page, x, y, source} shape is gone).
 export function pagesWithReviews(reviewRecords) {
   const pages = new Set();
   for (const r of reviewRecords || []) {
-    const pg = r.question_start_location?.page;
+    const pg = Number(r.question_page);
     if (Number.isFinite(pg)) pages.add(pg);
   }
   return [...pages].sort((a, b) => a - b);
