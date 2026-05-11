@@ -116,9 +116,14 @@ export function renderReport(report, mountNodes) {
 
   // Only show the section column when at least one row actually has a section.
   const showSection = results.some((r) => r.section);
+  // The "Conf." column shows the vision model's per-question
+  // extraction confidence (diagnostic for run-to-run flips). It's
+  // distinct from the comparator's confidence shown in the debug
+  // review-records table below. See formatConfidence for null /
+  // non-numeric handling.
   tableEl.innerHTML = `<h2>All questions (${results.length})</h2>` +
     `<table><thead><tr>
-        <th>Q</th>${showSection ? '<th>Section</th>' : ''}<th>Status</th><th>Student</th><th>Expected</th><th>Pages</th><th>Comment</th>
+        <th>Q</th>${showSection ? '<th>Section</th>' : ''}<th>Status</th><th>Student</th><th>Expected</th><th>Conf.</th><th>Pages</th><th>Comment</th>
       </tr></thead><tbody>${
       results.map((r) => `<tr>
         <td>${escapeHtml(questionLabel(r))}</td>
@@ -126,6 +131,7 @@ export function renderReport(report, mountNodes) {
         <td>${statusTag(r.status)}</td>
         <td>${escapeHtml(r.student_answer || '')}</td>
         <td>${escapeHtml(r.expected_answer || '')}</td>
+        <td>${formatConfidence(r.student_confidence)}</td>
         <td>${formatPageRefs(r)}</td>
         <td>${escapeHtml(r.comment || '')}</td>
       </tr>`).join('')
@@ -157,7 +163,8 @@ export function renderReport(report, mountNodes) {
         <table style="margin-top:8px; font-size:12px"><thead><tr>
           <th>Q</th><th>Page</th>
           <th>Short answer</th><th>Reason</th>
-          <th>Conf.</th><th>Review?</th><th>Status</th>
+          <th>Ext.conf.</th><th>Cmp.conf.</th>
+          <th>Review?</th><th>Status</th>
           <th>Parts</th>
         </tr></thead><tbody>${reviewRecords.map((r) => {
           const partsCol = Array.isArray(r.parts) && r.parts.length > 0
@@ -168,6 +175,7 @@ export function renderReport(report, mountNodes) {
             <td>${r.question_page ?? '—'}</td>
             <td>${escapeHtml(r.short_display_answer || '')}</td>
             <td>${escapeHtml(r.short_reason || '')}</td>
+            <td>${formatConfidence(r.student_confidence)}</td>
             <td>${(r.confidence != null) ? r.confidence.toFixed(2) : '—'}</td>
             <td>${r.needs_human_review ? '⚠' : ''}</td>
             <td>${escapeHtml(r.status)}</td>
@@ -390,6 +398,16 @@ function formatPageRefs(r) {
   const aStr = hasA ? `completed p.${escapeHtml(a)}` : '';
   const bStr = hasB ? `answer p.${escapeHtml(b)}` : '';
   return [aStr, bStr].filter(Boolean).join('<br>');
+}
+
+// Render extraction confidence as a 2-decimal number, or a muted
+// dash when null / non-numeric. Used by the All-questions table's
+// "Conf." column and the debug review-records table's "Ext.conf."
+// column. Diagnostic-only: the value is the vision model's
+// per-question confidence in its reading of the student's writing.
+function formatConfidence(v) {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return '<span class="muted">—</span>';
+  return v.toFixed(2);
 }
 
 function isWrong(r)     { return r.status === 'incorrect'; }

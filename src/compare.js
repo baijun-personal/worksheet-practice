@@ -834,6 +834,11 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
           expected_answer: '[visual answer]',
           status,
           comment: `Visual comparison: ${detailBits.join(' ').trim() || (status === 'correct' ? 'matches.' : 'see report.')}`,
+          // Visual results don't carry extraction confidence in a way
+          // that's diagnostic for the self-consistency hypothesis —
+          // the model that "extracts" the drawing IS the comparator
+          // here. Render as null to keep the column shape consistent.
+          student_confidence: null,
         };
       } else {
         row = {
@@ -842,6 +847,7 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
           expected_answer: '[visual answer]',
           status: 'unclear',
           comment: `Visual comparison: ${v?.error || 'not run.'}`,
+          student_confidence: null,
         };
       }
       tally(row.status);
@@ -885,6 +891,14 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
         expected_answer: ai.expected_answer ?? p.expected_answer,
         status,
         comment,
+        // Extraction confidence — emitted per-question by the vision
+        // model when reading the student's writing. Rendered in the
+        // "Conf." column of the All-questions table to support
+        // diagnosing run-to-run flips (low confidence on a flipped
+        // reading is the smoking gun for a self-consistency fix).
+        // Distinct from the comparator's confidence shown in the
+        // debug-table "Cmp.conf." column.
+        student_confidence: p.student_confidence ?? null,
       });
       continue;
     }
@@ -898,7 +912,11 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
       local.comment = 'No answer was written.';
     }
     tally(local.status);
-    questions.push({ ...base, ...local });
+    questions.push({
+      ...base,
+      ...local,
+      student_confidence: p.student_confidence ?? null,
+    });
   }
 
   // "attempted" = questions where the student tried something
@@ -1075,6 +1093,12 @@ function buildReviewRecords({ pairs, questions, aiQByQ }) {
       short_display_answer: shortAnswer,
       short_reason: shortReason,
       confidence: conf,
+      // Extraction confidence pulled off the base row (which now
+      // carries it from buildFinalReport). For multi-part records
+      // this is whichever part opened the group; the per-part
+      // extraction confidence still appears in the All-questions
+      // table's "Conf." column, one row per part.
+      student_confidence: baseRow.student_confidence ?? null,
       needs_human_review: conf < 0.5,
       question_page: anchorPage,
     };
@@ -1190,6 +1214,11 @@ function buildMultiPartRows(p, aiParts, keysProvided) {
     // text-compare said. The AI sees no answer_type and would
     // otherwise mis-classify.
     const partIsBlank = sp.answer_type === 'blank' && keysProvided;
+    // Per-part extraction confidence — emitted by the student-side
+    // vision model when reading each slot. Diagnostic for the
+    // self-consistency hypothesis; rendered in the All-questions
+    // table's "Conf." column. null when the model didn't emit one.
+    const partConf = typeof sp.confidence === 'number' ? sp.confidence : null;
     if (ai) {
       const status = partIsBlank ? 'unanswered' : normalizeStatus(ai.status);
       const comment = partIsBlank
@@ -1209,6 +1238,7 @@ function buildMultiPartRows(p, aiParts, keysProvided) {
         expected_answer: ai.matched_expected ?? '',
         status,
         comment,
+        student_confidence: partConf,
       });
     } else if (localStatuses) {
       const local = localStatuses[i] || { status: 'unclear', comment: 'Local fallback could not score this part.' };
@@ -1219,6 +1249,7 @@ function buildMultiPartRows(p, aiParts, keysProvided) {
         expected_answer: local.matchedExpected || '',
         status: partIsBlank ? 'unanswered' : local.status,
         comment: partIsBlank ? 'No answer was written.' : (local.comment || ''),
+        student_confidence: partConf,
       });
     } else {
       rows.push({
@@ -1230,6 +1261,7 @@ function buildMultiPartRows(p, aiParts, keysProvided) {
         comment: partIsBlank
           ? 'No answer was written.'
           : 'AI compare did not return a per-part status for this part.',
+        student_confidence: partConf,
       });
     }
   });
