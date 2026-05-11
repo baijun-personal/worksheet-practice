@@ -67,7 +67,13 @@ export function attachInkController({
   onStrokeRemoved,       // async (strokeId) => void
 }) {
   // Match canvas backing-store size to its CSS size on each redraw.
-  const ctx = inkCanvas.getContext('2d');
+  // willReadFrequently: true — the ink canvas is rebuilt on every
+  // page redraw (clearRect + replay all strokes), and Chrome/Edge
+  // log a "Multiple readback operations using getImageData are
+  // faster with the willReadFrequently attribute set to true"
+  // warning otherwise. Harmless on contexts that don't actually
+  // read; a useful hint to the browser for the ones that do.
+  const ctx = inkCanvas.getContext('2d', { willReadFrequently: true });
 
   let drawing = false;
   let activePointerId = null;

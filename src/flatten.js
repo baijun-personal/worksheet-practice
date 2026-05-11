@@ -37,7 +37,11 @@ export async function colorContentRatio(pdf, sampleSize = 200) {
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(viewport.width);
     canvas.height = Math.round(viewport.height);
-    const ctx = canvas.getContext('2d');
+    // willReadFrequently: true — this context exists solely to be
+    // read back via getImageData below. Without the flag, the
+    // browser logs a "readback faster with willReadFrequently"
+    // warning every time colorContentRatio runs.
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     ctx.fillStyle = 'white';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     await page.render({ canvasContext: ctx, viewport }).promise;

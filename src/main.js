@@ -2010,7 +2010,7 @@ async function loadCurrentPage() {
   inkCanvas.style.width = pdfCanvas.style.width;
   inkCanvas.style.height = pdfCanvas.style.height;
 
-  const inkCtx = inkCanvas.getContext('2d');
+  const inkCtx = inkCanvas.getContext('2d', { willReadFrequently: true });
   const strokes = await getStrokesForPage(state.attempt.id, state.currentPage);
   redrawAll(inkCtx, strokes, {
     widthPx: inkCanvas.width,
@@ -2084,7 +2084,7 @@ async function onUndo() {
   await deleteStroke(state.attempt.id, last.id);
   const remaining = strokes.slice(0, -1);
   const inkCanvas = $('ink-canvas');
-  redrawAll(inkCanvas.getContext('2d'), remaining, {
+  redrawAll(inkCanvas.getContext('2d', { willReadFrequently: true }), remaining, {
     widthPx: inkCanvas.width,
     heightPx: inkCanvas.height,
     pageWidthPts: state.pageMeta.pageWidthPts,
@@ -2100,7 +2100,7 @@ async function onClearPage() {
   if (!(await confirmInPage(`Clear all writing on this page?`, { okLabel: 'Clear', danger: true }))) return;
   await clearStrokesForPage(state.attempt.id, state.currentPage);
   const inkCanvas = $('ink-canvas');
-  inkCanvas.getContext('2d').clearRect(0, 0, inkCanvas.width, inkCanvas.height);
+  inkCanvas.getContext('2d', { willReadFrequently: true }).clearRect(0, 0, inkCanvas.width, inkCanvas.height);
 }
 
 // Lightweight in-page confirm dialog. Native confirm() forces iOS
