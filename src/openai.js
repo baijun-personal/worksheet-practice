@@ -295,7 +295,7 @@ Multi-part rule:
 - LIST-ANSWER question (one stem, several slots): one entry with is_multi_part: true and parts[]. Use printed slot labels for "part" ("i", "ii", "a", "b").
 - DISTINCT SUB-QUESTIONS (Q5a and Q5b are different questions with their own prompts): separate flat entries with question_number "5a" and "5b".
 
-For 4-up images: each tile has a dark-grey label "PDF page N — not student answer" above its quadrant. Use that to set "page". The label is not a student answer. (4-up batches receive only the printed contact-sheet image, not a strokes-only one — the "no ink = blank" rule above doesn't apply in that mode; fall back to reading the blue ink against the printed page as before.)
+For 4-up images: each tile has a dark-grey label "PDF page N — not student answer" above its quadrant. Use that to set "page". The label is not a student answer. 4-up batches now receive TWO contact-sheet images with the SAME tile layout — one printed-with-strokes and one strokes-only on white. The "no ink in the slot's area on the strokes-only image = BLANK" rule applies to each tile's question areas on the strokes-only composite, identically to per-page mode.
 
 Return JSON only.`;
 
@@ -365,18 +365,32 @@ export async function extractStudentAnswers({
   const content = [];
   for (const p of completedPageImages) {
     if (p.fourup && Array.isArray(p.includedPageNumbers)) {
-      // 4-up contact sheets: single-image path. A matching 4-up
-      // strokes-only composite would need its own builder; the
-      // STUDENT_PROMPT explicitly tells the model the 4-up mode
-      // falls back to single-image "blue ink against the
-      // printed page" reading.
-      const label = `Completed contact-sheet image: pages ${p.includedPageNumbers.join(', ')} arranged on a single A4 sheet ` +
+      // 4-up contact sheets now send TWO images per batch when the
+      // caller supplies a companion strokes-only composite — same
+      // dual-image idea as the per-page path, just composited
+      // across multiple pages on each sheet. Falls back to single
+      // image if strokesDataUrl is absent.
+      const printedLabel = `Completed contact-sheet image: pages ${p.includedPageNumbers.join(', ')} arranged on a single A4 sheet ` +
         `(layout chosen for the page count: 1 = full page, 2 = stacked, 3 = one wide on top + two below, 4 = 2x2 grid). ` +
         `Each tile carries a small dark-grey label "PDF page N — not student answer" above it. ` +
         `Use that tile label to identify the page number for any answer in that tile. ` +
         `The dark-grey labels are NOT student answers — student answers are blue.`;
-      content.push({ type: 'text', text: label });
+      content.push({ type: 'text', text: printedLabel });
       content.push({ type: 'image_url', image_url: { url: p.dataUrl, detail: 'high' } });
+      if (p.strokesDataUrl) {
+        // Companion strokes-only contact sheet — same layout, same
+        // per-tile labels ("PDF page N — strokes only"), white
+        // background, only the student's blue ink visible. Source
+        // of truth for "what did the student actually write" with
+        // no printed text to misread as handwriting.
+        content.push({
+          type: 'text',
+          text: `Companion contact-sheet image: SAME pages and SAME tile layout as the previous image, ` +
+            `but each tile shows ONLY the student's blue ink on a white background (no printed worksheet). ` +
+            `This is the source of truth for what the student wrote. If a tile has no ink in a question's area, that question is BLANK.`,
+        });
+        content.push({ type: 'image_url', image_url: { url: p.strokesDataUrl, detail: 'high' } });
+      }
       continue;
     }
     // Per-page full-page path: send the printed page first, then
