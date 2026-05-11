@@ -299,6 +299,27 @@ For 4-up images: each tile has a dark-grey label "PDF page N — not student ans
 
 Return JSON only.`;
 
+// Prompt for batch4_fourup_single mode. The mode sends only ONE
+// 4-up contact-sheet image (printed pages with strokes overlaid),
+// no strokes-only companion. We trade the strokes-only blank-
+// detection signal for half the image-token cost. The prompt
+// stays minimal: one positive instruction, one JSON shape, no
+// branching on image layout.
+const STUDENT_PROMPT_SINGLE = `Read the child's answers written in blue from this completed worksheet page printed in black. If a question has no blue ink, include it with answer_type "blank" and answer "".
+Return JSON only:
+{
+  "answers": [
+    {
+      "question_number": "",
+      "page": 0,
+      "answer_type": "choice | text | number | blank | unknown",
+      "answer": "",
+      "confidence": 0
+    }
+  ]
+}
+`;
+
 const ANSWER_KEY_PROMPT = `Extract the printed answers from this answer-key page.
 
 These pages contain the model answers for grading. Answers may appear as a numbered list, a compact grid of question-number → answer pairs, or a marking scheme with sample answers. Read all of them.
@@ -355,12 +376,15 @@ Return JSON only.`;
 export async function extractStudentAnswers({
   apiKey,
   model,
-  completedPageImages, // [{ pageNumber, dataUrl, strokesDataUrl?, fourup?, includedPageNumbers? }]
+  completedPageImages, // [{ pageNumber, dataUrl, strokesDataUrl?, fourup?, fourupSingle?, includedPageNumbers? }]
   signal,
   apiMode,
   proxyEndpoint,
   proxyToken,
   customPrompt,         // override STUDENT_PROMPT when non-empty
+                        // (used by single_fullpage + batch4_fourup)
+  customPromptSingle,   // override STUDENT_PROMPT_SINGLE when non-empty
+                        // (used by batch4_fourup_single)
 }) {
   const content = [];
   for (const p of completedPageImages) {
@@ -409,9 +433,16 @@ export async function extractStudentAnswers({
       content.push({ type: 'image_url', image_url: { url: p.strokesDataUrl, detail: 'high' } });
     }
   }
+  // Pick prompt by batch shape. fourup_single entries are flagged
+  // with fourupSingle: true. Other batches (per-page pairs OR
+  // standard fourup dual-image pairs) use the standard prompt.
+  const isSingle = completedPageImages.some((p) => p.fourupSingle === true);
+  const system = isSingle
+    ? pickPrompt(customPromptSingle, STUDENT_PROMPT_SINGLE)
+    : pickPrompt(customPrompt, STUDENT_PROMPT);
   return chatJson({
     apiKey, model,
-    system: pickPrompt(customPrompt, STUDENT_PROMPT),
+    system,
     content, signal, apiMode, proxyEndpoint, proxyToken,
   });
 }
@@ -682,6 +713,7 @@ Do NOT state, paraphrase, or trivially imply the correct answer in any form.`,
 // in main.js is mechanical.
 export const BUILTIN_PROMPTS = {
   student:                     STUDENT_PROMPT,
+  studentSingle:               STUDENT_PROMPT_SINGLE,
   answerKey:                   ANSWER_KEY_PROMPT,
   compare:                     COMPARE_PROMPT,
   compareVisual:               COMPARE_VISUAL_PROMPT,
