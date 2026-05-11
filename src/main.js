@@ -710,7 +710,7 @@ function bindSetupForm() {
   setVal('price-in', String(state.settings.priceInPerMTokens ?? 0.75));
   setVal('price-cached-in', String(state.settings.priceCachedInPerMTokens ?? 0.075));
   setVal('price-out', String(state.settings.priceOutPerMTokens ?? 4.50));
-  setVal('marking-mode', state.settings.markingMode || 'auto');
+  setVal('marking-mode', state.settings.markingMode || 'batch4_fourup');
   // Custom prompt overrides — pre-fill with the built-in prompt
   // text so reviewers can see what's being sent without grepping
   // the source. Saved overrides win when present; empty falls
@@ -720,6 +720,7 @@ function bindSetupForm() {
   // automatically. See the 9-textarea fieldset in Setup →
   // Advanced.
   setVal('custom-student-prompt',                  state.settings.customStudentPrompt            || BUILTIN_PROMPTS.student);
+  setVal('custom-student-prompt-single',           state.settings.customStudentPromptSingle      || BUILTIN_PROMPTS.studentSingle);
   setVal('custom-answer-key-prompt',               state.settings.customAnswerKeyPrompt          || BUILTIN_PROMPTS.answerKey);
   setVal('custom-compare-prompt',                  state.settings.customComparePrompt            || BUILTIN_PROMPTS.compare);
   setVal('custom-compare-visual-prompt',           state.settings.customCompareVisualPrompt      || BUILTIN_PROMPTS.compareVisual);
@@ -784,7 +785,7 @@ function bindSetupForm() {
     ['price-in', 'priceInPerMTokens', (v) => Math.max(0, parseFloat(v) || 0)],
     ['price-cached-in', 'priceCachedInPerMTokens', (v) => Math.max(0, parseFloat(v) || 0)],
     ['price-out', 'priceOutPerMTokens', (v) => Math.max(0, parseFloat(v) || 0)],
-    ['marking-mode', 'markingMode', (v) => v || 'auto'],
+    ['marking-mode', 'markingMode', (v) => v || 'batch4_fourup'],
     ['model-detection',      'detectionModel',        (v) => v.trim() || DEFAULT_MODEL],
     ['model-extraction',     'extractionModel',       (v) => v.trim() || DEFAULT_MODEL],
     ['model-text-compare',   'textComparisonModel',   (v) => v.trim() || DEFAULT_MODEL],
@@ -796,6 +797,7 @@ function bindSetupForm() {
     // the full built-in text. Keeps future built-in edits in
     // openai.js flowing to users who haven't customised.
     ['custom-student-prompt',                'customStudentPrompt',               (v) => normalizeCustomPrompt(v, BUILTIN_PROMPTS.student)],
+    ['custom-student-prompt-single',         'customStudentPromptSingle',         (v) => normalizeCustomPrompt(v, BUILTIN_PROMPTS.studentSingle)],
     ['custom-answer-key-prompt',             'customAnswerKeyPrompt',             (v) => normalizeCustomPrompt(v, BUILTIN_PROMPTS.answerKey)],
     ['custom-compare-prompt',                'customComparePrompt',               (v) => normalizeCustomPrompt(v, BUILTIN_PROMPTS.compare)],
     ['custom-compare-visual-prompt',         'customCompareVisualPrompt',         (v) => normalizeCustomPrompt(v, BUILTIN_PROMPTS.compareVisual)],
@@ -1925,7 +1927,7 @@ async function onStartPracticeImpl() {
     priceInPerMTokens: Math.max(0, parseFloat($('price-in').value) || 0),
     priceCachedInPerMTokens: Math.max(0, parseFloat($('price-cached-in').value) || 0),
     priceOutPerMTokens: Math.max(0, parseFloat($('price-out').value) || 0),
-    markingMode: $('marking-mode').value || 'auto',
+    markingMode: $('marking-mode').value || 'batch4_fourup',
     apiMode: (document.querySelector('input[name="api-mode"]:checked')?.value) || 'direct',
     proxyEndpoint: $('proxy-endpoint').value.trim(),
     proxyToken: $('proxy-token').value,
@@ -1935,6 +1937,7 @@ async function onStartPracticeImpl() {
     // edits to the built-in in openai.js propagate automatically.
     // pickPrompt(custom, builtin) treats '' as "use built-in".
     customStudentPrompt:                normalizeCustomPrompt($('custom-student-prompt').value,                BUILTIN_PROMPTS.student),
+    customStudentPromptSingle:          normalizeCustomPrompt($('custom-student-prompt-single').value,         BUILTIN_PROMPTS.studentSingle),
     customAnswerKeyPrompt:              normalizeCustomPrompt($('custom-answer-key-prompt').value,             BUILTIN_PROMPTS.answerKey),
     customComparePrompt:                normalizeCustomPrompt($('custom-compare-prompt').value,                BUILTIN_PROMPTS.compare),
     customCompareVisualPrompt:          normalizeCustomPrompt($('custom-compare-visual-prompt').value,         BUILTIN_PROMPTS.compareVisual),
@@ -2308,23 +2311,25 @@ async function onSubmit() {
   if (state.settings.testMode) qPages = qPages.slice(0, 2);
   const aPages = state.attempt.answerPages;
 
-  // Resolve marking mode (Auto chooses between single combined and batch4_fullpage).
-  const requestedMode = state.settings.markingMode || 'auto';
-  let mode = requestedMode;
-  if (mode === 'auto') {
-    mode = qPages.length <= 4 ? 'single_fullpage' : 'batch4_fullpage';
-  }
+  // Resolve marking mode. Three options:
+  //   - 'single_fullpage'      — Best quality
+  //   - 'batch4_fourup'        — Balanced (default)
+  //   - 'batch4_fourup_single' — Most economical
+  // Older saved values ('auto', 'batch4_fullpage') fall through to
+  // batch4_fourup. No migration code by design.
+  const mode = state.settings.markingMode || 'batch4_fourup';
 
   // Build the batches up front so we can show a confirmation with image counts.
   // Each "batch" is: { label, completedImages: [{pageNumber, dataUrl}], answerImages: same array each time }
-  let batchesPlan; // [{ pages: number[], composite: "fullpage"|"fourup" }]
+  let batchesPlan; // [{ pages: number[], composite: "fullpage"|"fourup"|"fourup_single" }]
   if (mode === 'single_fullpage') {
     batchesPlan = [{ pages: qPages, composite: 'fullpage' }];
-  } else if (mode === 'batch4_fourup') {
-    batchesPlan = chunkInto(qPages, 4).map((g) => ({ pages: g, composite: 'fourup' }));
+  } else if (mode === 'batch4_fourup_single') {
+    batchesPlan = chunkInto(qPages, 4).map((g) => ({ pages: g, composite: 'fourup_single' }));
   } else {
-    // batch4_fullpage
-    batchesPlan = chunkInto(qPages, 4).map((g) => ({ pages: g, composite: 'fullpage' }));
+    // batch4_fourup (default — also catches old saved values like
+    // 'auto' or 'batch4_fullpage' since those modes no longer exist).
+    batchesPlan = chunkInto(qPages, 4).map((g) => ({ pages: g, composite: 'fourup' }));
   }
 
   // Build the request list for the confirmation. Staged pipeline:
@@ -2333,7 +2338,15 @@ async function onSubmit() {
   //      if no answer pages are specified).
   //   3. Final comparison request — text-only (no images), runs only if
   //      both prior stages produced something to compare.
-  const studentRequestImages = batchesPlan.map((b) => (b.composite === 'fourup' ? 1 : b.pages.length));
+  // Image counts per batch:
+  //   fullpage       — 2 images per page (printed + strokes-only)
+  //   fourup         — 2 images per batch (printed 4-up + strokes-only 4-up)
+  //   fourup_single  — 1 image per batch (printed 4-up only; no strokes-only companion)
+  const studentRequestImages = batchesPlan.map((b) => {
+    if (b.composite === 'fourup')         return 2;
+    if (b.composite === 'fourup_single')  return 1;
+    return b.pages.length * 2;
+  });
   const studentRequestCount = batchesPlan.length;
   const answerKeyRequestCount = aPages.length > 0 ? 1 : 0;
   const compareRequestCount = answerKeyRequestCount > 0 ? 1 : 0;
@@ -2341,14 +2354,14 @@ async function onSubmit() {
   const totalStudentImages = studentRequestImages.reduce((a, b) => a + b, 0);
   const totalAnswerImages = aPages.length;
   const totalImages = totalStudentImages + totalAnswerImages;
-  const modeLabel = (
-    requestedMode === 'auto' ? `Auto → ${humanMode(mode)}` : humanMode(mode)
-  );
-  const studentLines = batchesPlan.map((b, i) =>
-    `  Request ${i + 1}: Student answers — ${
-      b.composite === 'fourup' ? '1 4-up image' : `${b.pages.length} full-page image(s)`
-    } covering completed pages ${b.pages.join(', ')}`
-  ).join('\n');
+  const modeLabel = humanMode(mode);
+  const studentLines = batchesPlan.map((b, i) => {
+    let imageDesc;
+    if (b.composite === 'fourup')              imageDesc = '1 printed 4-up + 1 strokes-only 4-up (2 images)';
+    else if (b.composite === 'fourup_single')  imageDesc = '1 printed 4-up image';
+    else                                       imageDesc = `${b.pages.length} page(s) × 2 images (printed + strokes-only)`;
+    return `  Request ${i + 1}: Student answers — ${imageDesc} covering completed pages ${b.pages.join(', ')}`;
+  }).join('\n');
   const answerLine = answerKeyRequestCount > 0
     ? `  Request ${studentRequestCount + 1}: Answer key — ${aPages.length} answer page image(s) covering page${aPages.length === 1 ? '' : 's'} ${aPages.join(', ')}`
     : `  ⚠ No answer pages specified — normal answer-key marking cannot run.\n` +
@@ -2441,7 +2454,7 @@ async function onSubmit() {
   }
 
   let answerImages;
-  if (mode === 'batch4_fourup' && aPages.length > 1) {
+  if ((mode === 'batch4_fourup' || mode === 'batch4_fourup_single') && aPages.length > 1) {
     answerImages = [];
     const chunks = chunkInto(aPages, 4);
     for (const chunk of chunks) {
@@ -2471,7 +2484,28 @@ async function onSubmit() {
   const completedByPage = new Map(completedPagesAll.map((p) => [p.pageNumber, p]));
   const batches = [];
   for (const plan of batchesPlan) {
-    if (plan.composite === 'fourup') {
+    if (plan.composite === 'fourup_single') {
+      const tilePages = plan.pages.map((n) => ({
+        pageNumber: n,
+        strokes: completedByPage.get(n).strokes,
+      }));
+      // fourup_single: send ONLY the printed-with-strokes composite,
+      // no strokes-only companion. Half the image-token cost vs the
+      // fourup branch below. extractStudentAnswers picks the minimal
+      // STUDENT_PROMPT_SINGLE prompt when it sees fourupSingle: true
+      // on any batch entry.
+      const composed = await composeFourUpA4(state.pdf, tilePages, { dpi: 200 });
+      batches.push({
+        completed: [{
+          pageNumber: plan.pages[0],
+          dataUrl: composed.dataUrl,
+          fourup: true,         // same 4-up layout downstream
+          fourupSingle: true,   // → triggers lean prompt in extractStudentAnswers
+          includedPageNumbers: composed.includedPageNumbers,
+        }],
+        plannedPages: plan.pages,
+      });
+    } else if (plan.composite === 'fourup') {
       const tilePages = plan.pages.map((n) => ({
         pageNumber: n,
         strokes: completedByPage.get(n).strokes,
@@ -2596,7 +2630,8 @@ async function onSubmit() {
         res = await extractStudentAnswers({
           ...transport,
           completedPageImages: t.completed,
-          customPrompt: state.settings.customStudentPrompt,
+          customPrompt:       state.settings.customStudentPrompt,
+          customPromptSingle: state.settings.customStudentPromptSingle,
         });
         studentResults.push(res.parsed);
       } else {
@@ -2877,10 +2912,10 @@ function onBackToSetup() {
 
 function humanMode(mode) {
   switch (mode) {
-    case 'single_fullpage': return 'Single combined request, full-page images';
-    case 'batch4_fullpage': return 'Batch by 4 pages, full-page images';
-    case 'batch4_fourup':   return 'Batch by 4 pages, 4-up A4 combined images';
-    default:                return mode;
+    case 'single_fullpage':       return 'Best quality';
+    case 'batch4_fourup':         return 'Balanced';
+    case 'batch4_fourup_single':  return 'Most economical';
+    default:                      return mode;
   }
 }
 
