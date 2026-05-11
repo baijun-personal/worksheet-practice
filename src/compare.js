@@ -673,10 +673,10 @@ function buildReviewRecords({ pairs, questions, aiQByQ }) {
   const groups = new Map(); // baseKey -> { row, parts: [] }
   for (const row of questions) {
     // unanswered joins incorrect + unclear: the parent still
-    // wants a marker for "this one was skipped — here's the
-    // expected answer, here's how to think about it" via the
-    // Review popup. Visually it stays the same red ✗ as
-    // incorrect, matching the agreed unify-as-wrong rule.
+    // wants a Review-list row for "this one was skipped — here's
+    // the expected answer, here's how to think about it" via the
+    // Review popup. The side-rail list treats all three statuses
+    // the same way; the popup carries the distinction.
     if (row.status !== 'incorrect' && row.status !== 'unclear' && row.status !== 'unanswered') continue;
     // Exclude visual-comparison rows from Review Mode for the MVP.
     // Their student_answer / expected_answer are placeholder
@@ -786,8 +786,9 @@ function trimToCap(s, max) {
 function worstStatusOf(parts) {
   // incorrect > unanswered > unclear > correct. unanswered ranks
   // above unclear because a blank-but-graded part is a definitive
-  // miss (no attempt), whereas unclear is "couldn't tell". Both
-  // surface as red ✗ in Review Mode regardless.
+  // miss (no attempt), whereas unclear is "couldn't tell". All
+  // three render the same way in the Review side-rail list; the
+  // popup carries the distinction.
   if (parts.some((p) => p.status === 'incorrect'))   return 'incorrect';
   if (parts.some((p) => p.status === 'unanswered')) return 'unanswered';
   if (parts.some((p) => p.status === 'unclear'))     return 'unclear';

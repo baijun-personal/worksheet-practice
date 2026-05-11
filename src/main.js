@@ -3338,9 +3338,9 @@ function showReviewModeFirstTapHelpOnce() {
   help.className = 'rp-help';
   help.innerHTML = `
     <div class="rp-help-body">
-      <strong>Review Mode tip:</strong> a red ✗ marks each question that needs a closer look.
-      Tap <em>Why?</em> for a short explanation, <em>Show steps</em> for a worked solution,
-      or <em>Give hint</em> for a nudge that tries not to reveal the answer.
+      <strong>Review Mode tip:</strong> the list on the left shows each question that needs a closer look.
+      Tap a row to see the correct answer; then use <em>Why?</em> for a short explanation,
+      <em>Show steps</em> for a worked solution, or <em>Give hint</em> for a nudge that tries not to reveal the answer.
     </div>
     <button type="button" class="rp-help-close" title="Got it">×</button>
   `;
@@ -3380,11 +3380,15 @@ function pickExpectedAnswerForExplanation(record) {
 }
 
 // Render the target page with the child's saved strokes flattened
-// in, then a red ✗ stamped at the question location. Plus prev-2
-// and next-1 pages — also flattened with strokes when those pages
-// are within the attempt's question range, so passages / context
-// the child wrote on are visible too. Returns
+// in. Plus prev-2 and next-1 pages — also flattened with strokes
+// when those pages are within the attempt's question range, so
+// passages / context the child wrote on are visible too. Returns
 // [{ role, pageNumber, dataUrl }, ...] in document order.
+//
+// No ✗ overlay anywhere — the explanation model identifies the
+// target via the 'TARGET page N' text label in the user message,
+// and the question metadata (label, student answer, correct
+// answer, short reason) tells it which question to discuss.
 //
 // Render DPI is fixed at 150 — same default as marking-submission
 // DPI. The model needs to read printed text + child's blue ink

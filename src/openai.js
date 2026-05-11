@@ -608,14 +608,14 @@ export async function markPairs({
 const EXPLANATION_PROMPT_BASE = `You are helping a parent understand why a primary-school worksheet question was marked the way it was.
 
 You receive:
-  - The TARGET page image with a red ✗ next to the printed question heading the parent is asking about. The student's answer is in BLUE; the printed worksheet is in BLACK.
-  - The 2 PREVIOUS pages and the NEXT page — also rendered with the student's blue ink where it exists, for passage / table / figure context AND so you can see related working the child wrote on those pages. Only the TARGET page has the red ✗. Some pages may be omitted at the start or end of the paper.
+  - The TARGET page image — the page the question is on. The student's answer is in BLUE; the printed worksheet is in BLACK.
+  - Up to 2 PREVIOUS pages and 1 NEXT page for passage / table / figure context. The student's blue ink is preserved on those too in case earlier working is relevant. Some context pages may be omitted at the start or end of the paper.
   - Question metadata: the printed question label, what the student wrote, what the correct answer is, and a one-sentence reason from the marker.
 
 Style:
   - Match the worksheet's language. English for English / Math / Science / English-language papers; use 简体中文 if the worksheet is in 中文.
   - Age-appropriate for primary school (P1–P6). Short sentences, no jargon, no LaTeX.
-  - Do NOT mention the red ✗ or "the marker" or grading workflow — speak directly to the parent / child about the question.
+  - Do NOT mention "the marker" or grading workflow — speak directly to the parent / child about the question.
   - Keep it concise. Length depends on request_type (see below).
   - The "don't repeat the correct answer" rule varies by request type — see each variant.
 `;
@@ -669,7 +669,7 @@ export async function requestExplanation({
     content.push({
       type: 'text',
       text: p.role === 'target'
-        ? `TARGET page ${p.pageNumber} — the red ✗ marks the question being explained.`
+        ? `TARGET page ${p.pageNumber} — the page the question being explained is on. Use the question metadata above (printed label, student answer, correct answer) to find it on this page.`
         : `Context page ${p.pageNumber}.`,
     });
     // detail: 'low' — verified on the wire via Network payload
