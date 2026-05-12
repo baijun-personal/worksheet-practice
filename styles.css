@@ -664,6 +664,46 @@ body.app-immersive .build-badge { display: none; }
    Promote [hidden] to a higher-specificity rule so toggling the
    attribute actually hides the element. */
 .frozen-page-banner[hidden] { display: none; }
+
+/* Practice-mode inline marking status. Lives in the practice
+   toolbar next to the Mark button. Stays out of the way while
+   idle, expands to a small status pill while marking runs. */
+.practice-mark-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  margin-left: 4px;
+  font-size: 12px;
+  line-height: 1.2;
+  border-radius: 999px;
+  background: #eef3fd;
+  border: 1px solid #c0d2f5;
+  color: #1a4fc4;
+}
+.practice-mark-status[hidden] { display: none; }
+.practice-mark-status.is-saving::before {
+  content: '';
+  width: 10px;
+  height: 10px;
+  border: 2px solid #c0d2f5;
+  border-top-color: #1a4fc4;
+  border-radius: 50%;
+  animation: practice-mark-spin 0.8s linear infinite;
+}
+.practice-mark-status.is-ok {
+  background: #e9f7ee;
+  border-color: #8fd8a8;
+  color: #1f7a3a;
+}
+.practice-mark-status.is-error {
+  background: #fdecea;
+  border-color: #f3a8a3;
+  color: #a93223;
+}
+@keyframes practice-mark-spin {
+  to { transform: rotate(360deg); }
+}
 .frozen-page-banner-icon {
   font-size: 16px;
   flex: 0 0 auto;

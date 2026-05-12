@@ -433,6 +433,12 @@
         <button id="mark-up-to-here-btn" type="button" class="primary"
                 data-short="Mark"
                 hidden>Mark up to here</button>
+        <!-- Inline practice-mode marking status — replaces the previous
+             jump-to-marking-stage flow. Hidden when idle; populated by
+             onMarkUpToHere as the pipeline runs and cleared after a
+             short delay on success. -->
+        <span id="practice-mark-status" class="practice-mark-status"
+              aria-live="polite" hidden></span>
         <span id="autosave-indicator-practice" class="autosave" aria-live="polite">saved</span>
         <button id="fullscreen-toggle-btn" type="button"
                 title="Enter / exit full-screen practice mode"
