@@ -26,6 +26,12 @@ export const DEFAULT_TYPE_FONT_SIZE_PT = 12;
 // nothing falls off the right of the canvas.
 export const DEFAULT_TYPE_WRAP_FRACTION = 0.9;
 
+// Circle / Tick defaults — both in PDF points so they scale
+// correctly across zoom and the strokes-only composite's DPI.
+// Sized for typical MCQ-letter circling and inline tick marks.
+export const DEFAULT_CIRCLE_RADIUS_PT = 12;
+export const DEFAULT_TICK_SIZE_PT = 18;
+
 export function makeStrokeId() {
   // crypto.randomUUID is widely supported, but fall back if missing.
   if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
@@ -178,14 +184,48 @@ function wrapText(ctx, text, wrapPx) {
   return out;
 }
 
-// CIRCLE — stub for Stage 0. Filled in by Stage 2.
-function drawCircleStroke(_ctx, _stroke, _size) {
-  // intentionally empty; Stage 2 implements
+// CIRCLE — tap-to-place outline at (cxPt, cyPt) with fixed radius
+// in PDF points so it scales identically across zoom and the
+// strokes-only composite's DPI. Default radius matches a typical
+// MCQ-letter glyph (~12pt).
+function drawCircleStroke(ctx, stroke, { widthPx }) {
+  const pageWidthPts = stroke.pageWidthPts || 612;
+  const scale = widthPx / pageWidthPts;
+  const cxPx = (stroke.cxPt || 0) * scale;
+  const cyPx = (stroke.cyPt || 0) * scale;
+  const rPx = (stroke.radiusPt || DEFAULT_CIRCLE_RADIUS_PT) * scale;
+  const lwPx = (stroke.widthPt || DEFAULT_PEN_WIDTH_PT) * scale;
+  ctx.save();
+  ctx.strokeStyle = stroke.color || PEN_COLOR;
+  ctx.lineWidth = lwPx;
+  ctx.beginPath();
+  ctx.arc(cxPx, cyPx, rPx, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
 }
 
-// TICK — stub for Stage 0. Filled in by Stage 2.
-function drawTickStroke(_ctx, _stroke, _size) {
-  // intentionally empty; Stage 2 implements
+// TICK — two-segment checkmark inside a fixed bounding box anchored
+// at (xPt, yPt). Path: bottom-left dip → mid-bottom corner → top-right.
+function drawTickStroke(ctx, stroke, { widthPx }) {
+  const pageWidthPts = stroke.pageWidthPts || 612;
+  const scale = widthPx / pageWidthPts;
+  const xPx = (stroke.xPt || 0) * scale;
+  const yPx = (stroke.yPt || 0) * scale;
+  const sPx = (stroke.sizePt || DEFAULT_TICK_SIZE_PT) * scale;
+  const lwPx = (stroke.widthPt || DEFAULT_PEN_WIDTH_PT + 0.5) * scale;
+  ctx.save();
+  ctx.strokeStyle = stroke.color || PEN_COLOR;
+  ctx.lineWidth = lwPx;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  // Standard checkmark: down-and-right into the corner, then up-and-
+  // right out of it. Coordinates expressed as fractions of the bbox.
+  ctx.moveTo(xPx + sPx * 0.15, yPx + sPx * 0.50);
+  ctx.lineTo(xPx + sPx * 0.40, yPx + sPx * 0.80);
+  ctx.lineTo(xPx + sPx * 0.90, yPx + sPx * 0.20);
+  ctx.stroke();
+  ctx.restore();
 }
 
 // --- Per-tool hit testers (for the eraser) --------------------------------
@@ -244,11 +284,38 @@ function hitTestTypeStroke(stroke, p, rx, ry) {
   );
 }
 
-// Stub for Stage 0. Stage 2 fills in the real distance check.
-function hitTestCircleStroke(_stroke, _p, _rx, _ry) { return false; }
+// CIRCLE hit test — hit anywhere within (radius + eraser tolerance)
+// of the centre. We work in PDF points end-to-end so a single
+// distance comparison covers both dimensions cleanly (avoiding the
+// rx/ry-stretched-ellipse math the pen hit-test uses).
+function hitTestCircleStroke(stroke, p, _rx, _ry) {
+  const pageWidthPts = stroke.pageWidthPts || 612;
+  const pageHeightPts = stroke.pageHeightPts || 792;
+  const pXPt = p.xNorm * pageWidthPts;
+  const pYPt = p.yNorm * pageHeightPts;
+  const dxPt = pXPt - (stroke.cxPt || 0);
+  const dyPt = pYPt - (stroke.cyPt || 0);
+  const dPt = Math.sqrt(dxPt * dxPt + dyPt * dyPt);
+  return dPt <= (stroke.radiusPt || DEFAULT_CIRCLE_RADIUS_PT) + ERASER_HIT_RADIUS_PT;
+}
 
-// Stub for Stage 0. Stage 2 fills in the real bbox check.
-function hitTestTickStroke(_stroke, _p, _rx, _ry) { return false; }
+// TICK hit test — bbox extended by the eraser tolerance. PDF-point
+// coordinates throughout.
+function hitTestTickStroke(stroke, p, _rx, _ry) {
+  const pageWidthPts = stroke.pageWidthPts || 612;
+  const pageHeightPts = stroke.pageHeightPts || 792;
+  const pXPt = p.xNorm * pageWidthPts;
+  const pYPt = p.yNorm * pageHeightPts;
+  const xPt = stroke.xPt || 0;
+  const yPt = stroke.yPt || 0;
+  const sPt = stroke.sizePt || DEFAULT_TICK_SIZE_PT;
+  return (
+    pXPt >= xPt - ERASER_HIT_RADIUS_PT &&
+    pXPt <= xPt + sPt + ERASER_HIT_RADIUS_PT &&
+    pYPt >= yPt - ERASER_HIT_RADIUS_PT &&
+    pYPt <= yPt + sPt + ERASER_HIT_RADIUS_PT
+  );
+}
 
 // --- Pointer / input controller -------------------------------------------
 
@@ -434,6 +501,58 @@ export function attachInkController({
     }
   }
 
+  // --- Circle / Tick branch (Stage 2) ---
+
+  // Tap-to-place: build a single stroke at the tap location and commit.
+  // Both tools are stateless — no drag, no in-progress preview — so
+  // the entire lifecycle is "tap → push stroke → draw on next redraw".
+  // Undo and Eraser work automatically because the stroke lives in the
+  // same per-page strokes array as pen/type.
+  function placeCircle(ev) {
+    const meta = getPageMeta();
+    if (!meta) return;
+    const p = localPoint(ev);
+    const stroke = {
+      id: makeStrokeId(),
+      attemptId: null,
+      pageNumber: getCurrentPage(),
+      tool: 'circle',
+      color: PEN_COLOR,
+      cxPt: p.xNorm * meta.pageWidthPts,
+      cyPt: p.yNorm * meta.pageHeightPts,
+      radiusPt: DEFAULT_CIRCLE_RADIUS_PT,
+      widthPt: DEFAULT_PEN_WIDTH_PT,
+      pageWidthPts: meta.pageWidthPts,
+      pageHeightPts: meta.pageHeightPts,
+      createdAt: Date.now(),
+    };
+    commitStroke(stroke).catch((e) => console.error('placeCircle commit failed', e));
+  }
+
+  function placeTick(ev) {
+    const meta = getPageMeta();
+    if (!meta) return;
+    const p = localPoint(ev);
+    const sizePt = DEFAULT_TICK_SIZE_PT;
+    const stroke = {
+      id: makeStrokeId(),
+      attemptId: null,
+      pageNumber: getCurrentPage(),
+      tool: 'tick',
+      color: PEN_COLOR,
+      // Centre the bbox on the tap so the visible tick lands where the
+      // student aimed, not below-and-to-the-right of the tap.
+      xPt: p.xNorm * meta.pageWidthPts - sizePt / 2,
+      yPt: p.yNorm * meta.pageHeightPts - sizePt / 2,
+      sizePt,
+      widthPt: DEFAULT_PEN_WIDTH_PT + 0.5,
+      pageWidthPts: meta.pageWidthPts,
+      pageHeightPts: meta.pageHeightPts,
+      createdAt: Date.now(),
+    };
+    commitStroke(stroke).catch((e) => console.error('placeTick commit failed', e));
+  }
+
   // --- Type branch (Stage 1) ---
 
   // Show the overlay + textarea at the tapped position. The textarea
@@ -578,9 +697,11 @@ export function attachInkController({
       ev.preventDefault();
       startTyping(ev);
     } else if (tool === 'circle') {
-      // STAGE 2 — no-op for now. Must NOT fall back to pen.
+      ev.preventDefault();
+      placeCircle(ev);
     } else if (tool === 'tick') {
-      // STAGE 2 — no-op for now. Must NOT fall back to pen.
+      ev.preventDefault();
+      placeTick(ev);
     } else {
       // Unknown tool — silent no-op. Better than starting a pen
       // stroke for an unrecognised toolbar button.

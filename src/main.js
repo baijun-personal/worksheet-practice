@@ -2087,6 +2087,8 @@ function bindPracticeUI() {
     if (ev.key === 'p') document.querySelector('[data-tool="pen"]').click();
     else if (ev.key === 'e') document.querySelector('[data-tool="eraser"]').click();
     else if (ev.key === 't') document.querySelector('[data-tool="type"]')?.click();
+    else if (ev.key === 'c') document.querySelector('[data-tool="circle"]')?.click();
+    else if (ev.key === 'v') document.querySelector('[data-tool="tick"]')?.click();
     else if ((ev.ctrlKey || ev.metaKey) && ev.key === 'z') { ev.preventDefault(); onUndo(); }
     else if (ev.key === 'ArrowLeft') navigateBy(-1);
     else if (ev.key === 'ArrowRight') navigateBy(1);
