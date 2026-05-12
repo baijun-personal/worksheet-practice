@@ -2428,9 +2428,11 @@ async function loadCurrentPage() {
     // CSS coordinate space as the ink canvas) and are added in
     // index.html. attachInkController defends against null so older
     // cached HTML without these elements still loads.
-    typeInput:   document.getElementById('type-input'),
-    typeOverlay: document.getElementById('type-overlay'),
-    pageWrap:    document.getElementById('page-wrap'),
+    typeInput:    document.getElementById('type-input'),
+    typeOverlay:  document.getElementById('type-overlay'),
+    pageWrap:     document.getElementById('page-wrap'),
+    calcDragRect: document.getElementById('calc-drag-rect'),
+    onCalcSelect: (rectPt) => onCalcSelect(rectPt),
     getPageMeta: () => ({
       pageWidthPts: state.pageMeta.pageWidthPts,
       pageHeightPts: state.pageMeta.pageHeightPts,
@@ -2536,6 +2538,24 @@ function applyPracticeStateForPage() {
   }
   if (stagePractice) stagePractice.classList.toggle('frozen-page', isFrozen);
   setToolButtonsDisabled(isFrozen);
+  // Calculator button visibility tracks attempt.calculate_enabled
+  // and the page's frozen state. Calculate is a strokes-modifying-
+  // equivalent action (it triggers an API call + popup that
+  // persist on the page), so frozen pages should treat it like
+  // pen / type — disabled visual state. setToolButtonsDisabled
+  // above already handles the .disabled attribute; this call
+  // hides the button entirely on attempts where calc_enabled is
+  // false (Exam Practice or pre-Stage-1 attempts).
+  applyCalcButtonVisibility();
+  // Calculator popups (Stage 4 lifecycle): once a page is frozen
+  // the popups for that page are cleared. On unmarked pages the
+  // popups persist; loadCurrentPage repaints them after the canvas
+  // size is known.
+  if (isFrozen) {
+    clearCalcPopupsForPage(state.currentPage);
+  } else {
+    rerenderCalcPopupsForCurrentPage();
+  }
   // Populate the practice-mode review rail on frozen pages so the
   // child sees what went wrong on THIS page without leaving the
   // practice stage. Same content shape as the final-report review
@@ -2661,6 +2681,17 @@ function setToolButtonsDisabled(disabled) {
   }
 }
 
+// Show / hide the Calculator toolbar button based on the attempt's
+// stamped calculate_enabled flag (Stage 1). Re-run on stage entry
+// + after applyPracticeStateForPage so the gate respects per-page
+// frozen state too.
+function applyCalcButtonVisibility() {
+  const btn = document.querySelector('[data-tool="calc"]');
+  if (!btn) return;
+  const eligible = isCalculateEnabledForCurrentAttempt();
+  btn.hidden = !eligible;
+}
+
 // Render the visible page label the way the practice toolbar shows it
 // ("Mark pages 1 to N" where N is the 1-based index INTO the
 // question-pages array, not the raw PDF page number). Falls back to
@@ -2737,6 +2768,192 @@ function bumpActivity(type) {
   putAttempt(state.attempt).catch((e) =>
     console.error('activity persist failed', e)
   );
+}
+
+// --- Calculator popup (Stage 4) ----------------------------------------
+// DOM popups pinned to the right edge of the paper, vertically
+// centred on the source rectangle. State machine:
+//   'loading' → spinner where the result will go
+//   'success' → input + divider + result lines
+//   'error'   → input + error message
+//   'refused' → short friendly message; auto-dismiss after 4s
+// Persistent popups (success/error) live in attempt.calc_popups
+// until the page is marked or the user clicks X. Refused popups
+// never persist — they're DOM-only.
+
+function pdfPageForCurrentPage() {
+  return state.currentPage; // already the PDF page number in this codebase
+}
+
+function newCalcPopupId() {
+  return `calc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+// Render a popup element with the given state. Caller passes the
+// id + the data; we own positioning + persistence.
+function renderCalcPopup(popup) {
+  const host = $('calc-popup-host');
+  if (!host) return null;
+  let el = host.querySelector(`[data-popup-id="${popup.id}"]`);
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'calc-popup';
+    el.dataset.popupId = popup.id;
+    host.appendChild(el);
+  }
+  el.classList.remove('is-loading', 'is-success', 'is-error', 'is-refused');
+  el.classList.add(`is-${popup.state}`);
+
+  // Position: anchor to the right edge of page-wrap. Vertical centre
+  // of the popup aligns to the vertical centre of the source rect.
+  // Clamp inside page-wrap.
+  const pageWrap = document.getElementById('page-wrap');
+  if (pageWrap && popup.rectPt && state.pageMeta) {
+    const wrapRect = pageWrap.getBoundingClientRect();
+    const yMidPt = popup.rectPt.yPt + popup.rectPt.heightPt / 2;
+    const yMidNorm = yMidPt / (state.pageMeta.pageHeightPts || 792);
+    const yCss = Math.max(8, Math.min(wrapRect.height - 8, yMidNorm * wrapRect.height));
+    el.style.top = `${yCss}px`;
+    el.style.right = '8px';
+    el.style.transform = 'translateY(-50%)';
+  }
+
+  // Body content
+  let body = '';
+  if (popup.state === 'loading') {
+    body = `<div class="calc-popup-spinner" aria-hidden="true"></div>
+            <div class="calc-popup-loading-text">Reading…</div>`;
+  } else if (popup.state === 'refused') {
+    body = `<div class="calc-popup-message">${escapeRailText(popup.message || '')}</div>`;
+  } else if (popup.state === 'error') {
+    body = `${popup.input ? `<div class="calc-popup-input">${escapeRailText(popup.input)}</div>` : ''}
+            <div class="calc-popup-error">${escapeRailText(popup.message || 'Calculation failed.')}</div>`;
+  } else if (popup.state === 'success') {
+    const lines = (popup.result?.forms || [])
+      .map((f) => `<div class="calc-popup-line"><span class="calc-popup-line-label">${escapeRailText(f.label)}</span><span class="calc-popup-line-value">${escapeRailText(f.value)}</span></div>`)
+      .join('');
+    body = `<div class="calc-popup-input">${escapeRailText(popup.input || '')}</div>
+            <div class="calc-popup-divider"></div>
+            ${lines}`;
+  }
+  // Close button on persistent popups only.
+  const closeBtn = (popup.state === 'success' || popup.state === 'error')
+    ? `<button class="calc-popup-close" type="button" aria-label="Dismiss">×</button>`
+    : '';
+  el.innerHTML = `${closeBtn}<div class="calc-popup-body">${body}</div>`;
+  el.querySelector('.calc-popup-close')?.addEventListener('click', () => {
+    dismissCalcPopup(popup.id);
+  });
+  return el;
+}
+
+function dismissCalcPopup(id) {
+  const host = $('calc-popup-host');
+  if (host) {
+    const el = host.querySelector(`[data-popup-id="${id}"]`);
+    if (el) el.remove();
+  }
+  if (state.attempt?.calc_popups) {
+    state.attempt.calc_popups = state.attempt.calc_popups.filter((p) => p.id !== id);
+    putAttempt(state.attempt).catch((e) => console.error('dismissCalcPopup persist failed', e));
+  }
+}
+
+// Re-render persisted popups for the current page. Called on
+// page navigation so that switching back to a page restores its
+// open popups.
+function rerenderCalcPopupsForCurrentPage() {
+  const host = $('calc-popup-host');
+  if (host) host.innerHTML = '';
+  const popups = state.attempt?.calc_popups || [];
+  for (const popup of popups) {
+    if (popup.page !== state.currentPage) continue;
+    if (popup.state === 'refused') continue; // never persisted but defensive
+    renderCalcPopup(popup);
+  }
+}
+
+// Clear all popups for a page from DOM + storage. Called when a
+// page transitions to frozen (Stage 4 lifecycle rule).
+function clearCalcPopupsForPage(page) {
+  if (state.attempt?.calc_popups) {
+    state.attempt.calc_popups = state.attempt.calc_popups.filter((p) => p.page !== page);
+    putAttempt(state.attempt).catch((e) => console.error('clearCalcPopupsForPage persist failed', e));
+  }
+  const host = $('calc-popup-host');
+  if (host) host.innerHTML = '';
+}
+
+// Public entry point. attachInkController hands a PDF-point
+// rectangle here after a calc-tool drag. Stage 4 fills in size
+// gates + popup-state lifecycle; Stage 5 wires the crop / parse /
+// compute pipeline; Stage 7 adds the cap check.
+async function onCalcSelect(rectPt) {
+  if (!state.attempt) return;
+  if (state.attempt.mode !== 'practice') return;
+  if (!isCalculateEnabledForCurrentAttempt()) return;
+  if (isCurrentPageFrozen()) return;
+  if (!state.pageMeta) return;
+
+  const settings = state.settings || {};
+  const minArea = typeof settings.calcMinAreaFraction === 'number' ? settings.calcMinAreaFraction : 0.005;
+  const maxArea = typeof settings.calcMaxAreaFraction === 'number' ? settings.calcMaxAreaFraction : 0.10;
+  const pageArea = state.pageMeta.pageWidthPts * state.pageMeta.pageHeightPts;
+  const rectArea = rectPt.widthPt * rectPt.heightPt;
+  const frac = pageArea > 0 ? rectArea / pageArea : 0;
+  const page = state.currentPage;
+  const pdfPage = pdfPageForCurrentPage();
+
+  // Size gates (refusals never count toward cap, never persist).
+  if (frac < minArea) {
+    const id = newCalcPopupId();
+    renderCalcPopup({
+      id, page, pdfPage, rectPt,
+      state: 'refused',
+      message: 'Selection too small — drag a bigger box around the math.',
+    });
+    setTimeout(() => {
+      const host = $('calc-popup-host');
+      const el = host?.querySelector(`[data-popup-id="${id}"]`);
+      if (el) el.remove();
+    }, 4000);
+    recordCalcUsage({ page, pdfPage, apiCallMade: false, outcome: 'refused_size', parsedType: null, taskId: null });
+    return;
+  }
+  if (frac > maxArea) {
+    const id = newCalcPopupId();
+    renderCalcPopup({
+      id, page, pdfPage, rectPt,
+      state: 'refused',
+      message: 'Selection too large — try selecting just one calculation.',
+    });
+    setTimeout(() => {
+      const host = $('calc-popup-host');
+      const el = host?.querySelector(`[data-popup-id="${id}"]`);
+      if (el) el.remove();
+    }, 4000);
+    recordCalcUsage({ page, pdfPage, apiCallMade: false, outcome: 'refused_size', parsedType: null, taskId: null });
+    return;
+  }
+
+  // Stage 7's cap check fires here once it ships.
+
+  // Create a loading popup; Stage 5 fills in the API call and
+  // updates it to success / error.
+  const id = newCalcPopupId();
+  const popup = { id, page, pdfPage, rectPt, state: 'loading', createdAt: Date.now() };
+  state.attempt.calc_popups = state.attempt.calc_popups || [];
+  state.attempt.calc_popups.push(popup);
+  renderCalcPopup(popup);
+  await runCalcPipeline(popup);
+}
+
+// Stage 5 fills this in. Stage 4 stub keeps the popup in loading
+// state until the user explicitly dismisses it. Defined here so
+// onCalcSelect compiles cleanly; replaced below in Stage 5.
+async function runCalcPipeline(_popup) {
+  // Placeholder — Stage 5 implements the crop / parse / compute
+  // flow. Until then the popup stays in 'loading' state.
 }
 
 // Append a usage record to attempt.calc_usage and persist

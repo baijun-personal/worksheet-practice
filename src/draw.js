@@ -359,12 +359,14 @@ export function attachInkController({
   typeInput,
   typeOverlay,
   pageWrap,
+  calcDragRect,        // <div> element drawn during calc-tool drag
   getPageMeta,
   getCurrentPage,
   getStrokes,
   getTool,
   onStrokeAdded,
   onStrokeRemoved,
+  onCalcSelect,        // async (rectPt) => void — called on calc drag end
 }) {
   // Match canvas backing-store size to its CSS size on each redraw.
   // willReadFrequently: true — the ink canvas is rebuilt on every
@@ -387,6 +389,14 @@ export function attachInkController({
   // next erase event won't queue until the previous one's UI repaint
   // has completed.
   let erasing = false;
+
+  // Calculator drag state — see startCalcDrag / extendCalcDrag /
+  // finishCalcDrag. The drag rectangle is a DOM element, not a
+  // stroke — it's purely a visual overlay, never persisted, and
+  // never appears in the strokes-only image sent to extraction.
+  let calcDragging = false;
+  let calcPointerId = null;
+  let calcStartNorm = null; // { xNorm, yNorm } at pointerdown
 
   // Type tool state — see startTyping / commitTyping below.
   // typing.active=false means no caret visible; the textarea is
@@ -561,6 +571,76 @@ export function attachInkController({
     commitStroke(stroke).catch((e) => console.error('placeTick commit failed', e));
   }
 
+  // --- Calculator drag (Stage 4) ---
+  //
+  // Drag-rectangle on the canvas. Caller-supplied onCalcSelect
+  // (passed into attachInkController) is fired with a PDF-point
+  // rectangle on pointerup. The drag rectangle is a DOM overlay
+  // (calcDragRect element) — pure visual, never persisted, never
+  // appears in extraction images. Calc work is committed via
+  // attempt.calc_popups + attempt.calc_usage on the main.js side.
+
+  function startCalcDrag(ev) {
+    const meta = getPageMeta();
+    if (!meta) return;
+    calcDragging = true;
+    calcPointerId = ev.pointerId;
+    try { inkCanvas.setPointerCapture(ev.pointerId); } catch {}
+    const p = localPoint(ev);
+    calcStartNorm = { xNorm: p.xNorm, yNorm: p.yNorm };
+    updateCalcDragRect(p, p);
+  }
+
+  function extendCalcDrag(ev) {
+    if (!calcDragging) return;
+    const p = localPoint(ev);
+    updateCalcDragRect(calcStartNorm, p);
+  }
+
+  async function finishCalcDrag(ev) {
+    if (!calcDragging) return;
+    const start = calcStartNorm;
+    calcDragging = false;
+    calcPointerId = null;
+    calcStartNorm = null;
+    if (calcDragRect) calcDragRect.hidden = true;
+    if (!start) return;
+    const meta = getPageMeta();
+    if (!meta) return;
+    const end = localPoint(ev);
+    // Convert the two normalized corners to a PDF-point rectangle.
+    const x0 = Math.min(start.xNorm, end.xNorm) * meta.pageWidthPts;
+    const y0 = Math.min(start.yNorm, end.yNorm) * meta.pageHeightPts;
+    const x1 = Math.max(start.xNorm, end.xNorm) * meta.pageWidthPts;
+    const y1 = Math.max(start.yNorm, end.yNorm) * meta.pageHeightPts;
+    const rectPt = {
+      xPt: x0,
+      yPt: y0,
+      widthPt: x1 - x0,
+      heightPt: y1 - y0,
+      pageWidthPts: meta.pageWidthPts,
+      pageHeightPts: meta.pageHeightPts,
+    };
+    if (typeof onCalcSelect === 'function') {
+      try { await onCalcSelect(rectPt); }
+      catch (e) { console.error('onCalcSelect failed', e); }
+    }
+  }
+
+  function updateCalcDragRect(a, b) {
+    if (!calcDragRect || !pageWrap) return;
+    const rect = pageWrap.getBoundingClientRect();
+    const x0 = Math.min(a.xNorm, b.xNorm) * rect.width;
+    const y0 = Math.min(a.yNorm, b.yNorm) * rect.height;
+    const x1 = Math.max(a.xNorm, b.xNorm) * rect.width;
+    const y1 = Math.max(a.yNorm, b.yNorm) * rect.height;
+    calcDragRect.style.left = `${x0}px`;
+    calcDragRect.style.top = `${y0}px`;
+    calcDragRect.style.width = `${x1 - x0}px`;
+    calcDragRect.style.height = `${y1 - y0}px`;
+    calcDragRect.hidden = false;
+  }
+
   // --- Type branch (Stage 1) ---
 
   // Show the overlay + textarea at the tapped position. The textarea
@@ -727,6 +807,9 @@ export function attachInkController({
     } else if (tool === 'tick') {
       ev.preventDefault();
       placeTick(ev);
+    } else if (tool === 'calc') {
+      ev.preventDefault();
+      startCalcDrag(ev);
     } else {
       // Unknown tool — silent no-op. Better than starting a pen
       // stroke for an unrecognised toolbar button.
@@ -742,11 +825,19 @@ export function attachInkController({
       ev.preventDefault();
       extendPenStroke(ev);
     }
+    if (tool === 'calc' && calcDragging && ev.pointerId === calcPointerId) {
+      ev.preventDefault();
+      extendCalcDrag(ev);
+    }
   }
   function onPointerUp(ev) {
     if (drawing && ev.pointerId === activePointerId) {
       ev.preventDefault();
       finishPenStroke(ev);
+    }
+    if (calcDragging && ev.pointerId === calcPointerId) {
+      ev.preventDefault();
+      finishCalcDrag(ev);
     }
   }
 
