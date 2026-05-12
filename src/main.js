@@ -20,7 +20,7 @@ import {
   requestExplanation, MODEL_PRESETS, DEFAULT_MODEL, presetForModel,
   BUILTIN_PROMPTS,
 } from './openai.js';
-import { matchExtractions, buildFinalReport, partitionPairsByModality } from './compare.js';
+import { matchExtractions, buildFinalReport, partitionPairsByModality, normalizeQNumber } from './compare.js';
 import { renderReport, exportReportPdf, exportCompletedAttemptPdf } from './report.js';
 import { loadCatalog, fetchBuiltinPdf, builtinAttemptId } from './builtin.js';
 import { composeFourUpA4, composeContactSheetA4, chunkInto } from './fourup.js';
@@ -2586,6 +2586,26 @@ function isCurrentPageFrozen() {
   return marked.includes(state.currentPage);
 }
 
+// Stable cache key for a matched pair, used to look up cached
+// comparator results. Built from raw fields that don't change when
+// later pages are added:
+//   - completed_page (the student's page — never changes after the
+//     page is marked)
+//   - normalised question_number
+//   - _syntheticSection (stable per question_number once
+//     assignSyntheticSections has assigned it; later pages can only
+//     add NEW sections, never renumber existing ones)
+//   - answer_page (stable because the answer key is cached once and
+//     never re-extracted within a practice session)
+// The pair object as returned by matchExtractions today carries
+// all four; defensive '' fallbacks prevent undefined-keying.
+function pairCacheKey(pair) {
+  return `cp=${pair.completed_page ?? ''}`
+       + `|q=${normalizeQNumber(pair.question || '')}`
+       + `|ss=${pair._syntheticSection ?? ''}`
+       + `|ap=${pair.answer_page ?? ''}`;
+}
+
 // Would the proposed new pages / subject / level change invalidate
 // the practice attempt's existing cache? Returns true only if BOTH
 // (a) there's practice cache state worth clearing AND
@@ -3588,42 +3608,89 @@ async function onMarkUpToHere() {
     const match = matchExtractions(allStudentResults, allKeyResults);
     const { text: textPairs, visual: visualPairs } = partitionPairsByModality(match);
 
+    // Make sure the cache slots exist for legacy practice records
+    // created before Stage 8 shipped.
+    practice.cached_compare_rows_by_pair_key = practice.cached_compare_rows_by_pair_key || {};
+    practice.cached_visual_rows_by_pair_key = practice.cached_visual_rows_by_pair_key || {};
+
+    // Partition text pairs: cached rows (reuse) vs new pairs (call
+    // markPairs). Cache key is stable across marks because it's
+    // built from raw fields the matcher doesn't renumber as the
+    // paper grows (see pairCacheKey notes).
+    const cachedTextRows = [];
+    const textPairsToCompare = [];
+    for (const pair of textPairs) {
+      const key = pairCacheKey(pair);
+      const cached = practice.cached_compare_rows_by_pair_key[key];
+      if (cached) cachedTextRows.push(cached);
+      else textPairsToCompare.push({ pair, key });
+    }
+
     let aiTextReport = null;
     let compareError = null;
-    if (textPairs.length > 0 && match.keysProvided) {
-      step(`Comparing ${textPairs.length} answer${textPairs.length === 1 ? '' : 's'}`);
+    if (textPairsToCompare.length > 0 && match.keysProvided) {
+      step(`Comparing ${textPairsToCompare.length} new answer${textPairsToCompare.length === 1 ? '' : 's'}`);
       try {
         const cmpRes = await markPairs({
           ...transport,
           model: textCompareModel,
-          pairs: textPairs,
+          pairs: textPairsToCompare.map((x) => x.pair),
           subject: state.attempt.subject,
           level: state.attempt.level,
           customPrompt: state.settings.customComparePrompt,
         });
-        aiTextReport = cmpRes.parsed;
+        const newRows = Array.isArray(cmpRes.parsed?.questions) ? cmpRes.parsed.questions : [];
+        // Persist new rows into the per-pair cache. markPairs may
+        // return rows in a different order than the input pairs, so
+        // match by normalised question number.
+        for (const { pair, key } of textPairsToCompare) {
+          const qn = normalizeQNumber(pair.question || '');
+          const row = newRows.find((r) => normalizeQNumber(r.question || '') === qn);
+          if (row) practice.cached_compare_rows_by_pair_key[key] = row;
+        }
+        aiTextReport = {
+          ...(cmpRes.parsed || {}),
+          questions: [...cachedTextRows, ...newRows],
+        };
         taskUsages.push(buildTaskRecord({
           task_type: TASK_TYPES.TEXT_COMPARISON,
           model: textCompareModel,
-          label: `Text compare — ${textPairs.length} pair(s)`,
+          label: `Text compare — ${textPairsToCompare.length} pair(s)`,
           pages: [],
           usage: cmpRes.usage,
           settings: state.settings,
         }));
       } catch (e) {
         // Text-compare failure is non-fatal — buildFinalReport falls
-        // back to local string-equality scoring.
+        // back to local string-equality scoring on uncached pairs;
+        // cached rows still surface through the partial aiTextReport.
         console.error('Practice text compare failed', e);
         compareError = e.message;
+        if (cachedTextRows.length > 0) {
+          aiTextReport = { questions: cachedTextRows };
+        }
       }
-    } else {
+    } else if (cachedTextRows.length > 0) {
+      // All text pairs cached — no API call, but buildFinalReport
+      // still needs an aiTextReport shape.
+      aiTextReport = { questions: cachedTextRows };
       stepIdx += 1; // consume the reserved compare-step slot
+    } else {
+      stepIdx += 1;
     }
 
-    // Visual compare on visual pairs.
+    // Visual compare with per-pair cache. Same pattern: look up by
+    // pairCacheKey, only call the API for uncached pairs, persist
+    // results back into the cache.
     const visualResults = [];
     for (let i = 0; i < visualPairs.length; i++) {
       const pair = visualPairs[i];
+      const key = pairCacheKey(pair);
+      const cached = practice.cached_visual_rows_by_pair_key[key];
+      if (cached) {
+        visualResults.push(cached);
+        continue;
+      }
       setPracticeMarkStatus(`Visual compare ${pair.display_question || pair.question} (${i + 1}/${visualPairs.length})`, 'saving');
       try {
         const cStrokes = await getStrokesForPage(state.attempt.id, pair.completed_page);
@@ -3639,7 +3706,9 @@ async function onMarkUpToHere() {
           answerImageDataUrl,
           customPrompt: state.settings.customCompareVisualPrompt,
         });
-        visualResults.push({ pair, parsed: res.parsed });
+        const entry = { pair, parsed: res.parsed };
+        visualResults.push(entry);
+        practice.cached_visual_rows_by_pair_key[key] = entry;
         taskUsages.push(buildTaskRecord({
           task_type: TASK_TYPES.VISUAL_COMPARISON,
           model: visualCompareModel,

@@ -54,7 +54,7 @@ function normalizeKeyPart(s) {
 //   "Q19(i)"     → "19i"
 //   "Q 19 (i)"   → "19i"
 //   "Question 5" → "5"
-function normalizeQNumber(q) {
+export function normalizeQNumber(q) {
   if (q == null) return '';
   let s = String(q).trim().toLowerCase();
   s = s.replace(/^q(?:uestion)?\.?\s*/, '');
