@@ -117,11 +117,21 @@ function shouldRenderMarkersOnPage(paperProfile, pageNumber) {
 //                             //   row buttons
 //     onRowClick(record),     // called when a list row is tapped
 //     hostWidth,              // CSS pixels for the rendered page
+//     questions,              // OPTIONAL — report.questions (all rows,
+//                             //   not just the wrong-answer review
+//                             //   records). When provided, a per-page
+//                             //   stats block is rendered above the
+//                             //   list of wrong-answer rows showing
+//                             //   "Page N: X/Y" for each page that
+//                             //   contributed graded questions. Same
+//                             //   block is shown on every page's rail
+//                             //   so the student can see the whole-
+//                             //   paper picture at a glance.
 //   }
 export async function renderReviewPage(ctx) {
   const {
     pdf, paperProfile, reviewRecords, pageNumber, strokes,
-    canvas, listHost, onRowClick, hostWidth,
+    canvas, listHost, onRowClick, hostWidth, questions,
   } = ctx;
   await renderToCanvas(pdf, pageNumber, canvas, hostWidth, strokes);
   if (listHost) listHost.innerHTML = '';
@@ -130,6 +140,26 @@ export async function renderReviewPage(ctx) {
   // if a stray record somehow anchors there.
   if (!shouldRenderMarkersOnPage(paperProfile, pageNumber)) return;
   if (!listHost) return;
+
+  // Per-page stats block — only rendered when the caller supplies
+  // the full questions list AND there's at least one graded row.
+  // Don't render on no-answer-key papers (every row would be
+  // unclear; stats would be misleading).
+  const stats = Array.isArray(questions) ? buildPageStats(questions) : [];
+  if (stats.length > 0) {
+    const wrap = document.createElement('div');
+    wrap.className = 'page-stats-block';
+    wrap.innerHTML = `
+      <div class="page-stats-title">Per page</div>
+      <div class="page-stats-row">${stats.map((s) => `
+        <div class="page-stats-pill${s.page === Number(pageNumber) ? ' current' : ''}">
+          <span class="page-stats-page">Page ${escapeHtml(s.page)}</span>
+          <span class="page-stats-score">${s.correct}/${s.total}</span>
+        </div>`).join('')}
+      </div>
+    `;
+    listHost.appendChild(wrap);
+  }
 
   const rows = buildPageListRows(reviewRecords, pageNumber);
   for (const row of rows) {
@@ -168,6 +198,34 @@ export function buildPageListRows(reviewRecords, pageNumber) {
     questionLabel: shortQLabel(r.question),
     inline: inlinePreview(r),
   }));
+}
+
+// Build per-page correct/total stats from report.questions. Returns an
+// array sorted by page number:
+//   [{ page: 1, correct: 5, total: 8 }, { page: 2, correct: 4, total: 6 }, ...]
+//
+// Grouping key is `completed_page` (the page the student wrote on),
+// not `question_page` — the latter is used elsewhere for review-rail
+// anchoring inside the popup. completed_page is the field populated on
+// every report row.
+//
+// Unanswered rows are excluded from the denominator: they aren't a
+// failed attempt, just a skip. Visual-comparison rows are included
+// (they're graded the same way as text rows).
+export function buildPageStats(questions) {
+  const byPage = new Map();
+  for (const q of (questions || [])) {
+    const pg = q.completed_page;
+    if (pg == null) continue;
+    if (q.status === 'unanswered') continue;
+    const cur = byPage.get(pg) || { correct: 0, total: 0 };
+    cur.total += 1;
+    if (q.status === 'correct') cur.correct += 1;
+    byPage.set(pg, cur);
+  }
+  return [...byPage.entries()]
+    .sort((a, b) => Number(a[0]) - Number(b[0]))
+    .map(([page, { correct, total }]) => ({ page, correct, total }));
 }
 
 // Shrink a raw question label to "Q<num>[a-z]" form for the rail.

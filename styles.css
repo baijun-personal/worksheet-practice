@@ -274,6 +274,52 @@ body.app-immersive .build-badge { display: none; }
   -webkit-tap-highlight-color: transparent;
 }
 .review-list-row:hover { background: #fff5f4; }
+
+/* Per-page stats block at the top of the review side rail. Compact
+   pills, one per page that contributed graded questions. The pill
+   for the currently-displayed page is highlighted so the student
+   can see at a glance which page's stats they're looking at. */
+.page-stats-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.page-stats-title {
+  font-size: 11px;
+  color: var(--muted, #5b6573);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.page-stats-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.page-stats-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 3px 8px;
+  background: white;
+  border: 1px solid var(--border, #d8dde5);
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+.page-stats-pill.current {
+  border-color: #1a4fc4;
+  background: #eef3fd;
+}
+.page-stats-page {
+  color: var(--muted, #5b6573);
+  font-size: 10px;
+}
+.page-stats-score {
+  font-weight: 600;
+  color: #1a4fc4;
+}
 .review-list-q {
   font-weight: 700;
   color: #c0392b;

@@ -3183,6 +3183,11 @@ async function renderReviewCurrentPage() {
     canvas,
     listHost,
     hostWidth,
+    // Full questions list (NOT just review records) — feeds the
+    // per-page stats block above the wrong-answer rows. Stats are
+    // suppressed on no-answer-key papers because every row would be
+    // unclear there.
+    questions: Array.isArray(state.reportJson?.questions) ? state.reportJson.questions : null,
     onRowClick: (record) => openReviewPopup(record),
   });
   $('review-page-label').textContent = `Page ${pageNumber}`;
