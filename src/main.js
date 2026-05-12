@@ -2662,6 +2662,51 @@ function pageNumberLabel(currentPage) {
   return idx >= 0 ? String(idx + 1) : String(currentPage);
 }
 
+// Append a usage record to attempt.calc_usage and persist
+// immediately. Distinct from attempt.calc_popups — popups disappear
+// when a page is marked; calc_usage is the audit trail used for
+// caps, the report summary, and cost reconciliation.
+//
+// outcome values (cap-counted ones marked ✓):
+//   success      ✓  parse + compute succeeded
+//   error        ✓  API call sent, parse/compute failed
+//   out_of_scope ✓  parsed but not in allow-list
+//   refused_size    pre-API; selection too small/large
+//   refused_cap     pre-API; cap already hit
+//
+// "Cap-counted" = apiCallMade === true. Refusals BEFORE the API
+// call don't burn cap because no cost was incurred; errors AFTER
+// do, because the API was billed.
+function recordCalcUsage({ page, pdfPage, apiCallMade, outcome, parsedType, taskId }) {
+  if (!state.attempt) return;
+  state.attempt.calc_usage = state.attempt.calc_usage || [];
+  state.attempt.calc_usage.push({
+    id: `usage-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    page,
+    pdfPage,
+    ts: Date.now(),
+    apiCallMade: !!apiCallMade,
+    outcome,
+    parsedType: parsedType || null,
+    taskId: taskId || null,
+  });
+  // Fire-and-forget persistence — calc usage is not on the critical
+  // path of any other code. .catch so an IDB error doesn't disappear.
+  putAttempt(state.attempt).catch((e) =>
+    console.error('calc_usage persist failed', e)
+  );
+}
+
+// Count the calculator API calls in the audit log, optionally
+// filtered to a specific (PDF) page. Excludes refused entries
+// because they never reached the API.
+function calcApiCallCount({ pageFilter } = {}) {
+  const records = state.attempt?.calc_usage || [];
+  return records.filter((r) =>
+    r.apiCallMade && (pageFilter == null || r.page === pageFilter)
+  ).length;
+}
+
 // Is the Calculator toolbar button visible for the current attempt?
 // Reads attempt.calculate_enabled which is stamped at attempt
 // creation from settings.practiceModeType +
