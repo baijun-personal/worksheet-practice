@@ -15,7 +15,13 @@ import {
 import { loadPdfFromBlob, renderPageToCanvas } from './pdfRender.js';
 import { attachInkController, redrawAll } from './draw.js';
 import { flattenQuestionPage, renderStrokesOnlyPage, renderAnswerPage, colorContentRatio, flattenQuestionPageRegion } from './flatten.js';
-import { validateParsedCalc, computeArithmetic, stringifyParsedInput } from './calc.js';
+import {
+  validateParsedCalc,
+  computeArithmetic,
+  computeLinear1Var,
+  computeLinear2Var,
+  stringifyParsedInput,
+} from './calc.js';
 import {
   extractStudentAnswers, extractAnswerKey, markPairs, compareVisualPair,
   requestExplanation, MODEL_PRESETS, DEFAULT_MODEL, presetForModel,
@@ -3279,9 +3285,13 @@ async function runCalcPipeline(popup) {
     }
 
     // Allow-list check — the parent can disable types they don't
-    // want exposed. arithmetic is on by default; linear_1var and
-    // linear_2var ship in stages 10/11.
-    const allowed = settings.calcAllowedTypes || { arithmetic: true };
+    // want exposed. All three solver types (arithmetic,
+    // linear_1var, linear_2var) ship enabled by default; the
+    // checkboxes in Settings → Calculator → Advanced let a parent
+    // turn off equation-solving if they want pure arithmetic
+    // practice.
+    const allowed = settings.calcAllowedTypes
+      || { arithmetic: true, linear_1var: true, linear_2var: true };
     if (!allowed[res.parsed.type]) {
       updateCalcPopup(popup, {
         state: 'error',
@@ -3296,6 +3306,10 @@ async function runCalcPipeline(popup) {
     let compute;
     if (res.parsed.type === 'arithmetic') {
       compute = computeArithmetic(res.parsed);
+    } else if (res.parsed.type === 'linear_1var') {
+      compute = computeLinear1Var(res.parsed);
+    } else if (res.parsed.type === 'linear_2var') {
+      compute = computeLinear2Var(res.parsed);
     } else {
       compute = { ok: false, reason: 'Type not implemented yet.' };
     }

@@ -589,7 +589,7 @@ Return JSON only:
 // the printed/handwritten math and return a structured JSON shape
 // that the validator can sanity-check.
 
-const DEFAULT_CALC_PARSE_PROMPT = `You are reading a small image showing one math expression.
+const DEFAULT_CALC_PARSE_PROMPT = `You are reading a small image showing one math expression or equation.
 Identify the math and return a JSON object describing it.
 DO NOT compute the answer. Return JSON only, no prose.
 
@@ -602,8 +602,48 @@ Allowed types and their schemas:
   - Operands may be integers or decimals.
   - Use "/" for division regardless of whether the printed form is "÷" or "/".
 
+{ "type": "linear_1var",
+  "var": "<letter>",
+  "lhs": { "coef": number, "const": number },
+  "rhs": { "coef": number, "const": number } }
+  - A single linear equation in ONE variable (e.g. "2x + 3 = 5x - 1",
+    "y = 7", "n - 4 = 12"). The variable may be any single letter.
+  - Transcribe each side as { coef, const } where coef is the
+    coefficient of the variable on that side and const is the
+    standalone number. Examples:
+       "2x + 3"        → { "coef": 2,  "const": 3 }
+       "5x - 1"        → { "coef": 5,  "const": -1 }
+       "7"             → { "coef": 0,  "const": 7 }
+       "−x"            → { "coef": -1, "const": 0 }
+       "y"             → { "coef": 1,  "const": 0 }
+  - DO NOT simplify, normalise, or solve — just transcribe both
+    sides verbatim. The local solver does the algebra.
+
+{ "type": "linear_2var",
+  "vars": ["<letter>", "<letter>"],
+  "equations": [
+    { "a": number, "b": number, "c": number },
+    { "a": number, "b": number, "c": number }
+  ] }
+  - A system of TWO linear equations in TWO variables (e.g.
+    "2x + 3y = 6;  x - y = 1"). Each equation must be put into
+    the normalised form  a·v1 + b·v2 = c  where v1 = vars[0] and
+    v2 = vars[1]. If a term sits on the wrong side, move it (and
+    flip its sign) when reading. If a variable doesn't appear in
+    an equation, use 0 for its coefficient.
+  - Examples (with vars = ["x", "y"]):
+       "2x + 3y = 6"   → { "a": 2,  "b": 3,  "c": 6 }
+       "x - y = 1"     → { "a": 1,  "b": -1, "c": 1 }
+       "y = 2x + 5"    → { "a": -2, "b": 1,  "c": 5 }
+       "3x = 9"        → { "a": 3,  "b": 0,  "c": 9 }
+  - Variable letters in "vars" must match what's actually in the
+    image (commonly x and y, but could be a and b, etc.).
+
 { "type": "out_of_scope", "reason": "<short reason>" }
-  - Math that doesn't fit any allowed type (e.g. quadratic, geometry, word problem).
+  - Math that doesn't fit any allowed type. Examples:
+    quadratic / cubic equations, inequalities, geometry / angles,
+    word problems, systems of three or more equations, equations
+    with three or more variables, anything with x² or square root.
 
 { "type": "unreadable", "reason": "<short reason>" }
   - Image too blurry / mixed / sparse to parse confidently.
@@ -618,6 +658,12 @@ Image shows "24 ÷ 10" →
 
 Image shows "2.4 ÷ 0.6" →
 {"type":"arithmetic","op":"/","operands":[2.4,0.6]}
+
+Image shows "2x + 3 = 5x − 1" →
+{"type":"linear_1var","var":"x","lhs":{"coef":2,"const":3},"rhs":{"coef":5,"const":-1}}
+
+Image shows "2x + 3y = 6" and "x − y = 1" →
+{"type":"linear_2var","vars":["x","y"],"equations":[{"a":2,"b":3,"c":6},{"a":1,"b":-1,"c":1}]}
 
 Image shows "x² + 4x = 5" →
 {"type":"out_of_scope","reason":"Quadratic equation"}

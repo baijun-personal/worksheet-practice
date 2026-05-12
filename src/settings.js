@@ -126,7 +126,12 @@ const DEFAULTS = {
   // Calculator-specific config (Stages 5, 7, 9).
   calcModel: 'gpt-5.4-mini',
   customCalcPrompt: '',
-  calcAllowedTypes: { arithmetic: true, linear_1var: false, linear_2var: false },
+  // Allowed Calculator-tool parse types. All three ship enabled by
+  // default; parent can turn off equation-solving via Settings →
+  // Calculator → Advanced for pure-arithmetic practice (e.g.
+  // mental-math drilling where reaching for the calculator on
+  // simultaneous equations would defeat the point).
+  calcAllowedTypes: { arithmetic: true, linear_1var: true, linear_2var: true },
   calcMinAreaFraction: 0.005,   // 0.5% of page area minimum
   calcMaxAreaFraction: 0.10,    // 10% of page area maximum
   calcCapMode: 'per_page',      // 'per_page' | 'per_attempt'
