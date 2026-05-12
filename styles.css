@@ -1433,13 +1433,14 @@ body.app-immersive[data-active-tool="pen"] .ink-canvas {
   cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 32 32'%3E%3Cpath d='M3 29 L8 24 L22 10 L26 14 L12 28 Z' fill='white' stroke='black' stroke-width='1.5' stroke-linejoin='round'/%3E%3Cpath d='M22 10 L26 6 L30 10 L26 14 Z' fill='%231a4fc4' stroke='black' stroke-width='1.5' stroke-linejoin='round'/%3E%3Ccircle cx='3' cy='29' r='1.5' fill='%231a4fc4'/%3E%3C/svg%3E") 5 44, crosshair;
 }
 body.app-immersive[data-active-tool="type"] .ink-canvas {
-  /* Plain black I-beam at 40×40. No white halo around the stem —
-     the ink canvas always sits over a white worksheet, so black on
-     white reads cleanly without halo, and the previous halo was
-     producing fuzzy fringing around the serifs at this size.
-     `text` keyword fallback remains. Hotspot 20 20 = centre of
-     40×40 = midpoint of the I-beam stem. */
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 32 32'%3E%3Cline x1='16' y1='5' x2='16' y2='27' stroke='black' stroke-width='2'/%3E%3Cline x1='12' y1='5' x2='20' y2='5' stroke='black' stroke-width='2'/%3E%3Cline x1='12' y1='27' x2='20' y2='27' stroke='black' stroke-width='2'/%3E%3C/svg%3E") 20 20, text;
+  /* Blue I-beam at 40×40, matching the blue ink colour used by
+     pen / circle / tick previews (#1a4fc4). Same blue the
+     committed type stroke renders in, so the cursor signals the
+     ink colour that's about to land. No white halo — the ink
+     canvas always sits over a white worksheet, so blue on white
+     reads cleanly without halo. `text` keyword fallback remains.
+     Hotspot 20 20 = centre of 40×40 = midpoint of the I-beam stem. */
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 32 32'%3E%3Cline x1='16' y1='5' x2='16' y2='27' stroke='%231a4fc4' stroke-width='2'/%3E%3Cline x1='12' y1='5' x2='20' y2='5' stroke='%231a4fc4' stroke-width='2'/%3E%3Cline x1='12' y1='27' x2='20' y2='27' stroke='%231a4fc4' stroke-width='2'/%3E%3C/svg%3E") 20 20, text;
 }
 body.app-immersive[data-active-tool="circle"] .ink-canvas {
   /* 50×50 ring, no centre dot. The dot was a hotspot marker — the
