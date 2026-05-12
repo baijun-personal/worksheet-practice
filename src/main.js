@@ -2806,7 +2806,13 @@ async function onSubmit() {
       const aPageEntry = pair.answer_page ? answerByPage.get(pair.answer_page) : null;
       if (!cPageEntry || !aPageEntry) {
         const detail = `completed p.${pair.completed_page ?? '?'}=${!!cPageEntry}, answer p.${pair.answer_page ?? '?'}=${!!aPageEntry}`;
-        visualResults.push({ pair, error: `Page image not available (${detail}).` });
+        // skipped:true marks this as "no API call was ever made" rather
+        // than "API call failed" — used downstream to keep
+        // visualRequestsAttempted accurate and to filter these rows
+        // out of failed_batches. Without the flag a missing-image pair
+        // would be counted as both an attempt AND a failure, falsely
+        // triggering the incomplete-warning gate.
+        visualResults.push({ pair, error: `Page image not available (${detail}).`, skipped: true });
         li.classList.add('failed');
         li.textContent = `Request ${idx + 1}: Visual compare ${pair.display_question || pair.question} — skipped (${detail})`;
         continue;
@@ -2849,7 +2855,12 @@ async function onSubmit() {
   // Compare-stage request count: 1 if the text compare ran + N for each
   // visual pair. Visual pairs without page images don't trigger a request
   // but still contribute an unclear row in the report.
-  const visualRequestsAttempted = visualResults.filter((v) => v.parsed || v.error).length;
+  // "Attempted" = succeeded OR genuinely failed at the API. Skipped
+  // (missing-image) pairs never reached the API and so aren't
+  // attempts; counting them as such would overstate the request
+  // count in the cost report and falsely trip the incomplete-warning
+  // gate below for setup issues that aren't request failures.
+  const visualRequestsAttempted = visualResults.filter((v) => v.parsed || (v.error && !v.skipped)).length;
   const visualRequestsSucceeded = visualResults.filter((v) => v.parsed).length;
   const extraCompareRequestCount = (canRunTextCompare ? 1 : 0) + visualRequestsAttempted;
   const extraCompareCompleted = (compareUsedAi ? 1 : 0) + visualRequestsSucceeded;
@@ -2867,7 +2878,11 @@ async function onSubmit() {
           pages: t.pages,
           error: `${t.kind === 'answer_key' ? 'Answer key' : 'Student answers'}: ${t.error}`,
         })),
-        ...visualResults.filter((v) => v.error).map((v) => ({
+        // Skipped (missing-image) rows belong in the per-row "unclear"
+        // status on the report — they aren't request failures. Only
+        // genuine API failures (error AND NOT skipped) belong in
+        // failed_batches.
+        ...visualResults.filter((v) => v.error && !v.skipped).map((v) => ({
           index: -1,
           pages: [v.pair.completed_page, v.pair.answer_page].filter(Boolean),
           error: `Visual compare ${v.pair.display_question || v.pair.question}: ${v.error}`,
