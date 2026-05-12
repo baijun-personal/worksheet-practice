@@ -107,13 +107,26 @@ function splitFlatListAnswer(text, expectedCount) {
   const s = String(text || '').trim();
   if (!s || expectedCount < 2) return null;
 
+  // Per-segment cleaner. Strips:
+  //   - leading "and " / "or " (segment connectors)
+  //   - leading letter labels: "a.", "(a)", "a)", "a:" — the
+  //     answer-key sometimes writes "a. 56; b. 12" instead of a
+  //     bare "56; 12". Without stripping, the per-part value
+  //     becomes "a. 56" and the comparator marks it wrong.
+  //     Terminator [.\):] prevents accidental matches on real
+  //     words starting with a single letter.
+  function clean(seg) {
+    return String(seg)
+      .replace(/^\s*(?:and|or)\s+/i, '')
+      .replace(/^\s*\(?[a-z]\)?[.\):]\s*/i, '')
+      .trim();
+  }
+
   // Try comma split first, then semicolon. Both are common in
   // Singapore answer keys ("27, 32" or "27; 32").
   for (const delim of [',', ';']) {
     if (s.includes(delim)) {
-      const parts = s.split(delim).map((x) =>
-        x.replace(/^\s*(?:and|or)\s+/i, '').trim()
-      ).filter(Boolean);
+      const parts = s.split(delim).map(clean).filter(Boolean);
       if (parts.length === expectedCount) return parts;
     }
   }
@@ -122,7 +135,7 @@ function splitFlatListAnswer(text, expectedCount) {
   if (expectedCount === 2) {
     const m = s.match(/^(.+?)\s+and\s+(.+)$/i);
     if (m) {
-      const parts = [m[1].trim(), m[2].trim()].filter(Boolean);
+      const parts = [clean(m[1]), clean(m[2])].filter(Boolean);
       if (parts.length === 2) return parts;
     }
   }
@@ -373,6 +386,86 @@ function buildDisplayQuestion(a, paperHasSections = false) {
   return '';
 }
 
+// Split a {base}{single-letter} question_number into its components.
+// Match requires the base to end in a digit so "Q9a" → {base:"Q9",
+// part:"a"} but "Q9ab" doesn't match (the previous segment would
+// itself need a separator). Used by groupFlatAlphabeticSubparts to
+// detect strict-ascending runs of letter-suffixed entries.
+function splitAlphaSuffix(qnumber) {
+  const s = String(qnumber || '').trim();
+  const m = s.match(/^(.*\d)([a-z])$/i);
+  if (!m) return null;
+  return { base: m[1], part: m[2].toLowerCase() };
+}
+
+// Auto-detect runs of strictly-ascending-consecutive alphabetic-
+// suffix flat entries (e.g. "9a", "9b") and regroup them into a
+// single multi-part record. Runs to "a"→"b"[→"c"…] with the SAME
+// base get grouped; a standalone "9a" with no adjacent "9b" stays
+// flat; "9a" followed by "9c" stays flat (skip breaks the run).
+//
+// Why only alphabetic? On Singapore primary papers "9a"/"9b" are
+// unambiguously question-9-part-a/part-b. "9i"/"9ii" without parens
+// could be roman parts OR a numeric "9 followed by stray letter";
+// "61" could be question 61 OR question 6 part 1. Alphabetic is
+// the only case we can confidently regroup without false positives;
+// roman / numeric need parens to disambiguate (Bug A / Bug C
+// matcher already handle the parens path).
+//
+// Runs on BOTH sides via matchExtractions, BEFORE fanOutMultiPartKeys.
+// After this pass, a former pair of flat "9a"/"9b" entries on either
+// side becomes a single is_multi_part="9" with parts:[{a},{b}], and
+// the rest of the matching pipeline pairs it normally — including
+// the Bug C downstream split when the OTHER side is a flat
+// "a. 56; b. 12" list.
+function groupFlatAlphabeticSubparts(answers) {
+  const out = [];
+  let i = 0;
+  while (i < answers.length) {
+    const a = answers[i];
+    const sub = a ? splitAlphaSuffix(a.question_number) : null;
+    if (!sub || a.is_multi_part) { out.push(a); i++; continue; }
+    const run = [a];
+    let nextExpected = String.fromCharCode(sub.part.charCodeAt(0) + 1);
+    let j = i + 1;
+    while (j < answers.length) {
+      const b = answers[j];
+      const subB = b ? splitAlphaSuffix(b.question_number) : null;
+      if (!subB) break;
+      if (subB.base !== sub.base) break;
+      if (subB.part !== nextExpected) break;
+      run.push(b);
+      nextExpected = String.fromCharCode(subB.part.charCodeAt(0) + 1);
+      j++;
+    }
+    if (run.length >= 2) {
+      out.push({
+        global_question_index: a.global_question_index,
+        section: a.section || '',
+        _syntheticSection: a._syntheticSection,
+        question_number: sub.base.replace(/^Q/i, ''),
+        page: a.page,
+        is_multi_part: true,
+        order_matters: true,
+        parts: run.map((entry) => {
+          const s2 = splitAlphaSuffix(entry.question_number);
+          return {
+            part: s2.part,
+            answer: entry.answer ?? '',
+            answer_type: entry.answer_type || 'text',
+            confidence: typeof entry.confidence === 'number' ? entry.confidence : null,
+          };
+        }),
+      });
+      i = j;
+    } else {
+      out.push(a);
+      i++;
+    }
+  }
+  return out;
+}
+
 // Detect a parenthesised subpart suffix like "19(i)", "5(ii)",
 // "Q19(iii)". Returns { base, part } when present, else null. We
 // deliberately don't match suffixes WITHOUT parens like "5a" / "5b"
@@ -523,14 +616,27 @@ export function matchExtractions(studentBatchResults, answerKeyResults) {
   // A: Q1-Q10, Section B: Q1-Q5) get distinct S1/S2 prefixes so the
   // composite key no longer collapses Section A Q1 and Section B Q1
   // into the same bucket on the answer-key side.
+  // groupFlatAlphabeticSubparts runs AFTER assignSyntheticSections
+  // (so synthetic-section indices are stamped first) but BEFORE
+  // fanOutMultiPartKeys: a "9a"/"9b" run becomes a single grouped
+  // "9" multi-part record; fanOutMultiPartKeys then fans it back
+  // out to flat per-part entries with the same synthetic section.
+  // Bug D fix — the previous flat-vs-flat-with-letter-prefixed-
+  // list case (student "9a"/"9b" vs key "9", answer "a. 56; b. 12")
+  // pairs correctly now because BOTH sides funnel through the
+  // grouped representation before matching.
   const students = normalizeMultiParts(
     fanOutMultiPartKeys(
-      assignSyntheticSections(flattenAnswers(studentBatchResults))
+      groupFlatAlphabeticSubparts(
+        assignSyntheticSections(flattenAnswers(studentBatchResults))
+      )
     )
   );
   const keys = normalizeMultiParts(
     fanOutMultiPartKeys(
-      assignSyntheticSections(flattenAnswers(answerKeyResults))
+      groupFlatAlphabeticSubparts(
+        assignSyntheticSections(flattenAnswers(answerKeyResults))
+      )
     )
   );
 
