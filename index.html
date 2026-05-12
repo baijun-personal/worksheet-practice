@@ -534,9 +534,13 @@
         <button id="continue-practising-btn" type="button" class="primary" hidden>Continue practising</button>
         <button id="download-report-pdf" type="button">Download report PDF</button>
         <button id="download-attempt-pdf" type="button">Download completed attempt PDF</button>
-        <button id="toggle-raw-json" type="button">Show raw JSON</button>
+        <button id="download-raw-json" type="button">Download raw JSON</button>
       </div>
       <p id="review-disabled-note" class="muted small" hidden></p>
+      <!-- Raw JSON body — kept in the DOM so renderReport's existing
+           write-through (rawEl.textContent = JSON.stringify(report)) keeps
+           working unchanged. Always hidden — the user downloads it now
+           instead of toggling visibility. -->
       <pre id="raw-json" class="raw-json" hidden></pre>
     </section>
 

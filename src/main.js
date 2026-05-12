@@ -3552,11 +3552,25 @@ async function onMarkUpToHere() {
       }
     }
 
-    // Aggregate cost across all marks in this session.
-    const priorCost = practice.latest_report?.app_cost?.tasks || [];
-    const allTasks = [...priorCost, ...taskUsages];
+    // Aggregate cost across all marks in this session. The report
+    // renderer reads from `app_usage` (the same key onSubmit uses for
+    // the final-mode flow); using `app_cost` here would silently drop
+    // the cost card from the practice-mode report. Carry the prior
+    // mark's tasks forward so the displayed cost is cumulative.
+    const priorTasks = practice.latest_report?.app_usage?.tasks || [];
+    const allTasks = [...priorTasks, ...taskUsages];
+    const totals = aggregateTasks(allTasks);
     const merged = buildFinalReport({ match, aiTextReport, visualResults });
-    merged.app_cost = aggregateTasks(allTasks);
+    merged.app_usage = {
+      tasks: allTasks,
+      totals,
+      estimated_cost_usd: totals.estimated_cost_usd,
+      estimated_input_cost_usd: totals.estimated_input_cost_usd,
+      estimated_uncached_input_cost_usd: totals.estimated_uncached_input_cost_usd,
+      estimated_cached_input_cost_usd: totals.estimated_cached_input_cost_usd,
+      estimated_output_cost_usd: totals.estimated_output_cost_usd,
+      models: totals.models,
+    };
     merged.app_extractions = {
       student: allStudentResults,
       answer_key: allKeyResults,
@@ -3666,11 +3680,26 @@ function humanMode(mode) {
 // --- Report ---------------------------------------------------------------
 
 function bindReportUI() {
-  $('toggle-raw-json').addEventListener('click', () => {
-    const el = $('raw-json');
-    el.hidden = !el.hidden;
-    $('toggle-raw-json').textContent = el.hidden ? 'Show raw JSON' : 'Hide raw JSON';
+  // Download raw report JSON. Replaces the earlier Show/Hide toggle —
+  // the parent can save the file and inspect it in their editor of
+  // choice instead of scrolling a huge pre on the report page.
+  $('download-raw-json').addEventListener('click', () => {
+    if (!state.reportJson) {
+      alert('No report to download yet — mark first.');
+      return;
+    }
+    try {
+      const blob = new Blob(
+        [JSON.stringify(state.reportJson, null, 2)],
+        { type: 'application/json' }
+      );
+      triggerDownload(blob, fileBaseName(state.attempt?.pdfName) + '-report.json');
+    } catch (e) {
+      console.error('Raw JSON download failed', e);
+      alert('Raw JSON download failed: ' + (e?.message || e));
+    }
   });
+
   $('open-review-btn')?.addEventListener('click', onOpenReviewMode);
   $('download-report-pdf').addEventListener('click', async (ev) => {
     if (!state.reportJson) return;
@@ -3690,8 +3719,8 @@ function bindReportUI() {
     }
   });
   $('download-attempt-pdf').addEventListener('click', async (ev) => {
-    if (!state.flattenedCompletedPages) {
-      alert('Completed pages are only available right after marking.');
+    if (!state.attempt || !state.pdf) {
+      alert('Open an attempt first.');
       return;
     }
     const btn = ev.currentTarget;
@@ -3699,7 +3728,27 @@ function bindReportUI() {
     btn.disabled = true;
     btn.textContent = 'Generating PDF…';
     try {
-      const blob = await exportCompletedAttemptPdf(state.flattenedCompletedPages);
+      // Prefer the in-memory cache that onSubmit populates, but fall
+      // back to rendering all question pages on demand from saved
+      // strokes. The fallback covers:
+      //   - Practice mode, where onMarkUpToHere doesn't populate the
+      //     cache (each mark only renders new pages).
+      //   - Re-visiting a marked attempt after a refresh, where the
+      //     cache is null because no fresh mark has been run in
+      //     this session.
+      let pages = state.flattenedCompletedPages;
+      if (!pages || pages.length === 0) {
+        btn.textContent = 'Rendering pages…';
+        const dpi = state.settings.renderDpi || 150;
+        pages = [];
+        for (const pageNum of (state.attempt.questionPages || [])) {
+          const strokes = await getStrokesForPage(state.attempt.id, pageNum);
+          const dataUrl = await flattenQuestionPage(state.pdf, pageNum, strokes, dpi);
+          pages.push({ pageNumber: pageNum, dataUrl });
+        }
+        btn.textContent = 'Generating PDF…';
+      }
+      const blob = await exportCompletedAttemptPdf(pages);
       triggerDownload(blob, fileBaseName(state.attempt?.pdfName) + '-completed.pdf');
     } catch (e) {
       console.error('Attempt PDF export failed', e);
