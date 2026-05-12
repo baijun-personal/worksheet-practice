@@ -192,6 +192,15 @@ function setStage(stage) {
     span.classList.toggle('active', span.dataset.stage === stage);
   }
   $('reset-btn').hidden = (stage === 'unlock' || stage === 'setup');
+  // Practice activity counters (Stage 3) attach when entering the
+  // practice stage and detach otherwise — so an Escape / tab-switch
+  // on the report or review stage doesn't accidentally tick a
+  // counter against the practice run.
+  if (stage === 'practice') {
+    attachActivityHandlers();
+  } else {
+    detachActivityHandlers();
+  }
 }
 
 function setAutosave(label, cls = '') {
@@ -2660,6 +2669,74 @@ function pageNumberLabel(currentPage) {
   const qp = state.attempt?.questionPages || [];
   const idx = qp.indexOf(currentPage);
   return idx >= 0 ? String(idx + 1) : String(currentPage);
+}
+
+// --- Practice activity counters (Stage 3) -------------------------------
+// Three neutral counters per practice attempt:
+//   - fullscreen_exits
+//   - tab_blurs
+//   - visibility_changes
+// Plus a raw events[] log so a parent can correlate timestamps if
+// needed. Surfaces as a "Practice activity" report section (Stage 8).
+// Wording stays neutral — these are signals about whether the
+// child stepped away, not accusations of cheating. One real
+// app-switch may fire two or three of these in rapid succession;
+// we don't dedupe (per reviewer #11) so the counts are honest at
+// the cost of being slightly inflated.
+
+let _activityAttached = false;
+
+function onFullscreenExitForActivity() {
+  if (document.fullscreenElement) return;        // entered, not exited
+  if (!state.attempt || state.stage !== 'practice') return;
+  bumpActivity('fullscreen_exit');
+}
+function onTabBlurForActivity() {
+  if (!state.attempt || state.stage !== 'practice') return;
+  bumpActivity('tab_blur');
+}
+function onVisibilityChangeForActivity() {
+  if (document.visibilityState !== 'hidden') return;
+  if (!state.attempt || state.stage !== 'practice') return;
+  bumpActivity('visibility_hidden');
+}
+
+function attachActivityHandlers() {
+  if (_activityAttached) return;
+  document.addEventListener('fullscreenchange', onFullscreenExitForActivity);
+  document.addEventListener('webkitfullscreenchange', onFullscreenExitForActivity);
+  window.addEventListener('blur', onTabBlurForActivity);
+  document.addEventListener('visibilitychange', onVisibilityChangeForActivity);
+  _activityAttached = true;
+}
+function detachActivityHandlers() {
+  if (!_activityAttached) return;
+  document.removeEventListener('fullscreenchange', onFullscreenExitForActivity);
+  document.removeEventListener('webkitfullscreenchange', onFullscreenExitForActivity);
+  window.removeEventListener('blur', onTabBlurForActivity);
+  document.removeEventListener('visibilitychange', onVisibilityChangeForActivity);
+  _activityAttached = false;
+}
+
+function bumpActivity(type) {
+  if (!state.attempt) return;
+  // Only practice attempts get an activity log. Final-mode attempts
+  // never have activity != null; legacy practice attempts lazy-init.
+  if (state.attempt.mode !== 'practice') return;
+  state.attempt.activity = state.attempt.activity || {
+    fullscreen_exits: 0, tab_blurs: 0, visibility_changes: 0, events: [],
+  };
+  const key =
+      type === 'fullscreen_exit'   ? 'fullscreen_exits'
+    : type === 'tab_blur'          ? 'tab_blurs'
+    :                                'visibility_changes';
+  state.attempt.activity[key] = (state.attempt.activity[key] || 0) + 1;
+  state.attempt.activity.events = state.attempt.activity.events || [];
+  state.attempt.activity.events.push({ type, ts: Date.now() });
+  // Persist quietly — never block on this.
+  putAttempt(state.attempt).catch((e) =>
+    console.error('activity persist failed', e)
+  );
 }
 
 // Append a usage record to attempt.calc_usage and persist
