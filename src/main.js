@@ -2349,6 +2349,7 @@ function defaultToolForEnvironment() {
 function applyDefaultTool() {
   const tool = defaultToolForEnvironment();
   state.tool = tool;
+  document.body.dataset.activeTool = tool;
   for (const b of document.querySelectorAll('.tool-btn')) {
     b.classList.toggle('active', b.dataset.tool === tool);
   }
@@ -2381,6 +2382,7 @@ function bindPracticeUI() {
         state.inkController.commitTyping();
       }
       state.tool = nextTool;
+      document.body.dataset.activeTool = nextTool;
       for (const b of document.querySelectorAll('.tool-btn')) {
         b.classList.toggle('active', b === btn);
       }

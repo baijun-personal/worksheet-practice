@@ -1375,3 +1375,41 @@ body.app-immersive #page-nav-indicator {
   font-variant-numeric: tabular-nums;
   color: white;
 }
+
+/* ---- Tool-aware cursors in immersive mode ----------------------
+   When the app is fullscreen / immersive, swap the default
+   crosshair on the ink canvas for a custom image that previews the
+   tool's effect. The hotspot (cursor x,y) is set per tool so the
+   click point matches what the tool will produce:
+
+     pen     → bottom-left of pen (the nib tip)
+     type    → centre of keyboard (where typing starts)
+     circle  → centre of the preview ring (matches placeCircle)
+     tick    → centre of the preview tick (matches placeTick)
+     eraser  → centre of the eraser shape
+
+   Calculate stays on the default crosshair — its drag-rectangle UX
+   wants a precise crosshair, not a tool preview. Each cursor is a
+   small inline SVG; the second value in cursor: url(...) x y is
+   the hotspot pixel. We give an OS fallback (crosshair / text /
+   not-allowed) for the rare browsers that drop SVG cursors. */
+
+body.app-immersive[data-active-tool="pen"] .ink-canvas {
+  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'><path d='M3 29 L8 24 L22 10 L26 14 L12 28 Z' fill='white' stroke='black' stroke-width='1.5' stroke-linejoin='round'/><path d='M22 10 L26 6 L30 10 L26 14 Z' fill='%231a4fc4' stroke='black' stroke-width='1.5' stroke-linejoin='round'/><circle cx='3' cy='29' r='1.5' fill='%231a4fc4'/></svg>") 3 29, crosshair;
+}
+body.app-immersive[data-active-tool="type"] .ink-canvas {
+  /* Standard I-beam — matches how Windows (and every other OS) signals a
+     text-input context. Deliberately no custom SVG: the keyboard icon was
+     over-decorated for what is just "click to place a text caret here". */
+  cursor: text;
+}
+body.app-immersive[data-active-tool="circle"] .ink-canvas {
+  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'><circle cx='16' cy='16' r='11' fill='none' stroke='%231a4fc4' stroke-width='2'/><circle cx='16' cy='16' r='1.2' fill='%231a4fc4'/></svg>") 16 16, crosshair;
+}
+body.app-immersive[data-active-tool="tick"] .ink-canvas {
+  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'><path d='M7 17 L13 23 L25 9' fill='none' stroke='%231a4fc4' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/><circle cx='16' cy='16' r='1.2' fill='%23c0392b'/></svg>") 16 16, crosshair;
+}
+body.app-immersive[data-active-tool="eraser"] .ink-canvas {
+  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'><path d='M6 22 L18 10 L26 18 L14 26 Z' fill='white' stroke='black' stroke-width='1.5' stroke-linejoin='round'/><line x1='12' y1='16' x2='20' y2='24' stroke='black' stroke-width='1.5' stroke-linecap='round'/><circle cx='16' cy='18' r='1.2' fill='%23c0392b'/></svg>") 16 18, not-allowed;
+}
+
