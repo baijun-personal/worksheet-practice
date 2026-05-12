@@ -554,6 +554,29 @@ function fanOutMultiPartKeys(answers) {
   for (const a of answers) {
     if (!a) continue;
     if (a.is_multi_part === true && Array.isArray(a.parts) && a.parts.length > 0) {
+      // Alphabetic-only-grouped multi-parts (every part label is a
+      // single letter: a/b/c/d…) stay GROUPED. They come from one of:
+      //   - groupFlatAlphabeticSubparts (Bug D fix) rolling up a
+      //     flat 9a/9b/9c run on either extraction side.
+      //   - Extraction emitting the grouped shape directly.
+      // The downstream matcher pairs them by base question number
+      // against either side's grouped or flat form; if the other side
+      // is a flat list (e.g. key "9" with answer "a. 56; b. 12") the
+      // Bug C downstream split path in matchExtractions runs
+      // splitFlatListAnswer to produce matched-count expected_parts.
+      // Fanning these out here would immediately undo
+      // groupFlatAlphabeticSubparts and leave the asymmetric Bug D
+      // case unpaired — which is exactly what shipped originally.
+      // Single-letter check deliberately excludes roman ("ii", "iii"
+      // — 2-3 chars) and numeric ("1", "2" — handled by
+      // PARENTHESISABLE_PART_RE below).
+      const allAlpha = a.parts.every(
+        (p) => /^[a-z]$/i.test(String(p?.part ?? '').trim())
+      );
+      if (allAlpha) {
+        out.push(a);
+        continue;
+      }
       const baseQNum = String(a.question_number || '').trim();
       for (const p of a.parts) {
         const partLabel = String(p?.part ?? '').trim();
@@ -569,8 +592,9 @@ function fanOutMultiPartKeys(answers) {
         // back into a base multi-part so the matcher pairs against
         // the other side whether IT emitted grouped, flat-with-
         // parens, or flat-no-parens.
-        // Alphabetic parts (a/b/c/d) emit a single bare form; the
-        // matcher pairs them positionally via question_number.
+        // Other labels (mixed shapes, hypothetical q1/q2) fall
+        // through to a single bare-form emit; the matcher pairs
+        // them positionally via question_number.
         if (PARENTHESISABLE_PART_RE.test(partLabel)) {
           out.push(buildFannedEntry(a, p, baseQNum + '(' + partLabel + ')'));
           out.push(buildFannedEntry(a, p, baseQNum + partLabel));
