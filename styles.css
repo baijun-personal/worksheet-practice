@@ -1394,8 +1394,20 @@ body.app-immersive #page-nav-indicator {
    the hotspot pixel. We give an OS fallback (crosshair / text /
    not-allowed) for the rare browsers that drop SVG cursors. */
 
+/* Compatibility notes on the data URIs below:
+   - MIME is `image/svg+xml` with no parameters. The earlier
+     `;utf8` parameter was non-standard and was silently rejected
+     by some Chrome / Firefox versions, falling through to the
+     keyword fallback (crosshair) so the cursor never visibly
+     changed.
+   - Angle brackets are percent-encoded (%3C / %3E). Firefox
+     requires this; Chrome accepts unencoded but with the encoded
+     form the cursor is reliably parsed everywhere.
+   - `#` inside hex colours is already encoded as %23.
+   - Single quotes are used inside the SVG so they don't conflict
+     with the surrounding CSS double-quoted url("..."). */
 body.app-immersive[data-active-tool="pen"] .ink-canvas {
-  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'><path d='M3 29 L8 24 L22 10 L26 14 L12 28 Z' fill='white' stroke='black' stroke-width='1.5' stroke-linejoin='round'/><path d='M22 10 L26 6 L30 10 L26 14 Z' fill='%231a4fc4' stroke='black' stroke-width='1.5' stroke-linejoin='round'/><circle cx='3' cy='29' r='1.5' fill='%231a4fc4'/></svg>") 3 29, crosshair;
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath d='M3 29 L8 24 L22 10 L26 14 L12 28 Z' fill='white' stroke='black' stroke-width='1.5' stroke-linejoin='round'/%3E%3Cpath d='M22 10 L26 6 L30 10 L26 14 Z' fill='%231a4fc4' stroke='black' stroke-width='1.5' stroke-linejoin='round'/%3E%3Ccircle cx='3' cy='29' r='1.5' fill='%231a4fc4'/%3E%3C/svg%3E") 3 29, crosshair;
 }
 body.app-immersive[data-active-tool="type"] .ink-canvas {
   /* Standard I-beam — matches how Windows (and every other OS) signals a
@@ -1404,12 +1416,12 @@ body.app-immersive[data-active-tool="type"] .ink-canvas {
   cursor: text;
 }
 body.app-immersive[data-active-tool="circle"] .ink-canvas {
-  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'><circle cx='16' cy='16' r='11' fill='none' stroke='%231a4fc4' stroke-width='2'/><circle cx='16' cy='16' r='1.2' fill='%231a4fc4'/></svg>") 16 16, crosshair;
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='11' fill='none' stroke='%231a4fc4' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='1.2' fill='%231a4fc4'/%3E%3C/svg%3E") 16 16, crosshair;
 }
 body.app-immersive[data-active-tool="tick"] .ink-canvas {
-  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'><path d='M7 17 L13 23 L25 9' fill='none' stroke='%231a4fc4' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/><circle cx='16' cy='16' r='1.2' fill='%23c0392b'/></svg>") 16 16, crosshair;
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath d='M7 17 L13 23 L25 9' fill='none' stroke='%231a4fc4' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='16' cy='16' r='1.2' fill='%23c0392b'/%3E%3C/svg%3E") 16 16, crosshair;
 }
 body.app-immersive[data-active-tool="eraser"] .ink-canvas {
-  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'><path d='M6 22 L18 10 L26 18 L14 26 Z' fill='white' stroke='black' stroke-width='1.5' stroke-linejoin='round'/><line x1='12' y1='16' x2='20' y2='24' stroke='black' stroke-width='1.5' stroke-linecap='round'/><circle cx='16' cy='18' r='1.2' fill='%23c0392b'/></svg>") 16 18, not-allowed;
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath d='M6 22 L18 10 L26 18 L14 26 Z' fill='white' stroke='black' stroke-width='1.5' stroke-linejoin='round'/%3E%3Cline x1='12' y1='16' x2='20' y2='24' stroke='black' stroke-width='1.5' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='18' r='1.2' fill='%23c0392b'/%3E%3C/svg%3E") 16 18, not-allowed;
 }
 
