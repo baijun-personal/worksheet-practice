@@ -739,7 +739,28 @@ export function attachInkController({
   // path. Centralised so additional bookkeeping (e.g. analytics) can
   // be added in one place.
   async function commitStroke(stroke) {
+    // Snapshot the page + meta BEFORE awaiting the persistence call —
+    // if the user navigates while the IndexedDB write is in flight, we
+    // must not paint a stale stroke onto a different page's canvas.
+    const pageAtCommit = stroke.pageNumber;
+    const metaAtCommit = getPageMeta();
     await onStrokeAdded(stroke);
+    // Repaint the just-committed stroke onto the ink canvas. Pen
+    // strokes already drew themselves incrementally during the
+    // pointer-move phase, so this call re-traces a path that's
+    // already visible — harmless. Type / Circle / Tick strokes have
+    // no incremental phase (Type used a DOM overlay that was hidden
+    // before this call; Circle / Tick are instant tap-to-place), so
+    // this is where their mark first appears on the canvas. Without
+    // it, the overlay hides and the canvas stays blank until the
+    // next page load (e.g. tab away and back) — which was the
+    // "typed text disappears" bug.
+    if (metaAtCommit && getCurrentPage() === pageAtCommit) {
+      drawStroke(ctx, stroke, {
+        widthPx: metaAtCommit.widthPx,
+        heightPx: metaAtCommit.heightPx,
+      });
+    }
   }
 
   return {
