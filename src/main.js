@@ -3803,8 +3803,17 @@ async function onMarkUpToHere() {
     }
 
     // Answer-key extraction (one-time, cached after first run).
+    // Add a "(one-time…)" hint on session 1 (or any session where the
+    // answer-key cache was just cleared by a Setup-change invalidation)
+    // — the first mark on a multi-page paper is genuinely slower
+    // because the answer key has to be rendered + extracted now;
+    // subsequent marks skip this branch entirely (askForKey === false).
+    // The hint sets expectations rather than speeding anything up.
     if (askForKey) {
-      step('Reading answer key');
+      const isFirstMark = (practice.mark_session_count || 0) <= 1;
+      step(isFirstMark
+        ? 'Reading answer key (one-time; later marks skip this)'
+        : 'Reading answer key');
       const aPages = state.attempt.answerPages;
       const answerImages = [];
       if (aPages.length > 1) {
