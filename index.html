@@ -574,13 +574,20 @@
         <button data-tool="eraser" class="tool-btn" type="button"
                 title="Eraser (E)" aria-label="Eraser">
           <span class="tool-icon" aria-hidden="true">
-            <svg viewBox="0 0 16 16" width="14" height="14" fill="none"
-                 stroke="currentColor" stroke-width="1.2"
-                 stroke-linecap="round" stroke-linejoin="round">
-              <!-- Block eraser, tilted, with a seam between the rubber
-                   tip and the holder. -->
-              <path d="M3 13 L9 5 L14 8 L8 14 Z"></path>
-              <line x1="6" y1="9.5" x2="11" y2="12.5"></line>
+            <!-- Mirrors the eraser CURSOR (see styles.css cursor
+                 block) so the toolbar button previews the same
+                 pink-rubber-with-ferrule shape the user sees when
+                 they hover in immersive mode. Filled colours
+                 deliberately break the toolbar's monochrome theme
+                 here — the eraser is the one tool whose colour
+                 reads as part of its identity. -->
+            <svg viewBox="0 0 16 16" width="14" height="14">
+              <g transform="rotate(-20 8 8)">
+                <rect x="2" y="6.5" width="12" height="5" rx="1"
+                      fill="#f4a8a8" stroke="black" stroke-width="0.8"/>
+                <rect x="2" y="6.5" width="3" height="5"
+                      fill="#c8d4e0" stroke="black" stroke-width="0.8"/>
+              </g>
             </svg>
           </span>
         </button>

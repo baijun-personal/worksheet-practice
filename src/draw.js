@@ -32,11 +32,18 @@ export const DEFAULT_TYPE_WRAP_FRACTION = 0.9;
 // 6pt radius fits cleanly around a single printed MCQ letter
 // (a, b, c, d) without overlapping into neighbours.
 export const DEFAULT_CIRCLE_RADIUS_PT = 6;
-// Bounding-box edge length of a placed tick in PDF points. 48 ≈
-// matches the 48-image-pixel tick cursor preview, so the placed
-// mark is the same visual chunk the cursor previewed. Earlier
-// value (18) made the tick noticeably smaller than the cursor.
-export const DEFAULT_TICK_SIZE_PT = 48;
+// Bounding-box edge length of a placed tick in PDF points.
+//
+// The tick path occupies only ~60-75% of this bbox (the path
+// uses fractions x∈[0.15, 0.90], y∈[0.20, 0.80]), so the visible
+// check mark is smaller than the bbox value. 28 pt bbox gives a
+// visible mark roughly the size of the 48-image-pixel cursor
+// preview's visible tick (~27 image px wide) at typical fit-zoom.
+//
+// Earlier values: 18 (too small to match the chunkier cursor)
+// and 48 (overshot — the bbox interpretation made the placed
+// tick visibly larger than the cursor previewed).
+export const DEFAULT_TICK_SIZE_PT = 28;
 
 export function makeStrokeId() {
   // crypto.randomUUID is widely supported, but fall back if missing.
