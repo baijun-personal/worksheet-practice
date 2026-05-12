@@ -1986,6 +1986,33 @@ async function onStartPracticeImpl() {
   // pages that fall outside the new question range stay in IndexedDB but
   // are no longer visible (and won't be sent for marking).
   if (state.attempt) {
+    // Practice-mode cache invalidation. If the parent edits pages /
+    // subject / level mid-attempt AND practice marking has already
+    // produced state, the cached extractions + report would silently
+    // grade pages the parent has now removed (or use a stale answer
+    // key). Prompt to clear before applying the change. The
+    // practiceMarkingMode setting is NOT a cache invalidator — it
+    // only affects how NEW pages are extracted.
+    if (practiceCacheWouldInvalidate(questionPages, answerPages, subject, level)) {
+      const ok = await confirmInPage(
+        "You've already marked some pages in this practice attempt. " +
+        'Changing pages, subject, or level will clear the practice ' +
+        'progress and the existing report. Continue?',
+        { okLabel: 'Clear and continue', danger: true }
+      );
+      if (!ok) return;
+      state.attempt.practice = {
+        markedPages: [],
+        cached_student_extractions_by_page: {},
+        cached_answer_key_extraction: null,
+        cached_compare_rows_by_pair_key: {},
+        cached_visual_rows_by_pair_key: {},
+        latest_report: null,
+      };
+      state.attempt.reportJson = null;
+      state.reportJson = null;
+      state.attempt.status = 'in_progress';
+    }
     const oldQ = new Set(state.attempt.questionPages || []);
     const newQ = new Set(questionPages);
     const dropped = [...oldQ].filter((p) => !newQ.has(p));
@@ -2077,6 +2104,8 @@ async function onStartPracticeImpl() {
           markedPages: [],
           cached_student_extractions_by_page: {},
           cached_answer_key_extraction: null,
+          cached_compare_rows_by_pair_key: {},
+          cached_visual_rows_by_pair_key: {},
           latest_report: null,
         }
       : null,
@@ -2536,6 +2565,32 @@ function isCurrentPageFrozen() {
   if (state.attempt.mode !== 'practice') return false;
   const marked = state.attempt.practice?.markedPages || [];
   return marked.includes(state.currentPage);
+}
+
+// Would the proposed new pages / subject / level change invalidate
+// the practice attempt's existing cache? Returns true only if BOTH
+// (a) there's practice cache state worth clearing AND
+// (b) at least one cache-relevant field actually differs.
+// Used by onStartPracticeImpl to prompt before applying a change
+// that would otherwise silently grade against stale data.
+function practiceCacheWouldInvalidate(newQ, newA, newSubject, newLevel) {
+  const a = state.attempt;
+  if (!a || a.mode !== 'practice') return false;
+  const practice = a.practice;
+  if (!practice) return false;
+  const hasState =
+    (practice.markedPages?.length || 0) > 0
+    || Object.keys(practice.cached_student_extractions_by_page || {}).length > 0
+    || practice.cached_answer_key_extraction != null
+    || practice.latest_report != null;
+  if (!hasState) return false;
+  const sameArr = (x, y) =>
+    (x?.length || 0) === (y?.length || 0)
+    && (x || []).every((v, i) => v === y[i]);
+  return !sameArr(a.questionPages || [], newQ)
+      || !sameArr(a.answerPages || [], newA)
+      || (a.subject || '') !== (newSubject || '')
+      || (a.level || '') !== (newLevel || '');
 }
 
 async function onUndo() {
