@@ -467,6 +467,13 @@ async function init() {
   showBuildVersion();
   $('build-version-btn')?.addEventListener('click', forceReloadWithCacheBust);
 
+  // Bind the topbar's reset button EARLY — before the heavier bind*
+  // calls below. If any of those throws (e.g. due to stale cached
+  // HTML missing a newly-added element), the reset button still
+  // works so the parent has an escape hatch to start over. Optional-
+  // chain so a stale HTML missing this element doesn't itself throw.
+  $('reset-btn')?.addEventListener('click', resetApp);
+
   // Surface the Add-to-Home-Screen hint on iPad Safari (regular
   // tab) — the only way to get truly sealed fullscreen on iPad.
   setupIosAddToHomeHint();
@@ -502,14 +509,23 @@ async function init() {
     setStage('setup');
   }
 
-  bindUnlockForm();
-  bindSetupForm();
-  bindPracticeUI();
-  bindMarkingUI();
-  bindReportUI();
-  bindReviewUI();
-  setupScrollRails();
-  $('reset-btn').addEventListener('click', resetApp);
+  // Each binder isolated in its own try/catch — a stale-HTML
+  // failure in one (e.g. a missing element after a partial deploy)
+  // shouldn't dead-end the rest, and definitely shouldn't dead-end
+  // the topbar Reset button (now bound earlier). Errors land in the
+  // console for debug; the rest of the app keeps initialising.
+  const safeBind = (name, fn) => {
+    try { fn(); } catch (e) { console.error(`[init] ${name} failed:`, e); }
+  };
+  safeBind('bindUnlockForm', bindUnlockForm);
+  safeBind('bindSetupForm', bindSetupForm);
+  safeBind('bindPracticeUI', bindPracticeUI);
+  safeBind('bindMarkingUI', bindMarkingUI);
+  safeBind('bindReportUI', bindReportUI);
+  safeBind('bindReviewUI', bindReviewUI);
+  safeBind('setupScrollRails', setupScrollRails);
+  // reset-btn listener is bound earlier so it survives any bind*
+  // failure above.
 }
 
 // --- Custom scroll rails for #page-stage --------------------------------
@@ -651,8 +667,19 @@ function resetStageScroll() {
   stage.scrollLeft = 0;
 }
 
-function resetApp() {
-  if (!confirm('Start over? Current attempt will be cleared from view (autosaved data is kept in this browser).')) return;
+async function resetApp() {
+  // "Start over" used to merely clear in-memory state and return to
+  // Setup, leaving the persisted attempt in IndexedDB. That made the
+  // resume banner ("Continue previous attempt / Start from scratch")
+  // re-appear on the Setup page as soon as the user re-selected the
+  // worksheet — they hadn't actually started over.
+  //
+  // Now: DELETE the persisted attempt (cascade-deletes its strokes)
+  // so the next visit to Setup shows a clean, fresh worksheet with
+  // no resume banner. The confirm message is updated to reflect the
+  // destructive nature.
+  if (!confirm('Start over? This will delete the current attempt — saved writing, marking report, and any practice progress — and return to Setup.')) return;
+  const attemptId = state.attempt?.id || null;
   state.attempt = null;
   state.pdf = null;
   state.pdfBlob = null;
@@ -660,8 +687,20 @@ function resetApp() {
   state.pageMeta = null;
   state.flattenedCompletedPages = null;
   state.reportJson = null;
+  state.resumableAttempt = null;
   if (state.inkController) { state.inkController.detach(); state.inkController = null; }
   exitFullscreenPractice();
+  // Delete AFTER detaching the ink controller so an in-flight stroke
+  // write can't recreate the attempt record between the delete and
+  // the storage round-trip.
+  if (attemptId) {
+    try { await deleteAttempt(attemptId); }
+    catch (e) { console.error('resetApp deleteAttempt failed', e); }
+  }
+  // Clear any resume-banner content currently on Setup — onBuiltinSelect
+  // rebuilds it from IndexedDB on the next worksheet selection.
+  const banner = $('builtin-resume');
+  if (banner) { banner.hidden = true; banner.innerHTML = ''; }
   updateStartPracticeButton();
   setStage('setup');
 }
