@@ -2261,9 +2261,11 @@ async function navigateBy(dir) {
   if (!state.attempt) return;
   // Flush any in-progress typed text before leaving the page,
   // otherwise the caret stays "live" on the next page and the
-  // student's draft would commit at the wrong coordinates.
+  // student's draft would commit at the wrong coordinates. Await
+  // the IDB write so the next-page render doesn't race against an
+  // in-flight stroke save.
   if (state.inkController && typeof state.inkController.commitTyping === 'function') {
-    state.inkController.commitTyping();
+    await state.inkController.commitTyping();
   }
   // Clear the practice-mode marking status pill — the most recent
   // "Marked. Review on the right." applied to the page we're
@@ -2702,9 +2704,11 @@ async function onSubmit() {
   // Flush any in-progress typed text first. The Type tool keeps text
   // in an overlay until the student taps elsewhere or switches
   // tools; pressing Submit without an explicit tap-out would
-  // otherwise silently discard their draft.
+  // otherwise silently discard their draft. Await the IDB write so
+  // the extraction pipeline below doesn't read strokes before the
+  // typed stroke lands.
   if (state.inkController && typeof state.inkController.commitTyping === 'function') {
-    state.inkController.commitTyping();
+    await state.inkController.commitTyping();
   }
   // In direct mode we need the OpenAI key here; in proxy mode the
   // Worker holds the key, but we need the proxy URL + token.
@@ -3365,9 +3369,11 @@ function setPracticeMarkStatus(text, kind) {
 async function onMarkUpToHere() {
   if (!state.attempt || state.attempt.mode !== 'practice') return;
 
-  // Flush any in-progress typed text — same hook as onSubmit.
+  // Flush any in-progress typed text — same hook as onSubmit. Await
+  // the IDB write so the extraction pipeline doesn't race against
+  // an unfinished stroke save.
   if (state.inkController && typeof state.inkController.commitTyping === 'function') {
-    state.inkController.commitTyping();
+    await state.inkController.commitTyping();
   }
 
   // Auth preflight — inline status, no blocking alert. The user can

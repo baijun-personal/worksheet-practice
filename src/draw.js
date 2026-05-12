@@ -625,9 +625,13 @@ export function attachInkController({
   }
 
   // Commit the in-progress text as a tool:'type' stroke. Idempotent —
-  // safe to call when typing is inactive or text is empty.
+  // safe to call when typing is inactive or text is empty. Returns a
+  // Promise that resolves AFTER the underlying IndexedDB write
+  // completes, so call sites that immediately read strokes (submit,
+  // mark, page navigation) can `await` and avoid the
+  // typed-text-not-yet-persisted race.
   function commitTyping() {
-    if (!typing.active) return;
+    if (!typing.active) return Promise.resolve();
     const text = String(typing.text || '');
     const meta = getPageMeta();
     typing.active = false;
@@ -638,7 +642,7 @@ export function attachInkController({
     }
     if (!text.trim() || !meta) {
       typing.text = '';
-      return;
+      return Promise.resolve();
     }
     // Wrap width = distance from caret to the right page edge,
     // minus a small right gutter so text doesn't run flush against
@@ -664,10 +668,14 @@ export function attachInkController({
       createdAt: Date.now(),
     };
     typing.text = '';
-    // Fire-and-forget; commitTyping is invoked from tool changes /
-    // page changes / submit where awaiting would be awkward. The
-    // controller redraws once the stroke lands in storage.
-    commitStroke(stroke).catch((e) => console.error('commitTyping commit failed', e));
+    // Return the underlying commit promise so callers that need the
+    // stroke to land before reading it (submit / mark / page nav)
+    // can `await`. Callers that don't care (tool change, blur) can
+    // simply not await — the promise still resolves and any error
+    // is logged via the .catch fallback.
+    return commitStroke(stroke).catch((e) => {
+      console.error('commitTyping commit failed', e);
+    });
   }
 
   function onTypeInput() {
