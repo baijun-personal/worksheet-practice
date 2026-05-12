@@ -1407,12 +1407,15 @@ body.app-immersive #page-nav-indicator {
    small inline SVG; the second value in cursor: url(...) x y is
    the hotspot pixel (in image pixels, NOT viewBox units).
 
-   Size: 48×48 image pixels (viewBox stays 0 0 32 32 so the path
-   coords below didn't have to change). That's 1.5× the original
-   32×32 — clearly bigger than a Windows native cursor but still
-   well within every browser / OS cursor-image cap. Hotspots scaled
-   accordingly: viewBox (3,29) → image (5,44), centre (16,16) →
-   image (24,24), etc.
+   Sizes are tuned per tool to match how chunky each shape needs to
+   read at a glance. ViewBox stays 0 0 32 32 across the board so
+   path coords don't have to be rewritten when tweaking sizes —
+   only the width / height attributes and hotspot pixels change:
+     pen     48×48  hotspot 5 44
+     type    40×40  hotspot 20 20
+     circle  50×50  hotspot 25 25  (needs the extra room or the ring closes up)
+     tick    48×48  hotspot 24 24
+     eraser  48×48  hotspot 24 27
 
    Compatibility notes on the data URIs below:
    - MIME is `image/svg+xml` with no parameters. The earlier
@@ -1430,21 +1433,33 @@ body.app-immersive[data-active-tool="pen"] .ink-canvas {
   cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 32 32'%3E%3Cpath d='M3 29 L8 24 L22 10 L26 14 L12 28 Z' fill='white' stroke='black' stroke-width='1.5' stroke-linejoin='round'/%3E%3Cpath d='M22 10 L26 6 L30 10 L26 14 Z' fill='%231a4fc4' stroke='black' stroke-width='1.5' stroke-linejoin='round'/%3E%3Ccircle cx='3' cy='29' r='1.5' fill='%231a4fc4'/%3E%3C/svg%3E") 5 44, crosshair;
 }
 body.app-immersive[data-active-tool="type"] .ink-canvas {
-  /* Custom I-beam at 48×48 so it matches the larger size of the
-     other tool cursors. Visually a Windows-style I-beam: vertical
-     stem with short serifs top and bottom, black core with a white
-     halo for visibility on both light and dark backgrounds. The
-     `text` keyword fallback gives the OS-native I-beam if a
-     browser refuses the SVG. */
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 32 32'%3E%3Cline x1='16' y1='5' x2='16' y2='27' stroke='white' stroke-width='5'/%3E%3Cline x1='10' y1='5' x2='22' y2='5' stroke='white' stroke-width='4'/%3E%3Cline x1='10' y1='27' x2='22' y2='27' stroke='white' stroke-width='4'/%3E%3Cline x1='16' y1='5' x2='16' y2='27' stroke='black' stroke-width='2'/%3E%3Cline x1='12' y1='5' x2='20' y2='5' stroke='black' stroke-width='2'/%3E%3Cline x1='12' y1='27' x2='20' y2='27' stroke='black' stroke-width='2'/%3E%3C/svg%3E") 24 24, text;
+  /* Plain black I-beam at 40×40. No white halo around the stem —
+     the ink canvas always sits over a white worksheet, so black on
+     white reads cleanly without halo, and the previous halo was
+     producing fuzzy fringing around the serifs at this size.
+     `text` keyword fallback remains. Hotspot 20 20 = centre of
+     40×40 = midpoint of the I-beam stem. */
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 32 32'%3E%3Cline x1='16' y1='5' x2='16' y2='27' stroke='black' stroke-width='2'/%3E%3Cline x1='12' y1='5' x2='20' y2='5' stroke='black' stroke-width='2'/%3E%3Cline x1='12' y1='27' x2='20' y2='27' stroke='black' stroke-width='2'/%3E%3C/svg%3E") 20 20, text;
 }
 body.app-immersive[data-active-tool="circle"] .ink-canvas {
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='11' fill='none' stroke='%231a4fc4' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='1.2' fill='%231a4fc4'/%3E%3C/svg%3E") 24 24, crosshair;
+  /* 50×50 ring, no centre dot. The dot was a hotspot marker — the
+     ring alone reads as "circle" and the hotspot is implicitly the
+     geometric centre. */
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='50' height='50' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='11' fill='none' stroke='%231a4fc4' stroke-width='2'/%3E%3C/svg%3E") 25 25, crosshair;
 }
 body.app-immersive[data-active-tool="tick"] .ink-canvas {
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 32 32'%3E%3Cpath d='M7 17 L13 23 L25 9' fill='none' stroke='%231a4fc4' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='16' cy='16' r='1.2' fill='%23c0392b'/%3E%3C/svg%3E") 24 24, crosshair;
+  /* Centre dot removed (same rationale as circle). The check
+     shape alone communicates the tool. */
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 32 32'%3E%3Cpath d='M7 17 L13 23 L25 9' fill='none' stroke='%231a4fc4' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") 24 24, crosshair;
 }
 body.app-immersive[data-active-tool="eraser"] .ink-canvas {
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 32 32'%3E%3Cpath d='M6 22 L18 10 L26 18 L14 26 Z' fill='white' stroke='black' stroke-width='1.5' stroke-linejoin='round'/%3E%3Cline x1='12' y1='16' x2='20' y2='24' stroke='black' stroke-width='1.5' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='18' r='1.2' fill='%23c0392b'/%3E%3C/svg%3E") 24 27, not-allowed;
+  /* Classic pink-rubber eraser block. Tilted ~20° so it reads as
+     a 3D object rather than a flat pink rectangle. A small light-
+     grey "ferrule" sits on the leading end (the metal cap a
+     pencil-top eraser clips into) for extra eraser-ness — pure
+     pink rectangles read as gum / brick. The previous diamond-
+     with-cross-line looked more like a craft knife than an
+     eraser. Hotspot 24 27 ≈ contact point on the page. */
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 32 32'%3E%3Cg transform='rotate(-20 16 16)'%3E%3Crect x='4' y='13' width='24' height='10' rx='2' fill='%23f4a8a8' stroke='black' stroke-width='1.5'/%3E%3Crect x='4' y='13' width='6' height='10' fill='%23c8d4e0' stroke='black' stroke-width='1.5'/%3E%3C/g%3E%3C/svg%3E") 24 27, not-allowed;
 }
 
