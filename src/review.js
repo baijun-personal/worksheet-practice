@@ -146,16 +146,17 @@ export async function renderReviewPage(ctx) {
   // Don't render on no-answer-key papers (every row would be
   // unclear; stats would be misleading).
   const stats = Array.isArray(questions) ? buildPageStats(questions) : [];
-  if (stats.length > 0) {
+  // Show only THIS page's mark, not the whole-paper roll-up.
+  const currentStat = stats.find((s) => Number(s.page) === Number(pageNumber));
+  if (currentStat) {
     const wrap = document.createElement('div');
     wrap.className = 'page-stats-block';
     wrap.innerHTML = `
-      <div class="page-stats-title">Per page</div>
-      <div class="page-stats-row">${stats.map((s) => `
-        <div class="page-stats-pill${s.page === Number(pageNumber) ? ' current' : ''}">
-          <span class="page-stats-page">Page ${escapeHtml(s.page)}</span>
-          <span class="page-stats-score">${s.correct}/${s.total}</span>
-        </div>`).join('')}
+      <div class="page-stats-row">
+        <div class="page-stats-pill current">
+          <span class="page-stats-page">Page ${escapeHtml(currentStat.page)}</span>
+          <span class="page-stats-score">Marks ${currentStat.correct}/${currentStat.total}</span>
+        </div>
       </div>
     `;
     listHost.appendChild(wrap);
@@ -241,15 +242,15 @@ function shortQLabel(raw) {
   return m ? `Q${m[1]}` : s;
 }
 
-// Inline-preview rule: keep it strict for v1 — answer must be
-// non-empty, ≤8 chars, and contain no whitespace. Multi-part
-// records always read 'Tap' because no single short answer
-// represents the whole row. Loosen later if real-paper testing
-// shows the threshold is too tight.
+// Inline-preview rule: keep it strict — answer must be non-empty,
+// ≤5 chars, and contain no whitespace. The smaller rail buttons
+// don't have room for longer text without wrapping; anything past
+// the threshold collapses to "Tap" so the row stays compact and
+// the popup carries the full expected answer.
 function inlinePreview(record) {
   if (Array.isArray(record.parts) && record.parts.length > 0) return 'Tap';
   const ans = String(record.short_display_answer || '').trim();
-  if (!ans || ans.length > 8 || /\s/.test(ans)) return 'Tap';
+  if (!ans || ans.length > 5 || /\s/.test(ans)) return 'Tap';
   return ans;
 }
 

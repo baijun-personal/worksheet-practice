@@ -2093,7 +2093,47 @@ async function onStartPracticeImpl() {
 
 // --- Practice -------------------------------------------------------------
 
+// Pick the default writing tool based on the device's primary input.
+// Desktops with a real mouse + hover get 'type' — typing extracts
+// at effectively 100% accuracy and is the natural input on a
+// keyboard-equipped device. Tablets / phones / pen-primary devices
+// get 'pen' — drawing matches what the child does on paper.
+//
+// The (pointer: fine) and (hover: hover) combination is the
+// standard "is this a mouse-driven device" check: tablets without
+// a trackpad return pointer:coarse OR hover:none. iPads with the
+// Magic Keyboard trackpad register as pointer:fine + hover:hover —
+// in that case 'type' is still a reasonable default, and the child
+// can switch tools manually if they prefer the pen.
+function defaultToolForEnvironment() {
+  try {
+    if (typeof window === 'undefined' || !window.matchMedia) return 'pen';
+    const mouseLike = window.matchMedia('(pointer: fine) and (hover: hover)').matches;
+    return mouseLike ? 'type' : 'pen';
+  } catch {
+    return 'pen';
+  }
+}
+
+// Set state.tool from the environment heuristic and reflect that on
+// the toolbar by toggling the .active class onto the right button.
+// Called once at app init (before the user opens a worksheet) and
+// re-called when the practice stage is entered, so the choice is
+// applied even on the first-ever load before any toolbar interaction.
+function applyDefaultTool() {
+  const tool = defaultToolForEnvironment();
+  state.tool = tool;
+  for (const b of document.querySelectorAll('.tool-btn')) {
+    b.classList.toggle('active', b.dataset.tool === tool);
+  }
+}
+
 function bindPracticeUI() {
+  // Pick a sensible default tool for this device BEFORE wiring any
+  // listeners — the toolbar HTML is parsed by now so the .active
+  // class swap is safe.
+  applyDefaultTool();
+
   for (const btn of document.querySelectorAll('.tool-btn')) {
     btn.addEventListener('click', () => {
       // Switching away from Type while a typing session is active
@@ -2383,16 +2423,20 @@ function renderPracticeReviewRail(rail, isFrozen) {
 
   // Per-page stats block — same component as the final-report rail.
   const stats = buildPageStats(questions);
-  if (stats.length > 0) {
+  // Show only THIS page's mark — not the whole-paper roll-up. The
+  // child is looking at one page at a time in practice mode; the
+  // cumulative report is one page-nav-prev away and the across-pages
+  // view lives in the final report after the last mark.
+  const currentStat = stats.find((s) => s.page === Number(state.currentPage));
+  if (currentStat) {
     const wrap = document.createElement('div');
     wrap.className = 'page-stats-block';
     wrap.innerHTML = `
-      <div class="page-stats-title">Per page</div>
-      <div class="page-stats-row">${stats.map((s) => `
-        <div class="page-stats-pill${s.page === Number(state.currentPage) ? ' current' : ''}">
-          <span class="page-stats-page">Page ${s.page}</span>
-          <span class="page-stats-score">${s.correct}/${s.total}</span>
-        </div>`).join('')}
+      <div class="page-stats-row">
+        <div class="page-stats-pill current">
+          <span class="page-stats-page">Page ${currentStat.page}</span>
+          <span class="page-stats-score">Marks ${currentStat.correct}/${currentStat.total}</span>
+        </div>
       </div>`;
     rail.appendChild(wrap);
   }
@@ -3520,12 +3564,16 @@ async function onMarkUpToHere() {
 
     if (finishedPaper) {
       // Last question page just marked — show the full report. The
-      // child can browse, open Review Mode, etc.
+      // child can browse, open Review Mode, etc. Exit immersive
+      // first: the report card layout needs the toolbar / scroll
+      // affordances back, and the dark fullscreen surround is for
+      // practising, not reading the report.
       setPracticeMarkStatus('All pages marked.', 'ok');
       // Re-enable the buttons so the report-stage Back button etc.
       // work normally if the user returns to practice later.
       if (markBtn) { markBtn.disabled = false; markBtn.textContent = prevBtnLabel; }
       setToolButtonsDisabled(false);
+      exitFullscreenPractice();
       showReport(merged);
       // Status pill is on the practice stage which is now hidden; it
       // re-appears next time practice is shown but we clear it then.
