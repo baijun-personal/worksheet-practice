@@ -224,14 +224,31 @@ function drawCircleStroke(ctx, stroke, { widthPx }) {
   ctx.restore();
 }
 
-// TICK — two-segment checkmark inside a fixed bounding box anchored
-// at (xPt, yPt). Path: bottom-left dip → mid-bottom corner → top-right.
+// TICK — two-segment checkmark inside a fixed bounding box.
+// Path: bottom-left dip → mid-bottom corner → top-right.
+//
+// Render size always tracks the CURRENT DEFAULT_TICK_SIZE_PT,
+// even for ticks whose stored `sizePt` was from an earlier
+// default. We recover the original tap centre (xPt + storedSize/2),
+// then re-derive the top-left from the current default. Without
+// this, ticks placed when the default was 48 pt would stay 48 pt
+// on screen even after we dial the default down — and there's no
+// per-tick size UI for the user, so "all ticks should be one
+// size" is the right invariant.
 function drawTickStroke(ctx, stroke, { widthPx }) {
   const pageWidthPts = stroke.pageWidthPts || 612;
   const scale = widthPx / pageWidthPts;
-  const xPx = (stroke.xPt || 0) * scale;
-  const yPx = (stroke.yPt || 0) * scale;
-  const sPx = (stroke.sizePt || DEFAULT_TICK_SIZE_PT) * scale;
+  // Recover the centre of the bbox the stroke was originally
+  // placed with. Old strokes store their top-left in xPt/yPt
+  // computed from the click minus half the THEN-current size.
+  const storedSize = stroke.sizePt || DEFAULT_TICK_SIZE_PT;
+  const cxPt = (stroke.xPt || 0) + storedSize / 2;
+  const cyPt = (stroke.yPt || 0) + storedSize / 2;
+  // Re-derive top-left and bbox from the CURRENT default.
+  const sPt = DEFAULT_TICK_SIZE_PT;
+  const xPx = (cxPt - sPt / 2) * scale;
+  const yPx = (cyPt - sPt / 2) * scale;
+  const sPx = sPt * scale;
   const lwPx = (stroke.widthPt || DEFAULT_PEN_WIDTH_PT + 0.5) * scale;
   ctx.save();
   ctx.strokeStyle = stroke.color || PEN_COLOR;
@@ -320,15 +337,22 @@ function hitTestCircleStroke(stroke, p, _rx, _ry) {
 }
 
 // TICK hit test — bbox extended by the eraser tolerance. PDF-point
-// coordinates throughout.
+// coordinates throughout. The hit box mirrors the recentred
+// rendering in drawTickStroke: we use the CURRENT default size
+// (not the stored one) and recompute the top-left from the
+// original tap centre, so erasing always targets exactly what
+// the user sees.
 function hitTestTickStroke(stroke, p, _rx, _ry) {
   const pageWidthPts = stroke.pageWidthPts || 612;
   const pageHeightPts = stroke.pageHeightPts || 792;
   const pXPt = p.xNorm * pageWidthPts;
   const pYPt = p.yNorm * pageHeightPts;
-  const xPt = stroke.xPt || 0;
-  const yPt = stroke.yPt || 0;
-  const sPt = stroke.sizePt || DEFAULT_TICK_SIZE_PT;
+  const storedSize = stroke.sizePt || DEFAULT_TICK_SIZE_PT;
+  const cxPt = (stroke.xPt || 0) + storedSize / 2;
+  const cyPt = (stroke.yPt || 0) + storedSize / 2;
+  const sPt = DEFAULT_TICK_SIZE_PT;
+  const xPt = cxPt - sPt / 2;
+  const yPt = cyPt - sPt / 2;
   return (
     pXPt >= xPt - ERASER_HIT_RADIUS_PT &&
     pXPt <= xPt + sPt + ERASER_HIT_RADIUS_PT &&
