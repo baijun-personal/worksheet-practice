@@ -348,14 +348,22 @@ function buildDisplayQuestion(a, paperHasSections = false) {
   // question text ("In paragraph 3, what two things..."), which is
   // useless as a label. We only fall back to display_question if it
   // exists AND looks short and label-like (no spaces > a couple).
+  //
+  // Section prefix policy:
+  //   - When paperHasSections=true (a section reset was detected) the
+  //     label MUST disambiguate between e.g. Section A Q1 and Section
+  //     B Q1, so we emit "S{n}Q{num}".
+  //   - When paperHasSections=false the printed section name is
+  //     redundant — the report table already shows section in its own
+  //     column and the previous "Section B: Short Answer Questions
+  //     Q9a" was 39+ chars of noise. Just "Q{num}".
   const q = a.question_number ? String(a.question_number).trim() : '';
-  const s = a.section ? String(a.section).trim() : '';
   if (q) {
     const qLabel = /^Q/i.test(q) ? q : `Q${q}`;
     if (paperHasSections && a._syntheticSection != null) {
       return `S${a._syntheticSection}${qLabel}`;
     }
-    return s ? `${s} ${qLabel}` : qLabel;
+    return qLabel;
   }
   if (a.display_question) {
     const dq = String(a.display_question).trim();
