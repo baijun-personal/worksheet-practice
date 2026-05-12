@@ -2093,23 +2093,31 @@ async function onStartPracticeImpl() {
 
 // --- Practice -------------------------------------------------------------
 
-// Pick the default writing tool based on the device's primary input.
-// Desktops with a real mouse + hover get 'type' — typing extracts
-// at effectively 100% accuracy and is the natural input on a
-// keyboard-equipped device. Tablets / phones / pen-primary devices
-// get 'pen' — drawing matches what the child does on paper.
+// Pick the default writing tool based on what input devices the
+// browser advertises. Desktops with a real mouse + hover get
+// 'type' — typing extracts at effectively 100% accuracy and is the
+// natural input on a keyboard-equipped device. Tablets / phones /
+// pen-primary devices get 'pen' — drawing matches what the child
+// does on paper.
 //
-// The (pointer: fine) and (hover: hover) combination is the
-// standard "is this a mouse-driven device" check: tablets without
-// a trackpad return pointer:coarse OR hover:none. iPads with the
-// Magic Keyboard trackpad register as pointer:fine + hover:hover —
-// in that case 'type' is still a reasonable default, and the child
-// can switch tools manually if they prefer the pen.
+// We use the MQ4 `(any-hover: hover)` query, NOT `(hover: hover)`.
+// The bare `hover` form tests the PRIMARY pointing device, which on
+// touchscreen Windows laptops, ChromeBooks, Surface devices, etc. is
+// often reported as "coarse / no-hover" by Chrome even when a real
+// mouse is plugged in. The `any-hover` variant is true whenever
+// AT LEAST ONE input device can hover — covers desktops, laptops,
+// touchscreen-plus-mouse, and iPads with the Magic Keyboard trackpad.
+// It's false on phones, finger-only tablets, and stylus-only setups
+// (Apple Pencil reports "fine pointer" but not "hover").
+//
+// Failsafe: if matchMedia is missing or throws, fall back to 'pen' —
+// the original default, safer for touch devices than mistakenly
+// summoning the on-screen keyboard.
 function defaultToolForEnvironment() {
   try {
     if (typeof window === 'undefined' || !window.matchMedia) return 'pen';
-    const mouseLike = window.matchMedia('(pointer: fine) and (hover: hover)').matches;
-    return mouseLike ? 'type' : 'pen';
+    if (window.matchMedia('(any-hover: hover)').matches) return 'type';
+    return 'pen';
   } catch {
     return 'pen';
   }
@@ -2126,6 +2134,15 @@ function applyDefaultTool() {
   for (const b of document.querySelectorAll('.tool-btn')) {
     b.classList.toggle('active', b.dataset.tool === tool);
   }
+  // One-line diagnostic so a parent debugging "why is pen active
+  // on my desktop?" can confirm what the heuristic saw. Hard-refresh
+  // and check DevTools Console.
+  try {
+    const anyHover = window.matchMedia
+      ? window.matchMedia('(any-hover: hover)').matches
+      : 'n/a';
+    console.info(`[default-tool] picked '${tool}' (any-hover: hover = ${anyHover})`);
+  } catch {}
 }
 
 function bindPracticeUI() {
