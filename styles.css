@@ -1272,6 +1272,20 @@ body.app-immersive #page-stage {
      content can scroll past them. */
   padding-right: 36px;
   padding-bottom: calc(80px + env(safe-area-inset-bottom));
+  /* Hide the native scrollbar in immersive mode. The custom
+     .scroll-rail-v already provides a finger-sized draggable thumb
+     that mirrors stage.scrollTop, so on Windows Chrome (or any
+     desktop browser that paints a native scrollbar) it would show
+     up alongside the custom rail at the right edge — two
+     scrollbars stacked. Suppress the native one; wheel + custom
+     rail still scroll the content normally. */
+  scrollbar-width: none;            /* Firefox */
+  -ms-overflow-style: none;         /* legacy IE / Edge */
+}
+body.app-immersive #page-stage::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;                    /* Chrome / Safari / new Edge */
 }
 
 /* Vertical rail: position:fixed against the visible viewport so iPad
