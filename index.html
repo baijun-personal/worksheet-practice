@@ -397,6 +397,69 @@
                     data-target="custom-explanation-variant-give-hint" data-builtin="explanationVariantGiveHint">Reset to default</button>
           </div>
         </details>
+
+        <details style="margin-top:12px; border:1px solid var(--border); border-radius:6px; padding:8px 12px">
+          <summary><strong>Calculator — Basic</strong> <span class="muted small">(practice-mode tool)</span></summary>
+          <p class="muted small">
+            The Calculator tool lets the child select a math expression on the
+            worksheet and get the answer. It's gated by the Practice type chosen
+            above and only appears in the toolbar on practice attempts.
+          </p>
+          <label class="checkbox">
+            <input type="checkbox" id="calc-enabled-assisted" />
+            Enable Calculator in Assisted Practice
+          </label>
+          <label class="checkbox">
+            <input type="checkbox" id="calc-enabled-exam" />
+            Enable Calculator in Exam Practice
+          </label>
+          <label>Calculator model
+            <select id="calc-model"></select>
+          </label>
+          <label>Usage cap mode
+            <select id="calc-cap-mode">
+              <option value="per_page">Per question page</option>
+              <option value="per_attempt">Per paper (total)</option>
+            </select>
+          </label>
+          <label>Cap value
+            <input id="calc-cap-value" type="number" min="0" max="100" step="1" />
+          </label>
+        </details>
+
+        <details style="margin-top:12px; border:1px solid var(--border); border-radius:6px; padding:8px 12px">
+          <summary><strong>Calculator — Advanced</strong></summary>
+          <p class="muted small">
+            Default parse prompt + allowed-type list + selection-area limits.
+            Linear equation types are off by default; enable them after a real
+            paper has confirmed the arithmetic flow.
+          </p>
+          <div class="prompt-field">
+            <label for="custom-calc-prompt">Parse prompt</label>
+            <textarea id="custom-calc-prompt" rows="8" class="prompt-textarea"></textarea>
+            <button type="button" class="link-btn prompt-reset"
+                    data-target="custom-calc-prompt" data-builtin="calcParse">Reset to default</button>
+          </div>
+          <label>Allowed calculation types</label>
+          <label class="checkbox">
+            <input type="checkbox" id="calc-allow-arithmetic" />
+            Arithmetic (+ − × ÷)
+          </label>
+          <label class="checkbox">
+            <input type="checkbox" id="calc-allow-linear-1var" />
+            Linear equation (one variable) — not yet implemented
+          </label>
+          <label class="checkbox">
+            <input type="checkbox" id="calc-allow-linear-2var" />
+            Linear equations (two variables) — not yet implemented
+          </label>
+          <label>Selection minimum (% of page area)
+            <input id="calc-min-area-pct" type="number" min="0.1" max="5" step="0.1" />
+          </label>
+          <label>Selection maximum (% of page area)
+            <input id="calc-max-area-pct" type="number" min="2" max="50" step="0.5" />
+          </label>
+        </details>
       </details>
 
       <details class="card">

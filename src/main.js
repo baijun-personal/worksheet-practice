@@ -793,6 +793,96 @@ function bindSetupForm() {
       state.settings = saveSettings({ practiceModeType: v });
     });
   }
+  // Calculator settings (Stage 9 — Basic + Advanced split). Prefill
+  // from saved state, persist on change. Allowed types are stored
+  // as a {type → boolean} map so future calc types just need a new
+  // entry without reshuffling settings keys.
+  setChecked('calc-enabled-assisted', !!state.settings.calculateEnabledInAssistedPractice);
+  setChecked('calc-enabled-exam',     !!state.settings.calculateEnabledInExamPractice);
+  setVal('calc-model',     state.settings.calcModel || 'gpt-5.4-mini');
+  setVal('calc-cap-mode',  state.settings.calcCapMode || 'per_page');
+  setVal('calc-cap-value', String(state.settings.calcCapValue ?? 1));
+  setVal('custom-calc-prompt', state.settings.customCalcPrompt || DEFAULT_CALC_PARSE_PROMPT);
+  const allowed = state.settings.calcAllowedTypes || {};
+  setChecked('calc-allow-arithmetic',  allowed.arithmetic !== false);
+  setChecked('calc-allow-linear-1var', !!allowed.linear_1var);
+  setChecked('calc-allow-linear-2var', !!allowed.linear_2var);
+  setVal('calc-min-area-pct', String((state.settings.calcMinAreaFraction ?? 0.005) * 100));
+  setVal('calc-max-area-pct', String((state.settings.calcMaxAreaFraction ?? 0.10) * 100));
+  // Populate the Calculator model select with the same preset list
+  // used elsewhere — keeps it consistent with the Marking model.
+  const calcModelSel = $('calc-model');
+  if (calcModelSel) {
+    const current = state.settings.calcModel || 'gpt-5.4-mini';
+    calcModelSel.innerHTML = '';
+    for (const p of MODEL_PRESETS) {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.label;
+      if (p.id === current) opt.selected = true;
+      calcModelSel.appendChild(opt);
+    }
+  }
+  // Persistence — change listeners for each Calculator field.
+  $('calc-enabled-assisted')?.addEventListener('change', () => {
+    state.settings = saveSettings({ calculateEnabledInAssistedPractice: $('calc-enabled-assisted').checked });
+  });
+  $('calc-enabled-exam')?.addEventListener('change', () => {
+    state.settings = saveSettings({ calculateEnabledInExamPractice: $('calc-enabled-exam').checked });
+  });
+  $('calc-model')?.addEventListener('change', () => {
+    state.settings = saveSettings({ calcModel: $('calc-model').value || 'gpt-5.4-mini' });
+  });
+  $('calc-cap-mode')?.addEventListener('change', () => {
+    state.settings = saveSettings({ calcCapMode: $('calc-cap-mode').value || 'per_page' });
+  });
+  $('calc-cap-value')?.addEventListener('change', () => {
+    const v = Math.max(0, parseInt($('calc-cap-value').value, 10) || 0);
+    state.settings = saveSettings({ calcCapValue: v });
+  });
+  $('custom-calc-prompt')?.addEventListener('change', () => {
+    state.settings = saveSettings({
+      customCalcPrompt: normalizeCustomPrompt($('custom-calc-prompt').value, DEFAULT_CALC_PARSE_PROMPT),
+    });
+  });
+  $('custom-calc-prompt')?.addEventListener('input', () => {
+    state.settings = saveSettings({
+      customCalcPrompt: normalizeCustomPrompt($('custom-calc-prompt').value, DEFAULT_CALC_PARSE_PROMPT),
+    });
+  });
+  for (const id of ['calc-allow-arithmetic', 'calc-allow-linear-1var', 'calc-allow-linear-2var']) {
+    $(id)?.addEventListener('change', () => {
+      state.settings = saveSettings({
+        calcAllowedTypes: {
+          arithmetic:  $('calc-allow-arithmetic').checked,
+          linear_1var: $('calc-allow-linear-1var').checked,
+          linear_2var: $('calc-allow-linear-2var').checked,
+        },
+      });
+    });
+  }
+  for (const id of ['calc-min-area-pct', 'calc-max-area-pct']) {
+    $(id)?.addEventListener('change', () => {
+      const minPct = Math.max(0.01, parseFloat($('calc-min-area-pct').value) || 0.5);
+      const maxPct = Math.max(minPct, parseFloat($('calc-max-area-pct').value) || 10);
+      state.settings = saveSettings({
+        calcMinAreaFraction: minPct / 100,
+        calcMaxAreaFraction: maxPct / 100,
+      });
+    });
+  }
+  // Reset-to-default for the parse-prompt textarea — same pattern
+  // as the other prompt reset buttons in the Advanced section.
+  for (const btn of document.querySelectorAll('.prompt-reset[data-builtin="calcParse"]')) {
+    btn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      const ta = $('custom-calc-prompt');
+      if (ta) {
+        ta.value = DEFAULT_CALC_PARSE_PROMPT;
+        ta.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+  }
   // Custom prompt overrides — pre-fill with the built-in prompt
   // text so reviewers can see what's being sent without grepping
   // the source. Saved overrides win when present; empty falls
