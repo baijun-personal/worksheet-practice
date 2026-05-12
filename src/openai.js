@@ -582,6 +582,74 @@ Return JSON only:
   ]
 }`;
 
+// --- Calculator parse (Stage 5) ----------------------------------------
+// Vision-only parse of a small cropped region containing one math
+// expression. The model NEVER computes the answer — local
+// JavaScript (src/calc.js) does that. The model's job is to read
+// the printed/handwritten math and return a structured JSON shape
+// that the validator can sanity-check.
+
+const DEFAULT_CALC_PARSE_PROMPT = `You are reading a small image showing one math expression.
+Identify the math and return a JSON object describing it.
+DO NOT compute the answer. Return JSON only, no prose.
+
+Allowed types and their schemas:
+
+{ "type": "arithmetic",
+  "op": "+|-|*|/",
+  "operands": [number, number] }
+  - Single arithmetic expression with two numeric operands.
+  - Operands may be integers or decimals.
+  - Use "/" for division regardless of whether the printed form is "÷" or "/".
+
+{ "type": "out_of_scope", "reason": "<short reason>" }
+  - Math that doesn't fit any allowed type (e.g. quadratic, geometry, word problem).
+
+{ "type": "unreadable", "reason": "<short reason>" }
+  - Image too blurry / mixed / sparse to parse confidently.
+
+Examples:
+
+Image shows "48 × 6 =" →
+{"type":"arithmetic","op":"*","operands":[48,6]}
+
+Image shows "24 ÷ 10" →
+{"type":"arithmetic","op":"/","operands":[24,10]}
+
+Image shows "2.4 ÷ 0.6" →
+{"type":"arithmetic","op":"/","operands":[2.4,0.6]}
+
+Image shows "x² + 4x = 5" →
+{"type":"out_of_scope","reason":"Quadratic equation"}
+
+Return JSON object only.`;
+
+export async function parseMathRegion({
+  apiKey,
+  model,
+  imageDataUrl,
+  signal,
+  apiMode,
+  proxyEndpoint,
+  proxyToken,
+  openaiEndpoint,
+  customPrompt,           // override DEFAULT_CALC_PARSE_PROMPT when non-empty
+}) {
+  const content = [
+    { type: 'text', text: 'Read this math expression and return JSON only.' },
+    { type: 'image_url', image_url: { url: imageDataUrl, detail: 'low' } },
+  ];
+  return chatJson({
+    apiKey, model,
+    system: pickPrompt(customPrompt, DEFAULT_CALC_PARSE_PROMPT),
+    content, signal, apiMode, proxyEndpoint, proxyToken, openaiEndpoint,
+  });
+}
+
+// Export the default prompt so the Settings UI can pre-fill the
+// custom-prompt textarea (mirrors the BUILTIN_PROMPTS pattern).
+export { DEFAULT_CALC_PARSE_PROMPT };
+
 export async function detectPages({
   apiKey,
   model,

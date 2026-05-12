@@ -14,11 +14,12 @@ import {
 } from './paper.js';
 import { loadPdfFromBlob, renderPageToCanvas } from './pdfRender.js';
 import { attachInkController, redrawAll } from './draw.js';
-import { flattenQuestionPage, renderStrokesOnlyPage, renderAnswerPage, colorContentRatio } from './flatten.js';
+import { flattenQuestionPage, renderStrokesOnlyPage, renderAnswerPage, colorContentRatio, flattenQuestionPageRegion } from './flatten.js';
+import { validateParsedCalc, computeArithmetic, stringifyParsedInput } from './calc.js';
 import {
   extractStudentAnswers, extractAnswerKey, markPairs, compareVisualPair,
   requestExplanation, MODEL_PRESETS, DEFAULT_MODEL, presetForModel,
-  BUILTIN_PROMPTS,
+  BUILTIN_PROMPTS, parseMathRegion, DEFAULT_CALC_PARSE_PROMPT,
 } from './openai.js';
 import { matchExtractions, buildFinalReport, partitionPairsByModality, normalizeQNumber, pairCacheKey } from './compare.js';
 import { PROMPT_HASHES, shortHash } from './openai.js';
@@ -2948,12 +2949,181 @@ async function onCalcSelect(rectPt) {
   await runCalcPipeline(popup);
 }
 
-// Stage 5 fills this in. Stage 4 stub keeps the popup in loading
-// state until the user explicitly dismisses it. Defined here so
-// onCalcSelect compiles cleanly; replaced below in Stage 5.
-async function runCalcPipeline(_popup) {
-  // Placeholder — Stage 5 implements the crop / parse / compute
-  // flow. Until then the popup stays in 'loading' state.
+// Run the Calculator pipeline for a popup that's already been
+// rendered in the 'loading' state. Crops the page to the rectangle,
+// calls the vision parser, validates the JSON, computes locally,
+// and updates the popup + persistence. CALCULATION cost task is
+// written to attempt.cost_tasks synchronously before the popup
+// transitions out of loading — a reload mid-call preserves what
+// was billed (Stage 6).
+async function runCalcPipeline(popup) {
+  if (!state.attempt) return;
+  const settings = state.settings || {};
+  const page = popup.page;
+  const pdfPage = popup.pdfPage;
+  let usageOutcome = 'error';
+  let parsedType = null;
+  let taskId = null;
+
+  try {
+    // Auth preflight — Calculator uses the same OpenAI transport as
+    // the marking pipeline. Fail closed if the parent hasn't set a
+    // key (or proxy creds in proxy mode).
+    const apiMode = settings.apiMode || 'direct';
+    if (apiMode === 'proxy') {
+      if (!settings.proxyEndpoint || !settings.proxyToken) {
+        throw new Error('Proxy URL / token missing. Set in Setup → Advanced.');
+      }
+    } else if (!settings.openaiKey) {
+      throw new Error('No OpenAI API key set. Add it in Setup → Advanced.');
+    }
+
+    // Crop the region to a PNG data URL. Same DPI as the marking
+    // submission renders — no upscale per the plan.
+    const dpi = settings.renderDpi || 150;
+    const strokes = await getStrokesForPage(state.attempt.id, pdfPage);
+    const imageDataUrl = await flattenQuestionPageRegion(
+      state.pdf, pdfPage, strokes, dpi, popup.rectPt
+    );
+
+    // Parse via the vision model. The model returns structured JSON;
+    // local code validates and computes.
+    const calcModel = settings.calcModel || 'gpt-5.4-mini';
+    const transport = {
+      apiKey: settings.openaiKey,
+      apiMode,
+      proxyEndpoint: settings.proxyEndpoint,
+      proxyToken: settings.proxyToken,
+      openaiEndpoint: settings.openaiEndpoint,
+    };
+    const res = await parseMathRegion({
+      ...transport,
+      model: calcModel,
+      imageDataUrl,
+      customPrompt: settings.customCalcPrompt,
+    });
+
+    // Stage 6: persist the cost task synchronously. taskId is
+    // generated here and stored on calc_usage so a future report
+    // section can link a usage record to its cost row.
+    const task = buildTaskRecord({
+      task_type: TASK_TYPES.CALCULATION,
+      model: calcModel,
+      label: `Calculator — page ${page}`,
+      pages: [pdfPage],
+      usage: res.usage,
+      settings,
+    });
+    taskId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    task.id = taskId;
+    task.ts = Date.now();
+    state.attempt.cost_tasks = state.attempt.cost_tasks || [];
+    state.attempt.cost_tasks.push(task);
+    try { await putAttempt(state.attempt); }
+    catch (e) { console.error('cost_tasks persist failed', e); }
+
+    // Validate the parsed shape before computing — model output is
+    // untrusted JSON.
+    const validation = validateParsedCalc(res.parsed);
+    if (!validation.ok) {
+      updateCalcPopup(popup, {
+        state: 'error',
+        input: '',
+        message: validation.reason || 'Calculator response was unrecognised.',
+      });
+      usageOutcome = 'error';
+      parsedType = res.parsed?.type || null;
+      return;
+    }
+    if (res.parsed.type === 'out_of_scope') {
+      updateCalcPopup(popup, {
+        state: 'error',
+        input: '',
+        message: `Out of scope: ${res.parsed.reason || 'unsupported type.'}`,
+      });
+      usageOutcome = 'out_of_scope';
+      parsedType = 'out_of_scope';
+      return;
+    }
+    if (res.parsed.type === 'unreadable') {
+      updateCalcPopup(popup, {
+        state: 'error',
+        input: '',
+        message: `Couldn't read that. Try selecting more tightly.`,
+      });
+      usageOutcome = 'error';
+      parsedType = 'unreadable';
+      return;
+    }
+
+    // Allow-list check — the parent can disable types they don't
+    // want exposed. arithmetic is on by default; linear_1var and
+    // linear_2var ship in stages 10/11.
+    const allowed = settings.calcAllowedTypes || { arithmetic: true };
+    if (!allowed[res.parsed.type]) {
+      updateCalcPopup(popup, {
+        state: 'error',
+        input: stringifyParsedInput(res.parsed),
+        message: `Calculator isn't set up to handle this type.`,
+      });
+      usageOutcome = 'out_of_scope';
+      parsedType = res.parsed.type;
+      return;
+    }
+
+    let compute;
+    if (res.parsed.type === 'arithmetic') {
+      compute = computeArithmetic(res.parsed);
+    } else {
+      compute = { ok: false, reason: 'Type not implemented yet.' };
+    }
+    if (!compute.ok) {
+      updateCalcPopup(popup, {
+        state: 'error',
+        input: stringifyParsedInput(res.parsed),
+        message: compute.reason || 'Calculation failed.',
+      });
+      usageOutcome = 'error';
+      parsedType = res.parsed.type;
+      return;
+    }
+
+    updateCalcPopup(popup, {
+      state: 'success',
+      input: stringifyParsedInput(res.parsed),
+      result: compute,
+    });
+    usageOutcome = 'success';
+    parsedType = res.parsed.type;
+  } catch (e) {
+    console.error('Calculator pipeline failed', e);
+    updateCalcPopup(popup, {
+      state: 'error',
+      input: '',
+      message: e?.message || String(e),
+    });
+    usageOutcome = 'error';
+  } finally {
+    recordCalcUsage({
+      page, pdfPage, apiCallMade: !!taskId,
+      outcome: usageOutcome, parsedType, taskId,
+    });
+  }
+}
+
+// Update an in-flight popup to a new state, mirror the change into
+// attempt.calc_popups for persistence, and re-render the DOM
+// element. Centralises the popup state machine so the pipeline
+// branches above stay flat.
+function updateCalcPopup(popup, patch) {
+  Object.assign(popup, patch);
+  // Sync the persisted copy.
+  if (state.attempt?.calc_popups) {
+    const idx = state.attempt.calc_popups.findIndex((p) => p.id === popup.id);
+    if (idx >= 0) state.attempt.calc_popups[idx] = popup;
+    putAttempt(state.attempt).catch((e) => console.error('updateCalcPopup persist failed', e));
+  }
+  renderCalcPopup(popup);
 }
 
 // Append a usage record to attempt.calc_usage and persist

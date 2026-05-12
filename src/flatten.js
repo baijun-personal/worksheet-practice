@@ -21,6 +21,38 @@ export async function renderAnswerPage(pdf, pageNumber, dpi) {
   return r.canvas.toDataURL('image/jpeg', 0.85);
 }
 
+// Crop a region of the flattened (PDF + strokes) page to a PNG data
+// URL. Used by the Calculator tool: the rectangle is the student's
+// drag selection in PDF points, and we crop the rendered canvas to
+// that region before sending to the parse-only vision call.
+//
+// Same DPI as the rest of the pipeline — no upscale. PNG (not JPEG)
+// because the small region contains text the model needs to read
+// cleanly; JPEG artefacts on small numerals hurt parse reliability
+// more than the size saving is worth.
+export async function flattenQuestionPageRegion(pdf, pageNumber, strokes, dpi, regionPt) {
+  const r = await renderPageOffscreen(pdf, pageNumber, dpi);
+  const size = {
+    pageWidthPts: r.pageWidthPts,
+    pageHeightPts: r.pageHeightPts,
+    widthPx: r.widthPx,
+    heightPx: r.heightPx,
+  };
+  for (const s of (strokes || [])) drawStroke(r.ctx, s, size);
+  // PDF-points to pixels.
+  const scale = r.widthPx / r.pageWidthPts;
+  const sx = Math.max(0, Math.floor((regionPt.xPt || 0) * scale));
+  const sy = Math.max(0, Math.floor((regionPt.yPt || 0) * scale));
+  const sw = Math.max(1, Math.floor((regionPt.widthPt || 0) * scale));
+  const sh = Math.max(1, Math.floor((regionPt.heightPt || 0) * scale));
+  const cropCanvas = document.createElement('canvas');
+  cropCanvas.width = sw;
+  cropCanvas.height = sh;
+  const cctx = cropCanvas.getContext('2d');
+  cctx.drawImage(r.canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+  return cropCanvas.toDataURL('image/png');
+}
+
 // Render ONLY the student's strokes on a white canvas at the same
 // dimensions as the rendered PDF page. Used by the extraction call
 // alongside the printed-page image: the model uses the printed
