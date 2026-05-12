@@ -2655,6 +2655,16 @@ function applyPracticeStateForPage() {
   renderPracticeReviewRail(rail, isFrozen);
 }
 
+// When the rail is minimised, the whole element is clickable (in
+// addition to the explicit toggle button) so a tablet tap on the
+// chip area expands it. Defined as a named function so we can
+// attach with {once:true} and trust it doesn't accumulate.
+function expandFromMinimised() {
+  state.settings = saveSettings({ practiceReviewRailMinimized: false });
+  const rail = $('practice-review-rail');
+  if (rail) renderPracticeReviewRail(rail, true);
+}
+
 function renderPracticeReviewRail(rail, isFrozen) {
   if (!rail) return;
   if (!isFrozen) {
@@ -2683,6 +2693,8 @@ function renderPracticeReviewRail(rail, isFrozen) {
   state.reportJson = report;
 
   rail.innerHTML = '';
+  const minimized = !!state.settings.practiceReviewRailMinimized;
+  rail.classList.toggle('is-minimized', minimized);
 
   // Did this report actually have an answer key? On no-key papers
   // every row's expected_answer is empty, so "no mistakes" would be
@@ -2697,15 +2709,46 @@ function renderPracticeReviewRail(rail, isFrozen) {
       (q) => q.expected_answer && String(q.expected_answer).trim().length > 0
     );
 
-  // Per-page stats block — same component as the final-report rail.
-  // Skip on no-answer-key papers: the denominator would be misleading
-  // (every row would be unclear-by-construction).
+  // Per-page stats — also feeds the minimised chip's content.
   const stats = buildPageStats(questions);
-  // Show only THIS page's mark — not the whole-paper roll-up. The
-  // child is looking at one page at a time in practice mode; the
-  // cumulative report is one page-nav-prev away and the across-pages
-  // view lives in the final report after the last mark.
   const currentStat = stats.find((s) => s.page === Number(state.currentPage));
+
+  // Header: minimised chip on the left ("P1 8/10 ▸") OR a stats
+  // pill in the expanded view + a toggle button on the right.
+  const header = document.createElement('div');
+  header.className = 'practice-review-rail-header';
+  const chip = document.createElement('span');
+  chip.className = 'practice-review-rail-chip';
+  if (currentStat && hasAnyKey) {
+    chip.textContent = `P${currentStat.page} ${currentStat.correct}/${currentStat.total} ▸`;
+  } else {
+    chip.textContent = `P${state.currentPage} ▸`;
+  }
+  header.appendChild(chip);
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'practice-review-rail-toggle';
+  toggle.setAttribute('aria-label', minimized ? 'Expand review panel' : 'Minimise review panel');
+  toggle.textContent = minimized ? '+' : '–';
+  toggle.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    state.settings = saveSettings({
+      practiceReviewRailMinimized: !state.settings.practiceReviewRailMinimized,
+    });
+    renderPracticeReviewRail(rail, true);
+  });
+  header.appendChild(toggle);
+  rail.appendChild(header);
+
+  // Clicking anywhere on the minimised rail expands it (the chip
+  // text + the rail body acts as one big tap target for tablet).
+  if (minimized) {
+    rail.addEventListener('click', expandFromMinimised, { once: true });
+    rail.hidden = false;
+    return;
+  }
+
+  // Per-page stats block — skip on no-answer-key papers.
   if (currentStat && hasAnyKey) {
     const wrap = document.createElement('div');
     wrap.className = 'page-stats-block';
@@ -2723,7 +2766,7 @@ function renderPracticeReviewRail(rail, isFrozen) {
   const rows = buildPageListRows(reviewRecords, state.currentPage);
   if (rows.length === 0) {
     const empty = document.createElement('div');
-    empty.className = 'muted small';
+    empty.className = 'muted small practice-review-rail-empty';
     empty.style.marginTop = '6px';
     empty.textContent = hasAnyKey
       ? 'No mistakes on this page — nice work!'

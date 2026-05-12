@@ -1126,22 +1126,103 @@ body.app-immersive #page-indicator { display: none; }
 /* The frame wraps #page-stage so we can absolutely-position the rails and
    the bottom nav over it without disturbing the existing flex centering
    of the worksheet inside #page-stage. */
-/* Practice-mode review rail. Lives INSIDE #page-stage so it joins
-   the page-wrap's centring group — rail directly to the left of the
-   paper, both centred as a pair against the dark page-stage backdrop.
-   No own background or border — the rail blends into the dark
-   surrounding rather than looking like a "separate frame" pinned to
-   the side. The row buttons (.review-list-row) keep their own white
-   pill backgrounds so they remain readable against the dark. */
+/* Practice-mode review rail. Lives INSIDE #page-wrap as an
+   absolute-positioned overlay at the top-left of the paper.
+   Previous version was a flex sibling of page-wrap, which
+   consumed ~160px of horizontal space and pushed the page out of
+   the default Fit zoom. As an overlay it doesn't affect the
+   page's intrinsic width — Fit shows the full paper plus the
+   collapsible rail floating on top. The rail can be minimised to
+   a small chip so the visible page area is preserved. */
 .practice-review-rail {
-  flex: 0 0 160px;
-  align-self: flex-start; /* anchor at the TOP of the page area */
-  padding: 0;
-  margin-right: 4px;       /* tiny gap between rail and paper edge */
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  /* Override .review-list-rail's flex:0 0 140px so the legacy
+     final-report flex-sibling layout doesn't fight with our
+     absolute positioning. */
+  flex: none;
+  width: 130px;
+  padding: 6px;
   overflow-y: auto;
-  max-height: calc(100vh - 120px);
+  max-height: calc(100% - 16px);
+  z-index: 4;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--border, #d8dde5);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  font-size: 10px;
+  line-height: 1.25;
 }
 .practice-review-rail[hidden] { display: none; }
+/* Minimised form — collapsed pill showing just the page mark.
+   Click anywhere on it to expand back to the full list. */
+.practice-review-rail.is-minimized {
+  width: auto;
+  max-width: 130px;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+.practice-review-rail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.practice-review-rail-toggle {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--muted, #5b6573);
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.practice-review-rail-toggle:hover { color: #2a2200; background: rgba(0,0,0,0.04); }
+.practice-review-rail.is-minimized .practice-review-rail-header {
+  margin-bottom: 0;
+}
+.practice-review-rail.is-minimized .page-stats-block,
+.practice-review-rail.is-minimized .review-list-row,
+.practice-review-rail.is-minimized .practice-review-rail-empty {
+  display: none;
+}
+.practice-review-rail.is-minimized .practice-review-rail-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #1a4fc4;
+  font-variant-numeric: tabular-nums;
+}
+.practice-review-rail:not(.is-minimized) .practice-review-rail-chip {
+  display: none;
+}
+/* Narrower / smaller rows specifically in the practice rail. The
+   final-report review-stage rail keeps the larger sizing because
+   it has more horizontal room outside the page. */
+.practice-review-rail .review-list-row {
+  padding: 3px 5px;
+  font-size: 10px;
+  gap: 4px;
+  border-radius: 4px;
+  box-shadow: none;
+}
+.practice-review-rail .review-list-q {
+  min-width: 22px;
+  font-size: 10px;
+}
+.practice-review-rail .review-list-ans {
+  font-size: 10px;
+}
+.practice-review-rail .page-stats-pill {
+  padding: 2px 6px;
+  font-size: 10px;
+}
+.practice-review-rail .page-stats-page { font-size: 9px; }
 /* Title in the per-page stats block needs a light colour on the dark
    page-stage / review-stage backdrop. The default .page-stats-title
    colour was tuned for light card surfaces. */

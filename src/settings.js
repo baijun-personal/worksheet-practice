@@ -131,6 +131,12 @@ const DEFAULTS = {
   calcMaxAreaFraction: 0.10,    // 10% of page area maximum
   calcCapMode: 'per_page',      // 'per_page' | 'per_attempt'
   calcCapValue: 1,
+  // Practice-mode review rail (per-page mark + wrong-answer list on
+  // frozen pages) — when true the rail starts collapsed to a small
+  // chip so the page area is unobstructed. User can expand by
+  // tapping the chip. Persisted across pages and attempts because
+  // it's a layout preference, not per-page state.
+  practiceReviewRailMinimized: false,
 };
 
 export function loadSettings() {

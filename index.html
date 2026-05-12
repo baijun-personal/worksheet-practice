@@ -630,16 +630,21 @@
       </div>
       <div id="page-stage-frame">
         <div id="page-stage" class="page-stage">
-          <!-- Practice-mode review rail, shown only on frozen pages.
-               Lives INSIDE page-stage so it's centred as a group with
-               the page-wrap (rail directly to the left of the paper,
-               not floating at the far edge of the dark backdrop).
-               Same content as the final-report review rail —
-               per-page stats block + clickable review rows. -->
-          <aside id="practice-review-rail"
-                 class="practice-review-rail review-list-rail"
-                 aria-label="Review questions on this page" hidden></aside>
           <div id="page-wrap" class="page-wrap">
+            <!-- Practice-mode review rail. Lives INSIDE page-wrap as
+                 an absolute-positioned overlay at the top-left of the
+                 paper. Earlier versions had it as a flex sibling of
+                 page-wrap, which consumed ~160px of horizontal space
+                 and pushed the page out of the default Fit zoom. As
+                 an overlay it doesn't affect page-wrap's intrinsic
+                 width. Minimizable via the toggle in the rail header
+                 — collapsed form is a small chip showing the page
+                 mark; expanded form is the full stats + wrong-
+                 answer list. The minimize state persists in
+                 settings.practiceReviewRailMinimized. -->
+            <aside id="practice-review-rail"
+                   class="practice-review-rail review-list-rail"
+                   aria-label="Review questions on this page" hidden></aside>
             <canvas id="pdf-canvas" class="pdf-canvas"></canvas>
             <canvas id="ink-canvas" class="ink-canvas"></canvas>
             <!-- Type-tool visible overlay. Shows the in-progress text
