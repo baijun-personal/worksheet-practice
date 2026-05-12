@@ -36,14 +36,15 @@ export const DEFAULT_CIRCLE_RADIUS_PT = 6;
 //
 // The tick path occupies only ~60-75% of this bbox (the path
 // uses fractions x∈[0.15, 0.90], y∈[0.20, 0.80]), so the visible
-// check mark is smaller than the bbox value. 28 pt bbox gives a
-// visible mark roughly the size of the 48-image-pixel cursor
-// preview's visible tick (~27 image px wide) at typical fit-zoom.
+// check mark is smaller than the bbox value but the stroke width
+// is fixed in pt regardless — making smaller bboxes look chunkier
+// relative to their size.
 //
-// Earlier values: 18 (too small to match the chunkier cursor)
-// and 48 (overshot — the bbox interpretation made the placed
-// tick visibly larger than the cursor previewed).
-export const DEFAULT_TICK_SIZE_PT = 28;
+// History: 18 (pre-cursor-bump default) → 48 (visually overshot
+// past the cursor preview) → 28 (still felt big) → 14 (current).
+// 14 pt bbox = ~10.5 pt visible tick, which is a discreet
+// marking-stroke that doesn't dominate the answer line.
+export const DEFAULT_TICK_SIZE_PT = 14;
 
 export function makeStrokeId() {
   // crypto.randomUUID is widely supported, but fall back if missing.
