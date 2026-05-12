@@ -31,6 +31,21 @@ const DEFAULTS = {
   // batch4_fourup in main.js — they no longer have a dropdown option
   // and there's no migration code, by design.
   markingMode: 'batch4_fourup',
+  // Top-level mode toggle for new attempts:
+  //   - 'final'    → submit the whole paper at the end (today's default).
+  //   - 'practice' → mark page-by-page mid-paper with the "Mark up to
+  //                  here" button. Memory-fresh review: child sees
+  //                  mistakes immediately rather than waiting for end
+  //                  of paper. Pages get frozen once marked.
+  // attempt.mode is stamped from this at attempt creation and never
+  // mutated thereafter; mid-attempt mode switching isn't supported.
+  mode: 'final',
+  // Marking mode used by practice-mode mark-up-to-here calls. Kept
+  // separate from `markingMode` (which governs final-mode Submit) so
+  // a parent can tune the two independently — practice mode may want
+  // higher accuracy (Best / Balanced) since the pages being marked
+  // are smaller batches than a full paper.
+  practiceMarkingMode: 'batch4_fourup',
   // API mode:
   // - "direct" → browser POSTs to api.openai.com with the OpenAI key.
   // - "proxy"  → browser POSTs to a Cloudflare Worker (or similar) that

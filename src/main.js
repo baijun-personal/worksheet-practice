@@ -711,6 +711,24 @@ function bindSetupForm() {
   setVal('price-cached-in', String(state.settings.priceCachedInPerMTokens ?? 0.075));
   setVal('price-out', String(state.settings.priceOutPerMTokens ?? 4.50));
   setVal('marking-mode', state.settings.markingMode || 'batch4_fourup');
+  setVal('practice-marking-mode', state.settings.practiceMarkingMode || 'batch4_fourup');
+  // Mode radio + the "Practice marking mode" sub-section (hidden in
+  // final mode). When the parent flips between the two, we re-show the
+  // sub-section on the fly. attempt.mode is stamped at attempt
+  // creation; mid-attempt mode switching isn't supported.
+  const initialMode = state.settings.mode || 'final';
+  for (const r of document.querySelectorAll('input[name="practice-mode"]')) {
+    r.checked = (r.value === initialMode);
+  }
+  applyPracticeModeVisibility(initialMode);
+  for (const r of document.querySelectorAll('input[name="practice-mode"]')) {
+    r.addEventListener('change', () => {
+      const v = r.checked ? r.value : null;
+      if (!v) return;
+      state.settings = saveSettings({ mode: v });
+      applyPracticeModeVisibility(v);
+    });
+  }
   // Custom prompt overrides — pre-fill with the built-in prompt
   // text so reviewers can see what's being sent without grepping
   // the source. Saved overrides win when present; empty falls
@@ -786,6 +804,7 @@ function bindSetupForm() {
     ['price-cached-in', 'priceCachedInPerMTokens', (v) => Math.max(0, parseFloat(v) || 0)],
     ['price-out', 'priceOutPerMTokens', (v) => Math.max(0, parseFloat(v) || 0)],
     ['marking-mode', 'markingMode', (v) => v || 'batch4_fourup'],
+    ['practice-marking-mode', 'practiceMarkingMode', (v) => v || 'batch4_fourup'],
     ['model-detection',      'detectionModel',        (v) => v.trim() || DEFAULT_MODEL],
     ['model-extraction',     'extractionModel',       (v) => v.trim() || DEFAULT_MODEL],
     ['model-text-compare',   'textComparisonModel',   (v) => v.trim() || DEFAULT_MODEL],
@@ -1176,6 +1195,14 @@ function onSourceChange() {
   $('builtin-status').textContent = '';
   $('pdf-input').value = '';
   $('builtin-select').value = '';
+}
+
+// Show / hide the Practice marking mode sub-section based on the
+// current top-level mode toggle. The sub-section only matters when
+// the parent picks 'practice'; in 'final' it's irrelevant.
+function applyPracticeModeVisibility(mode) {
+  const extra = $('practice-mode-extra');
+  if (extra) extra.hidden = (mode !== 'practice');
 }
 
 function applyApiModeVisibility(mode) {
@@ -1928,6 +1955,8 @@ async function onStartPracticeImpl() {
     priceCachedInPerMTokens: Math.max(0, parseFloat($('price-cached-in').value) || 0),
     priceOutPerMTokens: Math.max(0, parseFloat($('price-out').value) || 0),
     markingMode: $('marking-mode').value || 'batch4_fourup',
+    practiceMarkingMode: $('practice-marking-mode').value || 'batch4_fourup',
+    mode: (document.querySelector('input[name="practice-mode"]:checked')?.value) || 'final',
     apiMode: (document.querySelector('input[name="api-mode"]:checked')?.value) || 'direct',
     proxyEndpoint: $('proxy-endpoint').value.trim(),
     proxyToken: $('proxy-token').value,
@@ -2017,6 +2046,12 @@ async function onStartPracticeImpl() {
   // picker subset selection. Profile edits AFTER this snapshot
   // can't retroactively mutate this attempt's stroke layout (Stage
   // E spec).
+  // Stamp the attempt's mode from settings AT CREATION TIME. Mid-
+  // attempt mode switching isn't supported — the practice cache shape
+  // (extraction-per-page, comparator-row-per-pair) wouldn't make
+  // sense after a partial run in the other mode. settings.mode is the
+  // "default for next new attempt"; attempt.mode is the actual mode.
+  const attemptMode = state.settings.mode === 'practice' ? 'practice' : 'final';
   let attempt = {
     id: attemptId,
     createdAt: Date.now(),
@@ -2029,6 +2064,21 @@ async function onStartPracticeImpl() {
     currentPage: questionPages[0],
     reportJson: null,
     status: 'in_progress',
+    mode: attemptMode,
+    // Practice-mode persistence. null in final mode. In practice mode
+    // we accumulate page-level extraction results across mark-up-to-here
+    // sessions so each click only pays the vision-extraction cost for
+    // NEW pages (the answer key is also extracted once across all
+    // sessions). The shape is documented at the call sites in
+    // onMarkUpToHere.
+    practice: attemptMode === 'practice'
+      ? {
+          markedPages: [],
+          cached_student_extractions_by_page: {},
+          cached_answer_key_extraction: null,
+          latest_report: null,
+        }
+      : null,
   };
   attempt = snapshotPaperOntoAttempt(state.paperProfile, attempt, { questionPages, answerPages });
   state.attempt = attempt;
@@ -2070,6 +2120,8 @@ function bindPracticeUI() {
   $('page-nav-prev').addEventListener('click', () => navigateBy(-1));
   $('page-nav-next').addEventListener('click', () => navigateBy(1));
   $('submit-btn').addEventListener('click', onSubmit);
+  $('mark-up-to-here-btn').addEventListener('click', onMarkUpToHere);
+  $('continue-practising-btn').addEventListener('click', onContinuePractising);
   $('back-to-setup-btn').addEventListener('click', onBackToSetup);
   $('fullscreen-toggle-btn').addEventListener('click', () => {
     if (document.body.classList.contains('app-immersive')) {
@@ -2232,8 +2284,75 @@ async function loadCurrentPage() {
   $('page-nav-prev').disabled = idx <= 0;
   $('page-nav-next').disabled = idx >= qp.length - 1;
 
+  // Practice-mode UI: show / hide the Mark-up-to-here button, the
+  // frozen-page banner, and disable the toolbar tools on frozen
+  // pages. In final mode this is a no-op (everything stays visible
+  // as before). Runs after the page renders so the ink canvas /
+  // tool buttons reflect the right state for THIS page.
+  applyPracticeStateForPage();
+
   // The rendered page just changed size; re-sync the custom scroll rails.
   refreshScrollRails();
+}
+
+// Practice-mode per-page UI state. Three surfaces:
+//   - "Mark up to here" button visible only in practice mode AND when
+//     the current page (and at least one page before it) is unmarked.
+//   - "Submit for marking" button hidden in practice mode (Mark up to
+//     here takes its place; there's no "all at once" path in practice).
+//   - Frozen-page banner + tool-button disable state when the current
+//     page is in markedPages.
+function applyPracticeStateForPage() {
+  const isPractice = state.attempt?.mode === 'practice';
+  const submitBtn = $('submit-btn');
+  const markBtn = $('mark-up-to-here-btn');
+  const banner = $('frozen-page-banner');
+  const stagePractice = $('stage-practice');
+  if (submitBtn) submitBtn.hidden = !!isPractice;
+  if (!isPractice) {
+    if (markBtn) markBtn.hidden = true;
+    if (banner) banner.hidden = true;
+    if (stagePractice) stagePractice.classList.remove('frozen-page');
+    setToolButtonsDisabled(false);
+    return;
+  }
+  const markedPages = new Set(state.attempt?.practice?.markedPages || []);
+  const isFrozen = markedPages.has(state.currentPage);
+  if (markBtn) {
+    markBtn.hidden = isFrozen;
+    markBtn.textContent = `Mark pages 1 to ${pageNumberLabel(state.currentPage)}`;
+    markBtn.title = isFrozen
+      ? 'This page is already marked.'
+      : 'Mark all unmarked question pages up to (and including) the current page.';
+  }
+  if (banner) {
+    banner.hidden = !isFrozen;
+    const detail = $('frozen-page-banner-detail');
+    if (detail) {
+      const marksCount = markedPages.size;
+      detail.textContent = marksCount > 0
+        ? `${marksCount} page${marksCount === 1 ? '' : 's'} marked so far.`
+        : '';
+    }
+  }
+  if (stagePractice) stagePractice.classList.toggle('frozen-page', isFrozen);
+  setToolButtonsDisabled(isFrozen);
+}
+
+function setToolButtonsDisabled(disabled) {
+  for (const btn of document.querySelectorAll('.practice-toolbar .tool-btn, #undo-btn, #clear-page-btn')) {
+    btn.disabled = disabled;
+  }
+}
+
+// Render the visible page label the way the practice toolbar shows it
+// ("Mark pages 1 to N" where N is the 1-based index INTO the
+// question-pages array, not the raw PDF page number). Falls back to
+// the PDF page number if the page isn't in the question-pages array.
+function pageNumberLabel(currentPage) {
+  const qp = state.attempt?.questionPages || [];
+  const idx = qp.indexOf(currentPage);
+  return idx >= 0 ? String(idx + 1) : String(currentPage);
 }
 
 async function onUndo() {
@@ -2942,6 +3061,427 @@ function abortMarking(reason) {
   $('marking-status').textContent = reason;
 }
 
+// --- Practice mode (Stage 4) ----------------------------------------------
+//
+// Practice mode lets the child mark up to the current page mid-paper, see
+// what they got wrong, and continue. The crucial economy is that each
+// "Mark up to here" only pays the vision-extraction cost for NEW pages —
+// already-extracted pages are pulled from a cache on the attempt record.
+// The answer key is also cached once across the whole practice session.
+//
+// We do NOT cache the comparator (markPairs / compareVisualPair) output.
+// Re-running them each mark is cheap (text-only, ~$0.001/pair) and keeps
+// the report logic simple — there's no per-pair cache key to worry about.
+//
+// Cache shape on attempt.practice:
+//   markedPages: number[]                       — frozen page numbers
+//   cached_student_extractions_by_page: {       — batch-keyed extraction
+//     "<pages.join(',')>": { answers: [...] }   //   results
+//   }
+//   cached_answer_key_extraction: { answers... } | null
+//   latest_report: the most recent merged report (used for "Continue
+//     practising" → return to report later)
+
+async function onMarkUpToHere() {
+  if (!state.attempt || state.attempt.mode !== 'practice') return;
+
+  // Flush any in-progress typed text — same hook as onSubmit.
+  if (state.inkController && typeof state.inkController.commitTyping === 'function') {
+    state.inkController.commitTyping();
+  }
+
+  // Auth preflight (mirrors onSubmit).
+  const apiMode = state.settings.apiMode || 'direct';
+  if (apiMode === 'proxy') {
+    if (!state.settings.proxyEndpoint || !state.settings.proxyToken) {
+      alert('Proxy mode is selected but the Proxy URL or token is empty. Set them in Setup → Advanced settings.');
+      return;
+    }
+  } else if (!state.settings.openaiKey) {
+    alert('No OpenAI API key set. Add one in Setup → Advanced settings before submitting.');
+    return;
+  }
+
+  // Determine the set of pages to mark in THIS call.
+  const qPages = state.attempt.questionPages || [];
+  const currentIdx = qPages.indexOf(state.currentPage);
+  if (currentIdx < 0) {
+    alert('Current page is not in the question-pages range.');
+    return;
+  }
+  const pagesUpToCurrent = qPages.slice(0, currentIdx + 1);
+  const practice = state.attempt.practice || {
+    markedPages: [],
+    cached_student_extractions_by_page: {},
+    cached_answer_key_extraction: null,
+    latest_report: null,
+  };
+  state.attempt.practice = practice; // ensure assigned
+  const markedSet = new Set(practice.markedPages || []);
+  const newPages = pagesUpToCurrent.filter((p) => !markedSet.has(p));
+  if (newPages.length === 0) {
+    alert('All question pages up to here are already marked. Navigate to a later page and try again.');
+    return;
+  }
+
+  const ok = confirm(
+    `Practice marking — about to mark ${newPages.length} new page(s): ${newPages.join(', ')}\n\n` +
+    `Already marked: ${practice.markedPages.length === 0 ? '(none)' : practice.markedPages.join(', ')}\n` +
+    `Answer key will be ${practice.cached_answer_key_extraction ? 'reused from cache (no extra API call)' : 'extracted (one-time)'}.\n\n` +
+    `Continue?`
+  );
+  if (!ok) return;
+
+  // Switch to marking stage.
+  setStage('marking');
+  $('batch-list').innerHTML = '';
+  $('marking-status').textContent = 'Practice marking — preparing…';
+  state.cancelMarking = false;
+
+  const dpi = state.settings.renderDpi || 150;
+  const practiceMarkingMode = state.settings.practiceMarkingMode || 'batch4_fourup';
+
+  // Build batches over the NEW pages only. Same composite logic as
+  // onSubmit but scoped to the new-pages list. Single full page when
+  // there's only one — batch4_fourup with one page degenerates
+  // anyway.
+  let batchesPlan;
+  if (practiceMarkingMode === 'single_fullpage' || newPages.length <= 1) {
+    batchesPlan = [{ pages: newPages, composite: 'fullpage' }];
+  } else if (practiceMarkingMode === 'batch4_fourup_single') {
+    batchesPlan = chunkInto(newPages, 4).map((g) => ({ pages: g, composite: 'fourup_single' }));
+  } else {
+    batchesPlan = chunkInto(newPages, 4).map((g) => ({ pages: g, composite: 'fourup' }));
+  }
+
+  // Render images for all new pages up front. Same path as onSubmit.
+  const completedByPage = new Map();
+  let renderedSoFar = 0;
+  for (const pageNum of newPages) {
+    if (state.cancelMarking) return abortMarking('Cancelled');
+    const strokes = await getStrokesForPage(state.attempt.id, pageNum);
+    const dataUrl = await flattenQuestionPage(state.pdf, pageNum, strokes, dpi);
+    const strokesDataUrl = await renderStrokesOnlyPage(state.pdf, pageNum, strokes, dpi);
+    completedByPage.set(pageNum, { pageNumber: pageNum, dataUrl, strokesDataUrl, strokes });
+    renderedSoFar += 1;
+    $('marking-status').textContent = `Rendering pages ${renderedSoFar}/${newPages.length}…`;
+  }
+
+  // Build per-batch "completed" arrays (mirrors onSubmit's structure).
+  const batches = [];
+  for (const plan of batchesPlan) {
+    if (plan.composite === 'fourup_single') {
+      const tilePages = plan.pages.map((n) => ({ pageNumber: n, strokes: completedByPage.get(n).strokes }));
+      const composed = await composeFourUpA4(state.pdf, tilePages, { dpi: 200 });
+      batches.push({
+        completed: [{
+          pageNumber: plan.pages[0],
+          dataUrl: composed.dataUrl,
+          fourup: true,
+          fourupSingle: true,
+          includedPageNumbers: composed.includedPageNumbers,
+        }],
+        plannedPages: plan.pages,
+      });
+    } else if (plan.composite === 'fourup') {
+      const tilePages = plan.pages.map((n) => ({ pageNumber: n, strokes: completedByPage.get(n).strokes }));
+      const composed = await composeFourUpA4(state.pdf, tilePages, { dpi: 200 });
+      const composedStrokes = await composeFourUpA4(state.pdf, tilePages, { dpi: 200, strokesOnly: true });
+      batches.push({
+        completed: [{
+          pageNumber: plan.pages[0],
+          dataUrl: composed.dataUrl,
+          strokesDataUrl: composedStrokes.dataUrl,
+          fourup: true,
+          includedPageNumbers: composed.includedPageNumbers,
+        }],
+        plannedPages: plan.pages,
+      });
+    } else {
+      batches.push({
+        completed: plan.pages.map((n) => {
+          const p = completedByPage.get(n);
+          return { pageNumber: n, dataUrl: p.dataUrl, strokesDataUrl: p.strokesDataUrl };
+        }),
+        plannedPages: plan.pages,
+      });
+    }
+  }
+
+  // Render the batch list — same UI as onSubmit's marking screen.
+  const tasks = batches.map((b, i) => ({
+    kind: 'student',
+    index: i,
+    label: `Student answers (practice), pages ${b.plannedPages.join(', ')}`,
+    completed: b.completed,
+    plannedPages: b.plannedPages,
+  }));
+  if (!practice.cached_answer_key_extraction && (state.attempt.answerPages?.length || 0) > 0) {
+    tasks.push({
+      kind: 'answer_key',
+      index: tasks.length,
+      label: `Answer key (one-time), pages ${state.attempt.answerPages.join(', ')}`,
+      plannedPages: [...state.attempt.answerPages],
+    });
+  }
+  const batchListEl = $('batch-list');
+  tasks.forEach((t, i) => {
+    const li = document.createElement('li');
+    li.id = `batch-${i}`;
+    li.textContent = `Request ${i + 1}: ${t.label} — pending`;
+    batchListEl.appendChild(li);
+  });
+
+  const taskUsages = [];
+  const newStudentExtractions = []; // {batchKey, result}
+  const transport = {
+    apiKey: state.settings.openaiKey,
+    apiMode,
+    proxyEndpoint: state.settings.proxyEndpoint,
+    proxyToken: state.settings.proxyToken,
+    openaiEndpoint: state.settings.openaiEndpoint,
+  };
+  const extractionModel = state.settings.extractionModel || state.settings.openaiModel || DEFAULT_MODEL;
+
+  // Run student-extraction requests.
+  for (let i = 0; i < batches.length; i++) {
+    if (state.cancelMarking) return abortMarking('Cancelled');
+    const li = $(`batch-${i}`);
+    li.textContent = `Request ${i + 1}: ${tasks[i].label} — sending…`;
+    $('marking-status').textContent = `Practice marking request ${i + 1} of ${tasks.length}…`;
+    try {
+      const res = await extractStudentAnswers({
+        ...transport,
+        model: extractionModel,
+        completedPageImages: batches[i].completed,
+        customPrompt: state.settings.customStudentPrompt,
+        customPromptSingle: state.settings.customStudentPromptSingle,
+      });
+      const batchKey = batches[i].plannedPages.join(',');
+      practice.cached_student_extractions_by_page[batchKey] = res.parsed;
+      newStudentExtractions.push({ batchKey, result: res.parsed });
+      taskUsages.push(buildTaskRecord({
+        task_type: TASK_TYPES.STUDENT_EXTRACTION,
+        model: extractionModel,
+        label: tasks[i].label,
+        pages: batches[i].plannedPages,
+        usage: res.usage,
+        settings: state.settings,
+      }));
+      li.classList.add('done');
+      li.textContent = `Request ${i + 1}: ${tasks[i].label} — done`;
+    } catch (e) {
+      console.error('Practice student extraction failed', e);
+      li.classList.add('failed');
+      li.textContent = `Request ${i + 1}: failed — ${e.message}`;
+      const retry = confirm(`Request ${i + 1} failed:\n${e.message}\n\nRetry?`);
+      if (retry) { i--; continue; }
+      $('marking-status').textContent = 'Practice marking aborted on extraction failure.';
+      return;
+    }
+  }
+
+  // Answer-key extraction (one-time, cached after first run).
+  if (!practice.cached_answer_key_extraction && (state.attempt.answerPages?.length || 0) > 0) {
+    const akIdx = batches.length;
+    const li = $(`batch-${akIdx}`);
+    li.textContent = `Request ${akIdx + 1}: Answer key — rendering…`;
+    const aPages = state.attempt.answerPages;
+    const answerImages = [];
+    if (aPages.length > 1) {
+      const chunks = chunkInto(aPages, 4);
+      for (const chunk of chunks) {
+        const tilePages = chunk.map((n) => ({ pageNumber: n }));
+        const composed = await composeContactSheetA4(state.pdf, tilePages, {
+          dpi: 200, labelPrefix: 'Answer page', labelSuffix: '',
+        });
+        answerImages.push({
+          pageNumber: chunk[0], dataUrl: composed.dataUrl,
+          contactSheet: true, includedPageNumbers: composed.includedPageNumbers,
+        });
+      }
+    } else {
+      for (const pageNum of aPages) {
+        const dataUrl = await renderAnswerPage(state.pdf, pageNum, dpi);
+        answerImages.push({ pageNumber: pageNum, dataUrl });
+      }
+    }
+    li.textContent = `Request ${akIdx + 1}: Answer key — sending…`;
+    try {
+      const res = await extractAnswerKey({
+        ...transport,
+        model: extractionModel,
+        answerPageImages: answerImages,
+        customPrompt: state.settings.customAnswerKeyPrompt,
+      });
+      practice.cached_answer_key_extraction = res.parsed;
+      taskUsages.push(buildTaskRecord({
+        task_type: TASK_TYPES.ANSWER_KEY_EXTRACTION,
+        model: extractionModel,
+        label: tasks[akIdx].label,
+        pages: aPages,
+        usage: res.usage,
+        settings: state.settings,
+      }));
+      li.classList.add('done');
+      li.textContent = `Request ${akIdx + 1}: Answer key — done`;
+    } catch (e) {
+      console.error('Practice answer-key extraction failed', e);
+      li.classList.add('failed');
+      li.textContent = `Request ${akIdx + 1}: Answer key failed — ${e.message}`;
+      $('marking-status').textContent = 'Practice marking aborted on answer-key extraction failure.';
+      return;
+    }
+  }
+
+  // Build the union of all cached extractions and re-run match. Pure
+  // JavaScript — no API calls. assignSyntheticSections /
+  // fanOutMultiPartKeys / normalizeMultiParts all walk this full set
+  // each mark, so synthetic-section labels and multi-part regrouping
+  // stay consistent with the paper's full structure as new pages
+  // arrive.
+  const allStudentResults = Object.values(practice.cached_student_extractions_by_page);
+  const allKeyResults = practice.cached_answer_key_extraction
+    ? [practice.cached_answer_key_extraction] : [];
+  const match = matchExtractions(allStudentResults, allKeyResults);
+  const { text: textPairs, visual: visualPairs } = partitionPairsByModality(match);
+
+  // Text compare on all text pairs (no per-pair cache — text-compare
+  // is cheap and the report regeneration is cleaner this way).
+  let aiTextReport = null;
+  let compareError = null;
+  const textCompareModel = state.settings.textComparisonModel || state.settings.openaiModel || DEFAULT_MODEL;
+  const visualCompareModel = state.settings.visualComparisonModel || state.settings.openaiModel || DEFAULT_MODEL;
+  if (textPairs.length > 0 && match.keysProvided) {
+    const idx = tasks.length;
+    const li = document.createElement('li');
+    li.id = `batch-${idx}`;
+    li.textContent = `Request ${idx + 1}: Text compare — ${textPairs.length} pair(s) — sending…`;
+    batchListEl.appendChild(li);
+    try {
+      const cmpRes = await markPairs({
+        ...transport,
+        model: textCompareModel,
+        pairs: textPairs,
+        subject: state.attempt.subject,
+        level: state.attempt.level,
+        customPrompt: state.settings.customComparePrompt,
+      });
+      aiTextReport = cmpRes.parsed;
+      taskUsages.push(buildTaskRecord({
+        task_type: TASK_TYPES.TEXT_COMPARISON,
+        model: textCompareModel,
+        label: `Text compare — ${textPairs.length} pair(s)`,
+        pages: [],
+        usage: cmpRes.usage,
+        settings: state.settings,
+      }));
+      li.classList.add('done');
+      li.textContent = `Request ${idx + 1}: Text compare — done`;
+    } catch (e) {
+      console.error('Practice text compare failed', e);
+      compareError = e.message;
+      li.classList.add('failed');
+      li.textContent = `Request ${idx + 1}: Text compare — failed: ${e.message}`;
+    }
+  }
+
+  // Visual compare on visual pairs.
+  const visualResults = [];
+  for (let i = 0; i < visualPairs.length; i++) {
+    const pair = visualPairs[i];
+    const idx = tasks.length + 1 + i;
+    const li = document.createElement('li');
+    li.id = `batch-${idx}`;
+    li.textContent = `Request ${idx + 1}: Visual compare ${pair.display_question || pair.question} — sending…`;
+    batchListEl.appendChild(li);
+    try {
+      // Render the completed and answer pages on demand.
+      const cStrokes = await getStrokesForPage(state.attempt.id, pair.completed_page);
+      const completedImageDataUrl = await flattenQuestionPage(state.pdf, pair.completed_page, cStrokes, dpi);
+      const answerImageDataUrl = pair.answer_page
+        ? await renderAnswerPage(state.pdf, pair.answer_page, dpi)
+        : null;
+      const res = await compareVisualPair({
+        ...transport,
+        model: visualCompareModel,
+        pair,
+        completedImageDataUrl,
+        answerImageDataUrl,
+        customPrompt: state.settings.customCompareVisualPrompt,
+      });
+      visualResults.push({ pair, parsed: res.parsed });
+      taskUsages.push(buildTaskRecord({
+        task_type: TASK_TYPES.VISUAL_COMPARISON,
+        model: visualCompareModel,
+        label: `Visual compare ${pair.display_question || pair.question}`,
+        pages: [pair.completed_page, pair.answer_page].filter(Boolean),
+        usage: res.usage,
+        settings: state.settings,
+      }));
+      li.classList.add('done');
+      li.textContent = `Request ${idx + 1}: Visual compare ${pair.display_question || pair.question} — done`;
+    } catch (e) {
+      console.error('Practice visual compare failed', e);
+      visualResults.push({ pair, error: e.message });
+      li.classList.add('failed');
+      li.textContent = `Request ${idx + 1}: Visual compare — failed: ${e.message}`;
+    }
+  }
+
+  // Aggregate cost. Carry over prior practice-session costs so the
+  // cumulative cost is visible across marks.
+  const priorCost = practice.latest_report?.app_cost?.tasks || [];
+  const allTasks = [...priorCost, ...taskUsages];
+  const merged = buildFinalReport({ match, aiTextReport, visualResults });
+  merged.app_cost = aggregateTasks(allTasks);
+  merged.app_extractions = {
+    student: allStudentResults,
+    answer_key: allKeyResults,
+  };
+
+  // Update practice state, save the attempt.
+  for (const p of newPages) {
+    if (!markedSet.has(p)) practice.markedPages.push(p);
+  }
+  practice.markedPages.sort((a, b) => a - b);
+  practice.latest_report = merged;
+  state.reportJson = merged;
+  state.attempt.reportJson = merged;
+  state.attempt.status = 'in_progress'; // still in_progress in practice mode until last page
+  // If the student marked through the last question page, mark the
+  // attempt as fully marked so the report flow doesn't keep nudging
+  // them to continue.
+  const lastQp = qPages[qPages.length - 1];
+  if (practice.markedPages.includes(lastQp)) {
+    state.attempt.status = 'marked';
+  }
+  try {
+    await putAttempt(state.attempt);
+  } catch (e) {
+    console.error('Failed to persist practice state', e);
+  }
+
+  showReport(merged);
+}
+
+async function onContinuePractising() {
+  // Returns to the practice stage from the report so the student
+  // can mark up further pages. Navigates to the first unmarked
+  // question page (or the last page if everything is marked).
+  if (!state.attempt || state.attempt.mode !== 'practice') return;
+  const qp = state.attempt.questionPages || [];
+  const markedSet = new Set(state.attempt.practice?.markedPages || []);
+  const nextUnmarked = qp.find((p) => !markedSet.has(p));
+  if (nextUnmarked != null) {
+    state.currentPage = nextUnmarked;
+    state.attempt.currentPage = nextUnmarked;
+    try { await putAttempt(state.attempt); } catch (e) { console.error(e); }
+  }
+  setStage('practice');
+  await loadCurrentPage();
+}
+
 function onBackToSetup() {
   // Preserve the attempt; just navigate to Setup with the current values
   // pre-filled so the parent can edit and click Resume practice.
@@ -3039,6 +3579,21 @@ function showReport(merged) {
   //     OR keys produced no comparable items) → button hidden, note
   //     ("Review Mode: no questions to review — nice work!")
   //   - otherwise (review_records present) → button visible
+  // Practice-mode: show "Continue practising" iff there are still
+  // unmarked question pages. Final-mode attempts never see this
+  // button. Pre-Stage-4 attempts (no attempt.mode) default to final.
+  const isPractice = state.attempt?.mode === 'practice';
+  const cBtn = $('continue-practising-btn');
+  if (cBtn) {
+    if (isPractice) {
+      const qp = state.attempt.questionPages || [];
+      const markedSet = new Set(state.attempt.practice?.markedPages || []);
+      const hasUnmarked = qp.some((p) => !markedSet.has(p));
+      cBtn.hidden = !hasUnmarked;
+    } else {
+      cBtn.hidden = true;
+    }
+  }
   const hasKey = (state.attempt?.answerPages?.length || 0) > 0;
   const recordCount = (merged?.review_records || []).length;
   const reviewable = hasKey && recordCount > 0;

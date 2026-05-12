@@ -151,6 +151,40 @@
         </label>
       </div>
 
+      <div class="card">
+        <h2>Mode</h2>
+        <div role="radiogroup" aria-label="Mode" style="display:flex; gap:16px">
+          <label class="checkbox">
+            <input type="radio" name="practice-mode" value="final" checked />
+            Final marking
+          </label>
+          <label class="checkbox">
+            <input type="radio" name="practice-mode" value="practice" />
+            Practice mode
+          </label>
+        </div>
+        <p class="muted small">
+          <strong>Final marking</strong> submits the whole paper at the end (the
+          default flow). <strong>Practice mode</strong> lets the child mark up to
+          the current page mid-paper, see what they got wrong, and continue.
+          Pages are frozen once marked so the child can't go back and edit.
+        </p>
+        <div id="practice-mode-extra" hidden>
+          <label>Practice marking mode
+            <select id="practice-marking-mode">
+              <option value="single_fullpage">Best quality</option>
+              <option value="batch4_fourup" selected>Balanced</option>
+              <option value="batch4_fourup_single">Most economical</option>
+            </select>
+          </label>
+          <p class="muted small">
+            Most economical skips the strokes-only blank-detector signal; in
+            practice mode you're marking ongoing work, so accuracy on the new
+            pages matters most. Balanced is a reasonable default.
+          </p>
+        </div>
+      </div>
+
       <details class="card">
         <summary><h2 style="display:inline">Advanced settings</h2></summary>
         <fieldset style="border:1px solid var(--border); border-radius:6px; padding:8px 12px; margin-bottom:8px">
@@ -392,10 +426,30 @@
         <span class="sep"></span>
         <button id="back-to-setup-btn" type="button" title="Edit page ranges and settings">Setup</button>
         <button id="submit-btn" type="button" class="primary" data-short="Submit">Submit for marking</button>
+        <!-- Practice-mode only. Visible when attempt.mode === 'practice'
+             and the current page hasn't been marked yet. Disabled while
+             marking is in flight. Label is updated to "Mark pages 1 to N"
+             where N is the current page number. -->
+        <button id="mark-up-to-here-btn" type="button" class="primary"
+                data-short="Mark"
+                hidden>Mark up to here</button>
         <span id="autosave-indicator-practice" class="autosave" aria-live="polite">saved</span>
         <button id="fullscreen-toggle-btn" type="button"
                 title="Enter / exit full-screen practice mode"
                 data-short="FS">Fullscreen</button>
+      </div>
+      <!-- Practice-mode frozen-page banner. Spans the top of the page
+           stage when navigating to a page that's already been marked.
+           Tools are disabled on those pages; the child can review their
+           strokes against the page's questions but can't write anything
+           new. The banner explains why. -->
+      <div id="frozen-page-banner" class="frozen-page-banner" hidden>
+        <span class="frozen-page-banner-icon" aria-hidden="true">🔒</span>
+        <span class="frozen-page-banner-text">
+          <strong>Marked — review only.</strong>
+          This page was marked earlier in this practice session.
+          <span id="frozen-page-banner-detail" class="muted"></span>
+        </span>
       </div>
       <div id="page-stage-frame">
         <div id="page-stage" class="page-stage">
@@ -458,6 +512,11 @@
       <div id="report-table" class="card"></div>
       <div class="actions">
         <button id="open-review-btn" type="button" class="primary" hidden>Open Review Mode</button>
+        <!-- Practice-mode only. Returns to the practice stage so the
+             child can keep marking up subsequent pages. Visible only
+             when attempt.mode === 'practice' AND there are still
+             unmarked question pages. -->
+        <button id="continue-practising-btn" type="button" class="primary" hidden>Continue practising</button>
         <button id="download-report-pdf" type="button">Download report PDF</button>
         <button id="download-attempt-pdf" type="button">Download completed attempt PDF</button>
         <button id="toggle-raw-json" type="button">Show raw JSON</button>
