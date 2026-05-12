@@ -18,8 +18,8 @@ import { flattenQuestionPage, renderStrokesOnlyPage, renderAnswerPage, colorCont
 import {
   validateParsedCalc,
   computeArithmetic,
-  computeLinear1Var,
-  computeLinear2Var,
+  solveLinear1Var,
+  solveLinear2Var,
   stringifyParsedInput,
 } from './calc.js';
 import {
@@ -3307,9 +3307,9 @@ async function runCalcPipeline(popup) {
     if (res.parsed.type === 'arithmetic') {
       compute = computeArithmetic(res.parsed);
     } else if (res.parsed.type === 'linear_1var') {
-      compute = computeLinear1Var(res.parsed);
+      compute = solveLinear1Var(res.parsed);
     } else if (res.parsed.type === 'linear_2var') {
-      compute = computeLinear2Var(res.parsed);
+      compute = solveLinear2Var(res.parsed);
     } else {
       compute = { ok: false, reason: 'Type not implemented yet.' };
     }
@@ -4606,6 +4606,13 @@ async function onMarkUpToHere() {
     }
 
     // Step counter so the status pill can render "Marking 2 of 5".
+    // When the answer-key call runs in parallel with the student
+    // loop (Stage 2 — Option C), the combined "pages + answer key"
+    // message counts as the SAME step as the per-batch student
+    // messages, so the answer-key step does NOT separately bump
+    // stepIdx. totalSteps still adds +1 for the answer-key bucket
+    // (used by the compare-step count downstream) so the displayed
+    // "(N/M)" still reaches M=totalSteps.
     const askForKey = !practice.cached_answer_key_extraction && (state.attempt.answerPages?.length || 0) > 0;
     const totalSteps = batches.length + (askForKey ? 1 : 0) + 1; // +1 for compare-round
     let stepIdx = 0;
@@ -4614,9 +4621,79 @@ async function onMarkUpToHere() {
       setPracticeMarkStatus(`${label} (${stepIdx}/${totalSteps})`, 'saving');
     }
 
+    // --- Parallel first-mark extraction (Option C) ---------------
+    // When the answer-key cache is cold (session 1, or any session
+    // after a Setup-change invalidation), we fire the answer-key
+    // extraction off in parallel with the student-extraction loop
+    // instead of running it sequentially afterwards. On a fresh
+    // multi-page paper this saves 30-40% of wall-clock time —
+    // typical answer-key work is 5-10s, which would otherwise
+    // serialise after the student loop.
+    //
+    // OpenAI accepts two concurrent requests on the same key
+    // without issue (well above standard rate limits). If a
+    // serial-only proxy sits in front of the API the work
+    // serialises and Option C becomes a no-op — not a
+    // regression, just no speed-up.
+    //
+    // Best-effort failure: we always `await` the promise (in a
+    // try/catch) before falling through to the compare step. If
+    // the answer-key leg fails, cached_answer_key_extraction
+    // stays null, match.keysProvided becomes false, and the
+    // report shows extracted answers without grading — same
+    // graceful degradation as the old sequential path.
+    let answerKeyPromise = null;
+    if (askForKey) {
+      const isFirstMark = (practice.mark_session_count || 0) <= 1;
+      // Combined-message form when running parallel — sets
+      // expectations that both legs are in flight. The per-batch
+      // student step messages still fire as each batch completes,
+      // but with "(answer key in parallel)" so the user knows the
+      // answer-key work is happening alongside.
+      step(isFirstMark
+        ? 'Reading worksheet pages and answer key (one-time; later marks skip the key)'
+        : 'Reading worksheet pages and answer key');
+      // Capture the per-fire settings under closure so the async
+      // function below doesn't reach for state.settings later (it
+      // might have been re-saved during the parallel window).
+      const aPages = state.attempt.answerPages;
+      const customAnswerKeyPrompt = state.settings.customAnswerKeyPrompt;
+      answerKeyPromise = (async () => {
+        const answerImages = [];
+        if (aPages.length > 1) {
+          const chunks = chunkInto(aPages, 4);
+          for (const chunk of chunks) {
+            const tilePages = chunk.map((n) => ({ pageNumber: n }));
+            const composed = await composeContactSheetA4(state.pdf, tilePages, {
+              dpi: 200, labelPrefix: 'Answer page', labelSuffix: '',
+            });
+            answerImages.push({
+              pageNumber: chunk[0], dataUrl: composed.dataUrl,
+              contactSheet: true, includedPageNumbers: composed.includedPageNumbers,
+            });
+          }
+        } else {
+          for (const pageNum of aPages) {
+            const dataUrl = await renderAnswerPage(state.pdf, pageNum, dpi);
+            answerImages.push({ pageNumber: pageNum, dataUrl });
+          }
+        }
+        const res = await extractAnswerKey({
+          ...transport,
+          model: extractionModel,
+          answerPageImages: answerImages,
+          customPrompt: customAnswerKeyPrompt,
+        });
+        return { aPages, res };
+      })();
+    }
+
     // Student-extraction calls.
     for (let i = 0; i < batches.length; i++) {
-      step(`Reading page${batches[i].plannedPages.length === 1 ? '' : 's'} ${batches[i].plannedPages.join(', ')}`);
+      const pagesLabel = `page${batches[i].plannedPages.length === 1 ? '' : 's'} ${batches[i].plannedPages.join(', ')}`;
+      step(answerKeyPromise
+        ? `Reading ${pagesLabel} (answer key in parallel)`
+        : `Reading ${pagesLabel}`);
       const res = await extractStudentAnswers({
         ...transport,
         model: extractionModel,
@@ -4647,62 +4724,41 @@ async function onMarkUpToHere() {
       }
     }
 
-    // Answer-key extraction (one-time, cached after first run).
-    // Add a "(one-time…)" hint on session 1 (or any session where the
-    // answer-key cache was just cleared by a Setup-change invalidation)
-    // — the first mark on a multi-page paper is genuinely slower
-    // because the answer key has to be rendered + extracted now;
-    // subsequent marks skip this branch entirely (askForKey === false).
-    // The hint sets expectations rather than speeding anything up.
-    if (askForKey) {
-      const isFirstMark = (practice.mark_session_count || 0) <= 1;
-      step(isFirstMark
-        ? 'Reading answer key (one-time; later marks skip this)'
-        : 'Reading answer key');
-      const aPages = state.attempt.answerPages;
-      const answerImages = [];
-      if (aPages.length > 1) {
-        const chunks = chunkInto(aPages, 4);
-        for (const chunk of chunks) {
-          const tilePages = chunk.map((n) => ({ pageNumber: n }));
-          const composed = await composeContactSheetA4(state.pdf, tilePages, {
-            dpi: 200, labelPrefix: 'Answer page', labelSuffix: '',
-          });
-          answerImages.push({
-            pageNumber: chunk[0], dataUrl: composed.dataUrl,
-            contactSheet: true, includedPageNumbers: composed.includedPageNumbers,
-          });
+    // Harvest the answer-key result (if we fired it). If the
+    // student loop was slower than the key call, this await
+    // resolves instantly; otherwise it briefly pauses while the
+    // key call finishes. Either way, no separate step() call —
+    // the combined pre-loop message covers it.
+    if (answerKeyPromise) {
+      try {
+        const { aPages, res } = await answerKeyPromise;
+        practice.cached_answer_key_extraction = res.parsed;
+        taskUsages.push(buildTaskRecord({
+          task_type: TASK_TYPES.ANSWER_KEY_EXTRACTION,
+          model: extractionModel,
+          label: `Practice answer-key extraction, pages ${aPages.join(', ')}`,
+          pages: aPages,
+          usage: res.usage,
+          settings: state.settings,
+        }));
+        if (dump) {
+          try {
+            dump.raw_outputs.answer_key_extraction = {
+              pages: [...aPages],
+              model: extractionModel,
+              parsed: res.parsed,
+              usage: res.usage,
+            };
+          } catch (e) { captureError('onMarkUpToHere:answer_key_extraction:dump', e); }
         }
-      } else {
-        for (const pageNum of aPages) {
-          const dataUrl = await renderAnswerPage(state.pdf, pageNum, dpi);
-          answerImages.push({ pageNumber: pageNum, dataUrl });
-        }
-      }
-      const res = await extractAnswerKey({
-        ...transport,
-        model: extractionModel,
-        answerPageImages: answerImages,
-        customPrompt: state.settings.customAnswerKeyPrompt,
-      });
-      practice.cached_answer_key_extraction = res.parsed;
-      taskUsages.push(buildTaskRecord({
-        task_type: TASK_TYPES.ANSWER_KEY_EXTRACTION,
-        model: extractionModel,
-        label: `Practice answer-key extraction, pages ${aPages.join(', ')}`,
-        pages: aPages,
-        usage: res.usage,
-        settings: state.settings,
-      }));
-      if (dump) {
-        try {
-          dump.raw_outputs.answer_key_extraction = {
-            pages: [...aPages],
-            model: extractionModel,
-            parsed: res.parsed,
-            usage: res.usage,
-          };
-        } catch (e) { captureError('onMarkUpToHere:answer_key_extraction:dump', e); }
+      } catch (e) {
+        // Best-effort: log, leave cached_answer_key_extraction
+        // null, continue with the rest of the marking flow. The
+        // matcher will see keysProvided=false and skip grading;
+        // the report still renders extracted student answers.
+        console.error('Answer-key extraction failed (parallel):', e);
+        captureError('onMarkUpToHere:answer_key_extraction', e);
+        practice.cached_answer_key_extraction = null;
       }
     }
 

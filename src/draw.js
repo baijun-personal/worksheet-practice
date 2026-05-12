@@ -32,7 +32,11 @@ export const DEFAULT_TYPE_WRAP_FRACTION = 0.9;
 // 6pt radius fits cleanly around a single printed MCQ letter
 // (a, b, c, d) without overlapping into neighbours.
 export const DEFAULT_CIRCLE_RADIUS_PT = 6;
-export const DEFAULT_TICK_SIZE_PT = 18;
+// Bounding-box edge length of a placed tick in PDF points. 48 ≈
+// matches the 48-image-pixel tick cursor preview, so the placed
+// mark is the same visual chunk the cursor previewed. Earlier
+// value (18) made the tick noticeably smaller than the cursor.
+export const DEFAULT_TICK_SIZE_PT = 48;
 
 export function makeStrokeId() {
   // crypto.randomUUID is widely supported, but fall back if missing.

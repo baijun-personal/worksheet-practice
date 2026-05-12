@@ -603,41 +603,33 @@ Allowed types and their schemas:
   - Use "/" for division regardless of whether the printed form is "÷" or "/".
 
 { "type": "linear_1var",
-  "var": "<letter>",
-  "lhs": { "coef": number, "const": number },
-  "rhs": { "coef": number, "const": number } }
-  - A single linear equation in ONE variable (e.g. "2x + 3 = 5x - 1",
-    "y = 7", "n - 4 = 12"). The variable may be any single letter.
-  - Transcribe each side as { coef, const } where coef is the
-    coefficient of the variable on that side and const is the
-    standalone number. Examples:
-       "2x + 3"        → { "coef": 2,  "const": 3 }
-       "5x - 1"        → { "coef": 5,  "const": -1 }
-       "7"             → { "coef": 0,  "const": 7 }
-       "−x"            → { "coef": -1, "const": 0 }
-       "y"             → { "coef": 1,  "const": 0 }
-  - DO NOT simplify, normalise, or solve — just transcribe both
-    sides verbatim. The local solver does the algebra.
+  "variable": "<letter>",
+  "lhs": [{"coef": number, "var": "<letter>"|null}, …],
+  "rhs": [{"coef": number, "var": "<letter>"|null}, …] }
+  - A single linear equation in ONE variable.
+  - lhs and rhs are arrays of TERMS. Each term has "coef" (the
+    coefficient, a number) and "var" (the variable letter, or
+    null when the term is a pure constant).
+  - The variable may be any single letter (typically x, but
+    also y, n, m, etc.). Set top-level "variable" to that letter.
+  - DO NOT simplify, normalise, or solve — just transcribe each
+    side's terms in the order they appear. The local solver does
+    the algebra.
 
 { "type": "linear_2var",
-  "vars": ["<letter>", "<letter>"],
   "equations": [
-    { "a": number, "b": number, "c": number },
-    { "a": number, "b": number, "c": number }
+    { "lhs": [terms…], "rhs": [terms…] },
+    { "lhs": [terms…], "rhs": [terms…] }
   ] }
-  - A system of TWO linear equations in TWO variables (e.g.
-    "2x + 3y = 6;  x - y = 1"). Each equation must be put into
-    the normalised form  a·v1 + b·v2 = c  where v1 = vars[0] and
-    v2 = vars[1]. If a term sits on the wrong side, move it (and
-    flip its sign) when reading. If a variable doesn't appear in
-    an equation, use 0 for its coefficient.
-  - Examples (with vars = ["x", "y"]):
-       "2x + 3y = 6"   → { "a": 2,  "b": 3,  "c": 6 }
-       "x - y = 1"     → { "a": 1,  "b": -1, "c": 1 }
-       "y = 2x + 5"    → { "a": -2, "b": 1,  "c": 5 }
-       "3x = 9"        → { "a": 3,  "b": 0,  "c": 9 }
-  - Variable letters in "vars" must match what's actually in the
-    image (commonly x and y, but could be a and b, etc.).
+  - A system of TWO linear equations in TWO variables. Each
+    equation uses the same lhs/rhs term-list shape as linear_1var.
+  - The two variables can be any two single letters (commonly x
+    and y, but also a/b, p/q, m/n).
+  - Recognise two equations from any of:
+      semicolon-separated:  "2x + 3y = 12; x - y = 1"
+      comma-separated:      "2x + 3y = 12, x - y = 1"
+      stacked vertically (two lines, second below the first
+      within the selected rectangle).
 
 { "type": "out_of_scope", "reason": "<short reason>" }
   - Math that doesn't fit any allowed type. Examples:
@@ -659,11 +651,36 @@ Image shows "24 ÷ 10" →
 Image shows "2.4 ÷ 0.6" →
 {"type":"arithmetic","op":"/","operands":[2.4,0.6]}
 
-Image shows "2x + 3 = 5x − 1" →
-{"type":"linear_1var","var":"x","lhs":{"coef":2,"const":3},"rhs":{"coef":5,"const":-1}}
+Image shows "2x + 3 = 13" →
+{"type":"linear_1var","variable":"x",
+ "lhs":[{"coef":2,"var":"x"},{"coef":3,"var":null}],
+ "rhs":[{"coef":13,"var":null}]}
 
-Image shows "2x + 3y = 6" and "x − y = 1" →
-{"type":"linear_2var","vars":["x","y"],"equations":[{"a":2,"b":3,"c":6},{"a":1,"b":-1,"c":1}]}
+Image shows "3y − 7 = 2" →
+{"type":"linear_1var","variable":"y",
+ "lhs":[{"coef":3,"var":"y"},{"coef":-7,"var":null}],
+ "rhs":[{"coef":2,"var":null}]}
+
+Image shows "3x − 7 = 2x + 5" →
+{"type":"linear_1var","variable":"x",
+ "lhs":[{"coef":3,"var":"x"},{"coef":-7,"var":null}],
+ "rhs":[{"coef":2,"var":"x"},{"coef":5,"var":null}]}
+
+Image shows "2x + 3y = 12; x − y = 1" →
+{"type":"linear_2var","equations":[
+  {"lhs":[{"coef":2,"var":"x"},{"coef":3,"var":"y"}],
+   "rhs":[{"coef":12,"var":null}]},
+  {"lhs":[{"coef":1,"var":"x"},{"coef":-1,"var":"y"}],
+   "rhs":[{"coef":1,"var":null}]}
+]}
+
+Image shows two stacked equations "a + b = 5" and "2a − b = 1" →
+{"type":"linear_2var","equations":[
+  {"lhs":[{"coef":1,"var":"a"},{"coef":1,"var":"b"}],
+   "rhs":[{"coef":5,"var":null}]},
+  {"lhs":[{"coef":2,"var":"a"},{"coef":-1,"var":"b"}],
+   "rhs":[{"coef":1,"var":null}]}
+]}
 
 Image shows "x² + 4x = 5" →
 {"type":"out_of_scope","reason":"Quadratic equation"}

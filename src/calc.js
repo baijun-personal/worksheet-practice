@@ -5,16 +5,26 @@
 // model's role narrow (vision-only "read the math") and makes the
 // answer deterministic.
 //
-// Stage 5  covers arithmetic.
-// Stage 10 covers linear_1var  — single linear equation in one
-//                                variable, e.g. "2x + 3 = 5x - 1".
-// Stage 11 covers linear_2var  — system of two linear equations
-//                                in two variables, solved by
-//                                Cramer's rule.
+// Supported types:
+//   arithmetic   — two-operand + - × ÷
+//   linear_1var  — single linear equation in one variable, e.g.
+//                  "2x + 3 = 13" or "3x - 7 = 2x + 5"
+//   linear_2var  — system of two linear equations in two
+//                  variables, solved by Cramer's rule
+//
+// The two linear types use a "term-list" shape — each side of the
+// equation is an array of { coef, var } terms where `var` is null
+// for a pure constant. This matches the natural way the model
+// reads handwritten / printed algebra and avoids forcing the
+// model to do any normalisation. Local code does all of:
+//   - move variable terms to lhs, constants to rhs
+//   - check det != 0 / contradictions / identities
+//   - compute and render decimal / remainder / fraction forms
 
 const MAX_OPERAND = 1e9;       // sanity bound; primary-school math won't exceed
+const MAX_TERMS = 20;          // generous upper bound on terms per side
 const ALLOWED_OPS = new Set(['+', '-', '*', '/']);
-const ALLOWED_TYPES_MVP = new Set([
+const ALLOWED_TYPES = new Set([
   'arithmetic', 'linear_1var', 'linear_2var', 'out_of_scope', 'unreadable',
 ]);
 
@@ -25,7 +35,7 @@ export function validateParsedCalc(parsed) {
   if (!parsed || typeof parsed !== 'object') {
     return { ok: false, reason: 'Empty parse response.' };
   }
-  if (!ALLOWED_TYPES_MVP.has(parsed.type)) {
+  if (!ALLOWED_TYPES.has(parsed.type)) {
     return { ok: false, reason: `Unrecognised type: ${parsed.type}` };
   }
   if (parsed.type === 'out_of_scope' || parsed.type === 'unreadable') {
@@ -49,51 +59,82 @@ export function validateParsedCalc(parsed) {
     return { ok: true };
   }
   if (parsed.type === 'linear_1var') {
-    if (!parsed.var || typeof parsed.var !== 'string') {
-      return { ok: false, reason: 'Missing variable name.' };
+    if (typeof parsed.variable !== 'string' || !/^[a-z]$/i.test(parsed.variable)) {
+      return { ok: false, reason: 'Variable name must be a single letter.' };
     }
-    for (const side of ['lhs', 'rhs']) {
-      const s = parsed[side];
-      if (!s || typeof s !== 'object') {
-        return { ok: false, reason: `Missing ${side}.` };
-      }
-      for (const k of ['coef', 'const']) {
-        const v = s[k];
-        if (typeof v !== 'number' || !Number.isFinite(v)) {
-          return { ok: false, reason: `${side}.${k} must be a finite number.` };
-        }
-        if (Math.abs(v) > MAX_OPERAND) {
-          return { ok: false, reason: `${side}.${k} too large.` };
-        }
+    if (!Array.isArray(parsed.lhs) || !Array.isArray(parsed.rhs)) {
+      return { ok: false, reason: 'lhs and rhs must be arrays.' };
+    }
+    if (parsed.lhs.length === 0 || parsed.rhs.length === 0) {
+      return { ok: false, reason: 'lhs and rhs cannot be empty.' };
+    }
+    if (parsed.lhs.length > MAX_TERMS || parsed.rhs.length > MAX_TERMS) {
+      return { ok: false, reason: 'Term list too long.' };
+    }
+    // Variable in every term must either be null (constant) or the
+    // declared top-level `variable`. Anything else is the model
+    // mixing variables in a "1var" equation — reject.
+    const declared = parsed.variable.toLowerCase();
+    for (const t of [...parsed.lhs, ...parsed.rhs]) {
+      const termCheck = validateTerm(t);
+      if (termCheck) return { ok: false, reason: termCheck };
+      if (t.var !== null && String(t.var).toLowerCase() !== declared) {
+        return { ok: false, reason: `Unexpected variable: ${t.var}` };
       }
     }
     return { ok: true };
   }
   if (parsed.type === 'linear_2var') {
-    if (!Array.isArray(parsed.vars) || parsed.vars.length !== 2
-        || !parsed.vars.every((v) => typeof v === 'string' && v)) {
-      return { ok: false, reason: 'Need exactly two variable names.' };
-    }
     if (!Array.isArray(parsed.equations) || parsed.equations.length !== 2) {
-      return { ok: false, reason: 'Need exactly two equations.' };
+      return { ok: false, reason: 'Need exactly 2 equations.' };
     }
+    const seenVars = new Set();
     for (const eq of parsed.equations) {
-      if (!eq || typeof eq !== 'object') {
-        return { ok: false, reason: 'Equation missing.' };
+      if (!eq || !Array.isArray(eq.lhs) || !Array.isArray(eq.rhs)) {
+        return { ok: false, reason: 'Each equation needs lhs and rhs.' };
       }
-      for (const k of ['a', 'b', 'c']) {
-        const v = eq[k];
-        if (typeof v !== 'number' || !Number.isFinite(v)) {
-          return { ok: false, reason: `Equation ${k} must be a finite number.` };
-        }
-        if (Math.abs(v) > MAX_OPERAND) {
-          return { ok: false, reason: `Equation ${k} too large.` };
-        }
+      if (eq.lhs.length === 0 || eq.rhs.length === 0) {
+        return { ok: false, reason: 'lhs and rhs cannot be empty.' };
       }
+      if (eq.lhs.length > MAX_TERMS || eq.rhs.length > MAX_TERMS) {
+        return { ok: false, reason: 'Term list too long.' };
+      }
+      for (const t of [...eq.lhs, ...eq.rhs]) {
+        const termCheck = validateTerm(t);
+        if (termCheck) return { ok: false, reason: termCheck };
+        if (t.var !== null) seenVars.add(String(t.var).toLowerCase());
+      }
+    }
+    // Guard against the model producing "linear_2var" where both
+    // equations use only one variable — that would actually be two
+    // equations in one variable (over-determined or redundant),
+    // which is a different solver problem.
+    if (seenVars.size !== 2) {
+      return { ok: false, reason: `Need exactly 2 distinct variables, found ${seenVars.size}.` };
     }
     return { ok: true };
   }
   return { ok: false, reason: 'Type not implemented.' };
+}
+
+// Single-term checker shared by linear_1var and linear_2var.
+// Returns a reason string when invalid, null when OK.
+function validateTerm(t) {
+  if (!t || typeof t !== 'object') return 'Each term must be an object.';
+  if (typeof t.coef !== 'number' || !Number.isFinite(t.coef)) {
+    return 'Coefficient must be a finite number.';
+  }
+  if (Math.abs(t.coef) > MAX_OPERAND) {
+    return 'Coefficient too large.';
+  }
+  // var = null means "this term is a constant". Anything else must
+  // be a single-letter variable name.
+  if (t.var !== null) {
+    if (typeof t.var !== 'string' || !/^[a-z]$/i.test(t.var)) {
+      return `Variable name must be a single letter: ${t.var}`;
+    }
+  }
+  return null;
 }
 
 // Render the user-facing input string from the parsed shape so the
@@ -107,129 +148,166 @@ export function stringifyParsedInput(parsed) {
     return `${formatNumber(a)} ${opSymbol} ${formatNumber(b)}`;
   }
   if (parsed.type === 'linear_1var') {
-    return `${formatLinearSide(parsed.lhs, parsed.var)} = ${formatLinearSide(parsed.rhs, parsed.var)}`;
+    return formatLinearEquation(parsed.lhs) + ' = ' + formatLinearEquation(parsed.rhs);
   }
   if (parsed.type === 'linear_2var') {
-    const [vx, vy] = parsed.vars || ['x', 'y'];
-    return (parsed.equations || [])
-      .map((eq) => `${formatBivariateLhs(eq, vx, vy)} = ${formatNumber(eq.c)}`)
-      .join('; ');
+    return (parsed.equations || []).map((eq) =>
+      formatLinearEquation(eq.lhs) + ' = ' + formatLinearEquation(eq.rhs)
+    ).join(';  ');
   }
   return '';
 }
 
-// "2x + 3" / "−x" / "5" — render a one-variable side from
-// { coef, const }. Drops zero terms; doesn't print "1x" (just "x").
-function formatLinearSide(side, varName) {
-  const v = varName || 'x';
-  const coef = side?.coef ?? 0;
-  const k = side?.const ?? 0;
-  const varTerm = coef === 0
-    ? ''
-    : (coef === 1 ? v : (coef === -1 ? `−${v}` : `${formatNumber(coef)}${v}`));
-  if (!varTerm) return formatNumber(k);
-  if (k === 0) return varTerm;
-  const sign = k > 0 ? ' + ' : ' − ';
-  return `${varTerm}${sign}${formatNumber(Math.abs(k))}`;
-}
-
-// "2x + 3y" / "x − y" — render the left side of a 2-variable
-// equation in ax + by = c form.
-function formatBivariateLhs(eq, vx, vy) {
-  const a = eq?.a ?? 0;
-  const b = eq?.b ?? 0;
-  const termA = a === 0 ? '' : (a === 1 ? vx : (a === -1 ? `−${vx}` : `${formatNumber(a)}${vx}`));
-  if (b === 0) return termA || '0';
-  const absB = Math.abs(b);
-  const sign = b > 0 ? (termA ? ' + ' : '') : (termA ? ' − ' : '−');
-  const bMag = absB === 1 ? vy : `${formatNumber(absB)}${vy}`;
-  return `${termA}${sign}${bMag}`;
+// Render a term list as a readable algebraic expression, e.g.
+// "2x + 3y − 5". Conventions:
+//   - First term: include sign only if negative.
+//   - Subsequent terms: " + " or " − " from the coefficient sign.
+//   - Coefficient 1 / -1 with a variable prints "x" / "−x", not "1x".
+//   - Coefficient 0 terms are kept (model can emit them and they're
+//     valid algebra), printed as "0". Rare in practice.
+//   - Minus sign is U+2212 (−), not hyphen-minus, to match the
+//     arithmetic typography (× and ÷) the popup uses elsewhere.
+function formatLinearEquation(terms) {
+  if (!Array.isArray(terms) || terms.length === 0) return '0';
+  let out = '';
+  for (let i = 0; i < terms.length; i++) {
+    const { coef, var: v } = terms[i];
+    const abs = Math.abs(coef);
+    let body;
+    if (v === null) {
+      body = formatNumber(abs);
+    } else if (abs === 1) {
+      body = String(v);
+    } else {
+      body = formatNumber(abs) + v;
+    }
+    if (i === 0) {
+      out += (coef < 0 ? '−' : '') + body;
+    } else {
+      out += (coef < 0 ? ' − ' : ' + ') + body;
+    }
+  }
+  return out;
 }
 
 // Solve a single linear equation in one variable.
 //
-// Input shape (validated upstream):
-//   { type: 'linear_1var', var, lhs: {coef, const}, rhs: {coef, const} }
-// meaning  lhs.coef * var + lhs.const  =  rhs.coef * var + rhs.const
-//
-// Standard form is computed here:
-//   A * var = B   where A = lhs.coef - rhs.coef, B = rhs.const - lhs.const
-// then var = B / A.
+// Move all variable terms to the lhs and all constants to the
+// rhs, giving the standard form  a·var = c. Then var = c / a.
 //
 // Edge cases:
-//   A == 0, B == 0  → identity (any value satisfies). Refuse rather
-//                     than return "x = anything" — the parent would
-//                     have to read the model's reasoning to know that
-//                     and the popup has no good way to show it.
-//   A == 0, B != 0  → contradiction (no solution). Same treatment.
+//   a === 0, c === 0  → identity (any value works). Refuse —
+//                       the popup has no good way to display
+//                       "any value" and primary papers don't
+//                       deliberately set this.
+//   a === 0, c !== 0  → contradiction. Refuse with a clear
+//                       message.
 //
-// Returns the standard forms shape:
-//   { ok, type: 'linear_1var', forms: [{label: var, value}, …] }
-// For integer-coef equations whose answer isn't a whole number we
-// also include a 'fraction' form (e.g. x = 5/2) for readability.
-export function computeLinear1Var(parsed) {
-  const v = parsed.var || 'x';
-  const lhsCoef = parsed.lhs?.coef ?? 0;
-  const lhsConst = parsed.lhs?.const ?? 0;
-  const rhsCoef = parsed.rhs?.coef ?? 0;
-  const rhsConst = parsed.rhs?.const ?? 0;
-  const A = lhsCoef - rhsCoef;
-  const B = rhsConst - lhsConst;
-  if (A === 0) {
-    if (B === 0) return { ok: false, reason: 'Identity — any value of ' + v + ' satisfies this.' };
-    return { ok: false, reason: 'No solution (the equation is a contradiction).' };
+// Output uses computeDivisionForms so the answer presents the
+// same decimal / remainder / fraction trio as arithmetic
+// division — consistent for the user across the two tools.
+export function solveLinear1Var(parsed) {
+  const v = parsed.variable;
+  const lhsX = sumCoefForVar(parsed.lhs, v);
+  const lhsC = sumCoefForVar(parsed.lhs, null);
+  const rhsX = sumCoefForVar(parsed.rhs, v);
+  const rhsC = sumCoefForVar(parsed.rhs, null);
+  const a = lhsX - rhsX;
+  const c = rhsC - lhsC;
+
+  if (a === 0) {
+    return c === 0
+      ? { ok: false, reason: `Equation is true for any value of ${v}.` }
+      : { ok: false, reason: 'Equation has no solution.' };
   }
-  const value = B / A;
-  const forms = [{ label: v, value: formatNumber(value) }];
-  // Add a fraction form when the answer is a clean rational with a
-  // non-trivial denominator. Integer coefficients give an exact
-  // a/b that's nicer to read than "0.6667".
-  if (Number.isInteger(A) && Number.isInteger(B) && B % A !== 0) {
-    forms.push({ label: 'fraction', value: simplifyFraction(B, A) });
-  }
-  return { ok: true, type: 'linear_1var', forms };
+
+  // c / a — re-use the division-forms machine for consistent
+  // decimal / remainder / fraction output. Each form gets the
+  // "var = …" prefix so the popup reads naturally.
+  const divForms = computeDivisionForms(c, a);
+  return {
+    ok: true,
+    type: 'linear_1var',
+    forms: divForms.map((f) => ({
+      label: f.label,
+      value: `${v} = ${f.value}`,
+    })),
+  };
 }
 
-// Solve a system of two linear equations in two unknowns via
-// Cramer's rule.
+// Solve a 2×2 linear system via Cramer's rule.
 //
-// Input shape (validated upstream):
-//   { type: 'linear_2var', vars: [vx, vy],
-//     equations: [ {a, b, c}, {a, b, c} ] }
-// each equation interpreted as  a * vx + b * vy = c.
+// Pull both variable names out of the term lists, sort
+// alphabetically so output ordering is stable (x before y, a
+// before b). Convert each equation to a·v1 + b·v2 = c form by
+// moving variables to lhs and constants to rhs. Then:
+//   det = a1·b2 − a2·b1
+//   v1  = (c1·b2 − c2·b1) / det
+//   v2  = (a1·c2 − a2·c1) / det
 //
-// det = a1*b2 - a2*b1.
-//   det == 0  → either no solution (parallel lines) or infinite
-//               (identical lines). Either way refuse — the popup
-//               doesn't have a good rendering for "any line".
-// Otherwise:
-//   vx = (c1*b2 - c2*b1) / det
-//   vy = (a1*c2 - a2*c1) / det
-export function computeLinear2Var(parsed) {
-  const eqs = parsed.equations || [];
-  if (eqs.length !== 2) return { ok: false, reason: 'Need exactly two equations.' };
-  const [vx, vy] = parsed.vars || ['x', 'y'];
-  const a1 = eqs[0].a, b1 = eqs[0].b, c1 = eqs[0].c;
-  const a2 = eqs[1].a, b2 = eqs[1].b, c2 = eqs[1].c;
+// det === 0 means the two equations are parallel or identical —
+// no unique solution. Refuse.
+//
+// The popup shows ONE form per variable (the decimal). 1-var
+// shows three forms; 2-var would be six lines and crowded. If
+// the parent wants exact fractions they can read the decimal or
+// compute the fraction themselves — primary-paper systems are
+// almost always integer-clean.
+export function solveLinear2Var(parsed) {
+  // Discover variable names from the terms and sort for stable
+  // output. Validator has already confirmed there are exactly 2.
+  const vars = new Set();
+  for (const eq of parsed.equations) {
+    for (const t of [...eq.lhs, ...eq.rhs]) {
+      if (t.var !== null) vars.add(String(t.var).toLowerCase());
+    }
+  }
+  const [v1, v2] = [...vars].sort();
+
+  const [eq1, eq2] = parsed.equations;
+  const a1 = sumCoefForVar(eq1.lhs, v1) - sumCoefForVar(eq1.rhs, v1);
+  const b1 = sumCoefForVar(eq1.lhs, v2) - sumCoefForVar(eq1.rhs, v2);
+  const c1 = sumCoefForVar(eq1.rhs, null) - sumCoefForVar(eq1.lhs, null);
+  const a2 = sumCoefForVar(eq2.lhs, v1) - sumCoefForVar(eq2.rhs, v1);
+  const b2 = sumCoefForVar(eq2.lhs, v2) - sumCoefForVar(eq2.rhs, v2);
+  const c2 = sumCoefForVar(eq2.rhs, null) - sumCoefForVar(eq2.lhs, null);
+
   const det = a1 * b2 - a2 * b1;
   if (det === 0) {
-    return { ok: false, reason: 'No unique solution — lines are parallel or identical.' };
+    return {
+      ok: false,
+      reason: 'No unique solution — the equations are parallel or identical.',
+    };
   }
-  const xNum = c1 * b2 - c2 * b1;
-  const yNum = a1 * c2 - a2 * c1;
-  const xVal = xNum / det;
-  const yVal = yNum / det;
-  const forms = [
-    { label: vx, value: formatNumber(xVal) },
-    { label: vy, value: formatNumber(yVal) },
-  ];
-  // Fraction forms when integer system gives non-integer answer.
-  const allInt = [a1, b1, c1, a2, b2, c2].every(Number.isInteger);
-  if (allInt) {
-    if (xNum % det !== 0) forms.push({ label: `${vx} (fraction)`, value: simplifyFraction(xNum, det) });
-    if (yNum % det !== 0) forms.push({ label: `${vy} (fraction)`, value: simplifyFraction(yNum, det) });
+
+  const v1Num = c1 * b2 - c2 * b1;
+  const v2Num = a1 * c2 - a2 * c1;
+  const v1Forms = computeDivisionForms(v1Num, det);
+  const v2Forms = computeDivisionForms(v2Num, det);
+  // Take the decimal (first) form for each variable. See doc above.
+  return {
+    ok: true,
+    type: 'linear_2var',
+    forms: [
+      { label: v1, value: `${v1} = ${v1Forms[0]?.value ?? '?'}` },
+      { label: v2, value: `${v2} = ${v2Forms[0]?.value ?? '?'}` },
+    ],
+  };
+}
+
+// Sum the coefficients of all terms whose `var` field matches the
+// given variable name (or null for "constants"). Case-insensitive
+// on variable names — the validator already locked them down to
+// single letters, but the input casing isn't guaranteed.
+function sumCoefForVar(terms, v) {
+  if (!Array.isArray(terms)) return 0;
+  const target = v === null ? null : String(v).toLowerCase();
+  let sum = 0;
+  for (const t of terms) {
+    const termVar = t.var === null ? null : String(t.var).toLowerCase();
+    if (termVar === target) sum += t.coef;
   }
-  return { ok: true, type: 'linear_2var', forms };
+  return sum;
 }
 
 // Compute the result of a validated arithmetic expression. Returns
