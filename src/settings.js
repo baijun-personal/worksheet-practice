@@ -101,6 +101,14 @@ const DEFAULTS = {
   customExplanationVariantGiveHint: '',
   passphrase: '', // empty = unlocked; first run sets it
   unlocked: false,
+  // Diagnostic: when true, every practice-mode mark-up-to-here run
+  // saves a JSON dump of the full session (inputs / cache before /
+  // matcher pairs / compare request + response / final report /
+  // cache after / errors). Off by default — dumps contain the
+  // student's actual answers and the expected-answer text, so they
+  // should only be enabled for troubleshooting and not shared
+  // outside trusted hands. See Settings → Diagnostics.
+  practiceMarkingDiagnostics: false,
 };
 
 export function loadSettings() {

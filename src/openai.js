@@ -713,6 +713,39 @@ Give 1–2 sentences nudging the child toward the right approach WITHOUT reveali
 Do NOT state, paraphrase, or trivially imply the correct answer in any form.`,
 };
 
+// Lightweight FNV-1a 32-bit hash. Used to fingerprint each prompt
+// at module load so the practice-mode diagnostic dump can record
+// which prompt version was active (without copying the full
+// multi-kilobyte text into every dump). 8 hex chars × 5 prompts is
+// plenty for spotting drift across builds; collisions in this
+// tiny set don't matter. Sync + dependency-free, no Web Crypto
+// async fuss.
+function shortHash(s) {
+  let h = 0x811c9dc5;
+  const str = String(s || '');
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = (h * 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
+// Stable per-prompt hashes — computed once at module load. The dump
+// reads these and (when a custom prompt is in use) also hashes the
+// active custom so the diff between "default" and "active" is
+// visible.
+export const PROMPT_HASHES = {
+  student:        shortHash(STUDENT_PROMPT),
+  studentSingle:  shortHash(STUDENT_PROMPT_SINGLE),
+  answerKey:      shortHash(ANSWER_KEY_PROMPT),
+  compare:        shortHash(COMPARE_PROMPT),
+  compareVisual:  shortHash(COMPARE_VISUAL_PROMPT),
+};
+
+// Exported for the dump assembler so it can hash an active custom
+// prompt for comparison against the default.
+export { shortHash };
+
 // Built-in prompts exposed for the Settings UI. Lets the
 // custom-prompt textareas pre-fill with the current built-in
 // text so reviewers can see what's being sent without grepping

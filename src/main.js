@@ -21,6 +21,7 @@ import {
   BUILTIN_PROMPTS,
 } from './openai.js';
 import { matchExtractions, buildFinalReport, partitionPairsByModality, normalizeQNumber, pairCacheKey } from './compare.js';
+import { PROMPT_HASHES, shortHash } from './openai.js';
 import { renderReport, exportReportPdf, exportCompletedAttemptPdf } from './report.js';
 import { loadCatalog, fetchBuiltinPdf, builtinAttemptId } from './builtin.js';
 import { composeFourUpA4, composeContactSheetA4, chunkInto } from './fourup.js';
@@ -747,6 +748,7 @@ function bindSetupForm() {
   setVal('explanation-render-dpi', String(state.settings.explanationRenderDpi || 150));
   setVal('batch-size', String(state.settings.batchSize || 5));
   setChecked('test-mode', !!state.settings.testMode);
+  setChecked('practice-marking-diagnostics', !!state.settings.practiceMarkingDiagnostics);
   setVal('price-in', String(state.settings.priceInPerMTokens ?? 0.75));
   setVal('price-cached-in', String(state.settings.priceCachedInPerMTokens ?? 0.075));
   setVal('price-out', String(state.settings.priceOutPerMTokens ?? 4.50));
@@ -888,6 +890,11 @@ function bindSetupForm() {
   }
   $('test-mode').addEventListener('change', () => {
     state.settings = saveSettings({ testMode: $('test-mode').checked });
+  });
+  $('practice-marking-diagnostics')?.addEventListener('change', () => {
+    state.settings = saveSettings({
+      practiceMarkingDiagnostics: $('practice-marking-diagnostics').checked,
+    });
   });
 
   // API mode toggle + proxy fields
@@ -2629,6 +2636,129 @@ function isCurrentPageFrozen() {
 // pair_id stamped on every match-output pair). The cache key is
 // equivalent to pair.pair_id; use that directly at lookup sites.
 
+// --- Practice-mode diagnostic dump helpers --------------------------------
+// All gated on state.settings.practiceMarkingDiagnostics. The dump
+// is built incrementally inside onMarkUpToHere and flushed via
+// triggerDownload at the end. Failures during dump assembly never
+// alter the marking flow — every helper is defensive against
+// missing inputs and the final flush is wrapped in try/catch.
+
+// Redact secrets before serialising settings into the dump.
+function redactSettingsForDump(settings) {
+  const out = { ...(settings || {}) };
+  if (out.openaiKey) out.openaiKey = '<redacted>';
+  if (out.proxyToken) out.proxyToken = '<redacted>';
+  return out;
+}
+
+// Per-page extraction-cache summary — counts only, no raw values
+// (the current session's raw extraction lives in raw_outputs; older
+// sessions' raw values aren't useful for debugging the CURRENT
+// mark).
+function summariseExtractionCache(byPage) {
+  const out = {};
+  for (const [key, ex] of Object.entries(byPage || {})) {
+    out[key] = {
+      answers_count: Array.isArray(ex?.answers) ? ex.answers.length : 0,
+    };
+  }
+  return out;
+}
+
+// Compact pair snapshot for the matcher.pairs[] block — keeps every
+// field a developer needs to track a pair through the pipeline,
+// drops the verbose per-part arrays (those go in raw_outputs).
+function summarisePair(pair) {
+  return {
+    pair_id: pair?.pair_id,
+    completed_page: pair?.completed_page,
+    question: pair?.question,
+    display_question: pair?.display_question,
+    _syntheticSection: pair?._syntheticSection,
+    answer_page: pair?.answer_page,
+    is_multi_part: !!pair?.is_multi_part,
+    student_answer: pair?.student_answer,
+    expected_answer: pair?.expected_answer,
+    match_method: pair?.match_method,
+    match_confidence: pair?.match_confidence,
+  };
+}
+
+// One cache-hit row in compare.text.cache_hits / compare.visual.cache_hits.
+function summariseCachedCompareRow(row, pair_id) {
+  return {
+    pair_id,
+    cached_status: row?.status ?? null,
+    cached_student_answer: row?.student_answer ?? null,
+    cached_expected_answer: row?.expected_answer ?? null,
+    cached_comment: row?.comment ?? null,
+    cached_question: row?.question ?? null,
+  };
+}
+
+// Active prompt hashes (default + custom-active when set).
+function buildVersionsBlock(settings) {
+  const customCompare = (settings?.customComparePrompt || '').trim();
+  const customCompareVisual = (settings?.customCompareVisualPrompt || '').trim();
+  const customStudent = (settings?.customStudentPrompt || '').trim();
+  const customStudentSingle = (settings?.customStudentPromptSingle || '').trim();
+  const customAnswerKey = (settings?.customAnswerKeyPrompt || '').trim();
+  return {
+    build: 'dev',
+    prompts: {
+      student_prompt_hash_default:        PROMPT_HASHES.student,
+      student_prompt_hash_active:         customStudent ? shortHash(customStudent) : PROMPT_HASHES.student,
+      student_prompt_is_custom:           !!customStudent,
+      student_single_prompt_hash_default: PROMPT_HASHES.studentSingle,
+      student_single_prompt_hash_active:  customStudentSingle ? shortHash(customStudentSingle) : PROMPT_HASHES.studentSingle,
+      student_single_prompt_is_custom:    !!customStudentSingle,
+      answer_key_prompt_hash_default:     PROMPT_HASHES.answerKey,
+      answer_key_prompt_hash_active:      customAnswerKey ? shortHash(customAnswerKey) : PROMPT_HASHES.answerKey,
+      answer_key_prompt_is_custom:        !!customAnswerKey,
+      compare_prompt_hash_default:        PROMPT_HASHES.compare,
+      compare_prompt_hash_active:         customCompare ? shortHash(customCompare) : PROMPT_HASHES.compare,
+      compare_prompt_is_custom:           !!customCompare,
+      compare_visual_prompt_hash_default: PROMPT_HASHES.compareVisual,
+      compare_visual_prompt_hash_active:  customCompareVisual ? shortHash(customCompareVisual) : PROMPT_HASHES.compareVisual,
+      compare_visual_prompt_is_custom:    !!customCompareVisual,
+    },
+  };
+}
+
+// Filename: practice-mark__<attempt_short>__session-N__<ts>.json
+function buildDumpFilename(dump) {
+  const short = (dump.session?.attempt_short_id || 'unknown');
+  const idx = dump.session?.mark_session_index ?? 0;
+  const ts = (dump.session?.started_at || new Date().toISOString())
+    .replace(/[:.]/g, '-');
+  return `practice-mark__${short}__session-${idx}__${ts}.json`;
+}
+
+// Wrap the whole flush so a Blob / stringify / download failure
+// can never break a successful marking run. Errors land in console
+// for dev visibility; users see nothing.
+function flushPracticeDump(dump) {
+  if (!dump) return;
+  try {
+    // Belt-and-braces redaction — the dump already passed through
+    // redactSettingsForDump on assembly, but a future refactor that
+    // accidentally writes openaiKey into the dump body somewhere
+    // else gets caught here too.
+    if (dump.settings_snapshot?.openaiKey
+        && dump.settings_snapshot.openaiKey !== '<redacted>') {
+      dump.settings_snapshot.openaiKey = '<redacted>';
+    }
+    const filename = buildDumpFilename(dump);
+    const blob = new Blob(
+      [JSON.stringify(dump, null, 2)],
+      { type: 'application/json' }
+    );
+    triggerDownload(blob, filename);
+  } catch (e) {
+    console.error('Practice dump flush failed:', e);
+  }
+}
+
 // Would the proposed new pages / subject / level change invalidate
 // the practice attempt's existing cache? Returns true only if BOTH
 // (a) there's practice cache state worth clearing AND
@@ -3412,6 +3542,46 @@ function setPracticeMarkStatus(text, kind) {
 async function onMarkUpToHere() {
   if (!state.attempt || state.attempt.mode !== 'practice') return;
 
+  // --- Practice diagnostic dump scaffolding ---
+  // When the Settings toggle is on, build a full JSON snapshot of
+  // this mark-up-to-here session and download it at the end.
+  // Failures during dump assembly NEVER alter the marking flow —
+  // every captureError / finishDump call is wrapped at the
+  // outermost try/catch, and flushPracticeDump has its own
+  // try/catch on the actual Blob/download.
+  const dumpOn = !!state.settings.practiceMarkingDiagnostics;
+  const dump = dumpOn ? {
+    schema_version: 2,
+    kind: 'practice-mark-diagnostic',
+    session: {
+      started_at: new Date().toISOString(),
+      outcome: 'success',
+      no_op_reason: null,
+    },
+    errors: [],
+  } : null;
+  function captureError(stage, e) {
+    if (!dump) return;
+    try {
+      dump.errors.push({
+        stage, message: e?.message || String(e), ts: new Date().toISOString(),
+      });
+    } catch {}
+  }
+  function finishDump(outcome, no_op_reason = null) {
+    if (!dump) return;
+    try {
+      dump.session.outcome = outcome;
+      dump.session.no_op_reason = no_op_reason;
+      dump.session.ended_at = new Date().toISOString();
+      dump.session.duration_ms =
+        Date.parse(dump.session.ended_at) - Date.parse(dump.session.started_at);
+      flushPracticeDump(dump);
+    } catch (e) {
+      console.error('Practice dump finalise failed:', e);
+    }
+  }
+
   // Flush any in-progress typed text — same hook as onSubmit. Await
   // the IDB write so the extraction pipeline doesn't race against
   // an unfinished stroke save.
@@ -3425,10 +3595,12 @@ async function onMarkUpToHere() {
   if (apiMode === 'proxy') {
     if (!state.settings.proxyEndpoint || !state.settings.proxyToken) {
       setPracticeMarkStatus('Proxy URL / token missing — set in Setup → Advanced.', 'error');
+      finishDump('no_op', 'awaiting_auth');
       return;
     }
   } else if (!state.settings.openaiKey) {
     setPracticeMarkStatus('No API key — set it in Setup → Advanced.', 'error');
+    finishDump('no_op', 'awaiting_auth');
     return;
   }
 
@@ -3437,6 +3609,7 @@ async function onMarkUpToHere() {
   const currentIdx = qPages.indexOf(state.currentPage);
   if (currentIdx < 0) {
     setPracticeMarkStatus('Current page is not in the question range.', 'error');
+    finishDump('no_op', 'current_page_not_in_question_pages');
     return;
   }
   const pagesUpToCurrent = qPages.slice(0, currentIdx + 1);
@@ -3452,7 +3625,43 @@ async function onMarkUpToHere() {
   if (newPages.length === 0) {
     setPracticeMarkStatus('Already marked up to here.', 'ok');
     setTimeout(() => setPracticeMarkStatus(''), 3000);
+    finishDump('no_op', 'no_new_pages');
     return;
+  }
+
+  // Capture pre-run state into the dump now that we're past the
+  // early-return gates and committed to running the pipeline.
+  if (dump) {
+    try {
+      practice.mark_session_count = (practice.mark_session_count || 0) + 1;
+      dump.session.attempt_id = state.attempt.id;
+      dump.session.attempt_short_id = String(state.attempt.id || '').slice(0, 8);
+      dump.session.mark_session_index = practice.mark_session_count;
+      dump.versions = buildVersionsBlock(state.settings);
+      dump.settings_snapshot = redactSettingsForDump(state.settings);
+      dump.attempt_header = {
+        subject: state.attempt.subject || '',
+        level: state.attempt.level || '',
+        questionPages: [...(state.attempt.questionPages || [])],
+        answerPages: [...(state.attempt.answerPages || [])],
+        mode: state.attempt.mode,
+      };
+      dump.marked_pages = {
+        before_session: [...(practice.markedPages || [])],
+        this_session_new: [...newPages],
+        after_session: null, // filled in at the end
+      };
+      dump.cache_before = {
+        student_extractions_by_page: summariseExtractionCache(practice.cached_student_extractions_by_page),
+        answer_key_extraction_cached: practice.cached_answer_key_extraction != null,
+        answer_key_answer_count: practice.cached_answer_key_extraction?.answers?.length || 0,
+        compare_pair_ids_cached: Object.keys(practice.cached_compare_rows_by_pair_key || {}).sort(),
+        visual_pair_ids_cached: Object.keys(practice.cached_visual_rows_by_pair_key || {}).sort(),
+      };
+      dump.raw_outputs = { student_extractions: [], answer_key_extraction: null };
+    } catch (e) {
+      captureError('onMarkUpToHere:cache_before_snapshot', e);
+    }
   }
 
   // Lock UI in place. Disable drawing + the mark button itself
@@ -3580,6 +3789,17 @@ async function onMarkUpToHere() {
         usage: res.usage,
         settings: state.settings,
       }));
+      if (dump) {
+        try {
+          dump.raw_outputs.student_extractions.push({
+            batchKey,
+            plannedPages: [...batches[i].plannedPages],
+            model: extractionModel,
+            parsed: res.parsed,
+            usage: res.usage,
+          });
+        } catch (e) { captureError('onMarkUpToHere:student_extraction:dump', e); }
+      }
     }
 
     // Answer-key extraction (one-time, cached after first run).
@@ -3620,6 +3840,16 @@ async function onMarkUpToHere() {
         usage: res.usage,
         settings: state.settings,
       }));
+      if (dump) {
+        try {
+          dump.raw_outputs.answer_key_extraction = {
+            pages: [...aPages],
+            model: extractionModel,
+            parsed: res.parsed,
+            usage: res.usage,
+          };
+        } catch (e) { captureError('onMarkUpToHere:answer_key_extraction:dump', e); }
+      }
     }
 
     // Build the union of all cached extractions and re-run match.
@@ -3630,6 +3860,40 @@ async function onMarkUpToHere() {
       ? [practice.cached_answer_key_extraction] : [];
     const match = matchExtractions(allStudentResults, allKeyResults);
     const { text: textPairs, visual: visualPairs } = partitionPairsByModality(match);
+
+    if (dump) {
+      try {
+        const anyResetSeen =
+          (match.pairs || []).some((p) => (p._syntheticSection || 1) > 1);
+        dump.matcher = {
+          input_student_batch_count: allStudentResults.length,
+          input_answer_key_count: practice.cached_answer_key_extraction?.answers?.length || 0,
+          paperHasSections: anyResetSeen,
+          pairs: (match.pairs || []).map(summarisePair),
+          not_in_attempt: match.not_in_attempt || [],
+          keysProvided: !!match.keysProvided,
+        };
+        dump.compare = {
+          text: {
+            cache_hits: [],
+            new_pair_ids: [],
+            api_request_sent: false,
+            model: textCompareModel,
+            request_pair_summary: [],
+            response_parsed: null,
+            response_usage: null,
+            rows_without_pair_id: 0,
+            error: null,
+          },
+          visual: {
+            cache_hits: [],
+            new_pair_ids: [],
+            results: [],
+            model: visualCompareModel,
+          },
+        };
+      } catch (e) { captureError('onMarkUpToHere:match:dump', e); }
+    }
 
     // Make sure the cache slots exist for legacy practice records
     // created before Stage 8 shipped.
@@ -3645,8 +3909,29 @@ async function onMarkUpToHere() {
     for (const pair of textPairs) {
       const key = pairCacheKey(pair);
       const cached = practice.cached_compare_rows_by_pair_key[key];
-      if (cached) cachedTextRows.push(cached);
-      else textPairsToCompare.push({ pair, key });
+      if (cached) {
+        cachedTextRows.push(cached);
+        if (dump) {
+          try {
+            dump.compare.text.cache_hits.push(summariseCachedCompareRow(cached, key));
+          } catch (e) { captureError('onMarkUpToHere:text_compare:dump_cache_hit', e); }
+        }
+      } else {
+        textPairsToCompare.push({ pair, key });
+        if (dump) {
+          try {
+            dump.compare.text.new_pair_ids.push(key);
+            dump.compare.text.request_pair_summary.push({
+              pair_id: pair.pair_id,
+              question: pair.display_question || pair.question,
+              is_multi_part: !!pair.is_multi_part,
+              student_answer: pair.student_answer,
+              expected_answer: pair.expected_answer,
+              match_confidence: pair.match_confidence,
+            });
+          } catch (e) { captureError('onMarkUpToHere:text_compare:dump_new', e); }
+        }
+      }
     }
 
     let aiTextReport = null;
@@ -3687,6 +3972,14 @@ async function onMarkUpToHere() {
           usage: cmpRes.usage,
           settings: state.settings,
         }));
+        if (dump) {
+          try {
+            dump.compare.text.api_request_sent = true;
+            dump.compare.text.response_parsed = cmpRes.parsed || null;
+            dump.compare.text.response_usage = cmpRes.usage || null;
+            dump.compare.text.rows_without_pair_id = newRows.filter((r) => !r.pair_id).length;
+          } catch (e) { captureError('onMarkUpToHere:text_compare:dump_response', e); }
+        }
       } catch (e) {
         // Text-compare failure is non-fatal — buildFinalReport falls
         // back to local string-equality scoring on uncached pairs;
@@ -3695,6 +3988,11 @@ async function onMarkUpToHere() {
         compareError = e.message;
         if (cachedTextRows.length > 0) {
           aiTextReport = { questions: cachedTextRows };
+        }
+        captureError('onMarkUpToHere:text_compare', e);
+        if (dump) {
+          try { dump.compare.text.error = e?.message || String(e); }
+          catch {}
         }
       }
     } else if (cachedTextRows.length > 0) {
@@ -3716,7 +4014,15 @@ async function onMarkUpToHere() {
       const cached = practice.cached_visual_rows_by_pair_key[key];
       if (cached) {
         visualResults.push(cached);
+        if (dump) {
+          try { dump.compare.visual.cache_hits.push({ pair_id: key }); }
+          catch (e) { captureError('onMarkUpToHere:visual_compare:dump_cache_hit', e); }
+        }
         continue;
+      }
+      if (dump) {
+        try { dump.compare.visual.new_pair_ids.push(key); }
+        catch (e) { captureError('onMarkUpToHere:visual_compare:dump_new', e); }
       }
       setPracticeMarkStatus(`Visual compare ${pair.display_question || pair.question} (${i + 1}/${visualPairs.length})`, 'saving');
       try {
@@ -3744,9 +4050,29 @@ async function onMarkUpToHere() {
           usage: res.usage,
           settings: state.settings,
         }));
+        if (dump) {
+          try {
+            dump.compare.visual.results.push({
+              pair_id: key,
+              parsed: res.parsed,
+              usage: res.usage,
+              error: null,
+            });
+          } catch (e) { captureError('onMarkUpToHere:visual_compare:dump_response', e); }
+        }
       } catch (e) {
         console.error('Practice visual compare failed', e);
         visualResults.push({ pair, error: e.message });
+        captureError('onMarkUpToHere:visual_compare', e);
+        if (dump) {
+          try {
+            dump.compare.visual.results.push({
+              pair_id: key,
+              parsed: null,
+              error: e?.message || String(e),
+            });
+          } catch {}
+        }
       }
     }
 
@@ -3789,6 +4115,30 @@ async function onMarkUpToHere() {
       await putAttempt(state.attempt);
     } catch (e) {
       console.error('Failed to persist practice state', e);
+      captureError('onMarkUpToHere:storage_update', e);
+    }
+
+    if (dump) {
+      try {
+        dump.final_report = merged;
+        dump.marked_pages.after_session = [...practice.markedPages];
+        dump.cache_after = {
+          student_extractions_by_page: summariseExtractionCache(practice.cached_student_extractions_by_page),
+          answer_key_extraction_cached: practice.cached_answer_key_extraction != null,
+          compare_pair_ids_cached: Object.keys(practice.cached_compare_rows_by_pair_key || {}).sort(),
+          compare_pair_ids_added_this_session:
+            (dump.compare?.text?.new_pair_ids || []).filter(
+              (pid) => practice.cached_compare_rows_by_pair_key && practice.cached_compare_rows_by_pair_key[pid]
+            ),
+          visual_pair_ids_cached: Object.keys(practice.cached_visual_rows_by_pair_key || {}).sort(),
+          visual_pair_ids_added_this_session: [...(dump.compare?.visual?.new_pair_ids || [])],
+        };
+        dump.cost_breakdown = {
+          this_session_tasks: taskUsages,
+          cumulative_tasks: allTasks,
+          cumulative_totals: totals,
+        };
+      } catch (e) { captureError('onMarkUpToHere:report_build:dump', e); }
     }
 
     if (finishedPaper) {
@@ -3804,6 +4154,7 @@ async function onMarkUpToHere() {
       setToolButtonsDisabled(false);
       exitFullscreenPractice();
       showReport(merged);
+      finishDump('success');
       // Status pill is on the practice stage which is now hidden; it
       // re-appears next time practice is shown but we clear it then.
       return;
@@ -3823,6 +4174,7 @@ async function onMarkUpToHere() {
     }
     applyPracticeStateForPage();
     setTimeout(() => setPracticeMarkStatus(''), 4000);
+    finishDump('success');
   } catch (e) {
     console.error('Practice marking failed', e);
     setPracticeMarkStatus(`Marking failed: ${e.message}`, 'error');
@@ -3831,6 +4183,8 @@ async function onMarkUpToHere() {
       markBtn.textContent = prevBtnLabel;
     }
     setToolButtonsDisabled(false);
+    captureError('onMarkUpToHere:entry', e);
+    finishDump('error');
   }
 }
 
