@@ -629,6 +629,19 @@ body.app-immersive .build-badge { display: none; }
   50.01%, 100% { opacity: 0; }
 }
 
+/* Generic toolbar tool-icon wrapper. Used by the Pen / Type /
+   Eraser SVG icons. The SVGs use stroke="currentColor" and
+   fill="currentColor" on filled details, so they inherit the
+   button's text colour automatically — turning white when the
+   .tool-btn.active state flips the foreground colour. */
+.tool-btn .tool-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.tool-btn .tool-icon svg { display: block; }
+
 /* Calculator toolbar button. position:relative so the
    .calc-tool-remaining badge can pin to the corner. The icon is an
    inline SVG sized to roughly match the existing text-button cap. */
