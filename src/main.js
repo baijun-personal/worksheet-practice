@@ -2199,7 +2199,13 @@ function bindPracticeUI() {
     else if (ev.key === 't') document.querySelector('[data-tool="type"]')?.click();
     else if (ev.key === 'c') document.querySelector('[data-tool="circle"]')?.click();
     else if (ev.key === 'v') document.querySelector('[data-tool="tick"]')?.click();
-    else if ((ev.ctrlKey || ev.metaKey) && ev.key === 'z') { ev.preventDefault(); onUndo(); }
+    else if ((ev.ctrlKey || ev.metaKey) && ev.key === 'z') {
+      ev.preventDefault();
+      // Skip the IndexedDB read entirely on frozen pages — the
+      // handler-level guard catches it too but stopping here also
+      // saves the no-op stroke fetch.
+      if (!isCurrentPageFrozen()) onUndo();
+    }
     else if (ev.key === 'ArrowLeft') navigateBy(-1);
     else if (ev.key === 'ArrowRight') navigateBy(1);
   });
@@ -2519,8 +2525,25 @@ function pageNumberLabel(currentPage) {
   return idx >= 0 ? String(idx + 1) : String(currentPage);
 }
 
+// Is the current practice-mode page already marked? Frozen pages
+// MUST stay byte-identical with the cached extraction/report —
+// otherwise the report would reference strokes that no longer
+// exist. Used by onUndo / onClearPage / Ctrl+Z to bail before any
+// stroke mutation. Returns false for final-mode attempts and for
+// any non-frozen page.
+function isCurrentPageFrozen() {
+  if (!state.attempt) return false;
+  if (state.attempt.mode !== 'practice') return false;
+  const marked = state.attempt.practice?.markedPages || [];
+  return marked.includes(state.currentPage);
+}
+
 async function onUndo() {
   if (!state.attempt) return;
+  // Defense in depth: even though the Undo button is disabled on
+  // frozen pages, Ctrl+Z / synthetic clicks / future code paths
+  // could still call onUndo. Bail before mutating IndexedDB.
+  if (isCurrentPageFrozen()) return;
   const strokes = await getStrokesForPage(state.attempt.id, state.currentPage);
   if (strokes.length === 0) return;
   const last = strokes[strokes.length - 1];
@@ -2536,6 +2559,7 @@ async function onUndo() {
 
 async function onClearPage() {
   if (!state.attempt) return;
+  if (isCurrentPageFrozen()) return;
   // confirmInPage instead of native confirm() — iOS Safari forces an
   // exit from fullscreen whenever it shows a native dialog, breaking
   // immersive practice mode. The in-page modal stays inside the
