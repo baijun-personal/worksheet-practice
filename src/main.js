@@ -28,6 +28,7 @@ import { buildTaskRecord, aggregateTasks, TASK_TYPES } from './cost.js';
 import { runPageDetection, rangesFromPages } from './detect.js';
 import {
   renderReviewPage, pagesWithReviews, recordIndex,
+  buildPageStats, buildPageListRows,
   popupBodyHtml, popupTitle, lowConfidenceBannerHtml,
 } from './review.js';
 
@@ -2307,11 +2308,13 @@ function applyPracticeStateForPage() {
   const submitBtn = $('submit-btn');
   const markBtn = $('mark-up-to-here-btn');
   const banner = $('frozen-page-banner');
+  const rail = $('practice-review-rail');
   const stagePractice = $('stage-practice');
   if (submitBtn) submitBtn.hidden = !!isPractice;
   if (!isPractice) {
     if (markBtn) markBtn.hidden = true;
     if (banner) banner.hidden = true;
+    if (rail) { rail.hidden = true; rail.innerHTML = ''; }
     if (stagePractice) stagePractice.classList.remove('frozen-page');
     setToolButtonsDisabled(false);
     return;
@@ -2337,6 +2340,102 @@ function applyPracticeStateForPage() {
   }
   if (stagePractice) stagePractice.classList.toggle('frozen-page', isFrozen);
   setToolButtonsDisabled(isFrozen);
+  // Populate the practice-mode review rail on frozen pages so the
+  // child sees what went wrong on THIS page without leaving the
+  // practice stage. Same content shape as the final-report review
+  // rail (Stage 3 per-page stats on top + Stage 1 wrong-answer rows
+  // below); clicking a row opens the existing Review Mode popup.
+  renderPracticeReviewRail(rail, isFrozen);
+}
+
+function renderPracticeReviewRail(rail, isFrozen) {
+  if (!rail) return;
+  if (!isFrozen) {
+    rail.hidden = true;
+    rail.innerHTML = '';
+    return;
+  }
+  // Source the report from the live attempt (survives a refresh
+  // because attempt.reportJson / attempt.practice.latest_report are
+  // persisted to IndexedDB on every mark-up-to-here).
+  const report =
+    state.reportJson ||
+    state.attempt?.reportJson ||
+    state.attempt?.practice?.latest_report ||
+    null;
+  if (!report) {
+    rail.hidden = true;
+    rail.innerHTML = '';
+    return;
+  }
+  const questions = Array.isArray(report.questions) ? report.questions : [];
+  const reviewRecords = Array.isArray(report.review_records) ? report.review_records : [];
+  // Mirror state.reportJson so onOpenReviewPopup (which reads from
+  // state.reportJson) can resolve the per-question detail when the
+  // user clicks a row. Idempotent — harmless if already set.
+  state.reportJson = report;
+
+  rail.innerHTML = '';
+
+  // Per-page stats block — same component as the final-report rail.
+  const stats = buildPageStats(questions);
+  if (stats.length > 0) {
+    const wrap = document.createElement('div');
+    wrap.className = 'page-stats-block';
+    wrap.innerHTML = `
+      <div class="page-stats-title">Per page</div>
+      <div class="page-stats-row">${stats.map((s) => `
+        <div class="page-stats-pill${s.page === Number(state.currentPage) ? ' current' : ''}">
+          <span class="page-stats-page">Page ${s.page}</span>
+          <span class="page-stats-score">${s.correct}/${s.total}</span>
+        </div>`).join('')}
+      </div>`;
+    rail.appendChild(wrap);
+  }
+
+  // Wrong-answer rows for THIS page, in question-number order.
+  const rows = buildPageListRows(reviewRecords, state.currentPage);
+  if (rows.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'muted small';
+    empty.style.marginTop = '6px';
+    empty.textContent = 'No mistakes on this page — nice work!';
+    rail.appendChild(empty);
+  } else {
+    for (const row of rows) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'review-list-row';
+      btn.innerHTML =
+        `<span class="review-list-q">${escapeRailText(row.questionLabel)}</span>` +
+        `<span class="review-list-ans">${escapeRailText(row.inline)}</span>`;
+      btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        // openReviewPopup expects state.review to hold the records
+        // array + page list (it reads activeRecord and the page idx
+        // for the "1/N" counter). Final-mode review stage sets this
+        // up in onOpenReviewMode; in practice mode we mirror the
+        // setup here so the popup works identically on a frozen
+        // page without leaving the practice stage.
+        state.review = {
+          records: reviewRecords,
+          pages: pagesWithReviews(reviewRecords),
+          pageIdx: 0,
+          activeRecord: null,
+        };
+        openReviewPopup(row.record);
+      });
+      rail.appendChild(btn);
+    }
+  }
+  rail.hidden = false;
+}
+
+function escapeRailText(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function setToolButtonsDisabled(disabled) {

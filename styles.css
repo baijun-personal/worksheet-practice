@@ -889,7 +889,45 @@ body.app-immersive #page-indicator { display: none; }
 /* The frame wraps #page-stage so we can absolutely-position the rails and
    the bottom nav over it without disturbing the existing flex centering
    of the worksheet inside #page-stage. */
-#page-stage-frame { position: relative; }
+/* Two-column flex layout: page on the left, optional review rail
+   on the right. When the rail is hidden (final mode, OR practice
+   mode on an unmarked page), the rail takes zero space because
+   [hidden] is display:none and page-stage stretches across the
+   row via flex:1. When shown, the rail takes a fixed width on
+   the right edge. */
+#page-stage-frame {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+}
+#page-stage-frame > #page-stage { flex: 1 1 auto; min-width: 0; }
+.practice-review-rail {
+  flex: 0 0 160px;
+  background: var(--surface, #f4f6fa);
+  border-left: 1px solid var(--border, #d8dde5);
+  padding: 12px 10px;
+  overflow-y: auto;
+  /* Don't grow beyond what the page area is tall — same scroll-
+     contained behaviour the final-report review rail has. */
+  max-height: calc(100vh - 100px);
+}
+/* Same [hidden] specificity workaround as .frozen-page-banner —
+   .practice-review-rail uses position-ish flex defaults but no
+   explicit display, so [hidden] would actually work; the rule
+   here is preventive so a future style addition doesn't regress. */
+.practice-review-rail[hidden] { display: none; }
+/* Narrow viewports: stack rail below the page rather than beside it.
+   Same threshold as the final-report rail (~720px). */
+@media (max-width: 720px) {
+  #page-stage-frame { flex-direction: column; }
+  .practice-review-rail {
+    flex: 0 0 auto;
+    max-height: 240px;
+    border-left: none;
+    border-top: 1px solid var(--border, #d8dde5);
+  }
+}
 
 /* Outside immersive mode, the rails and bottom nav stay hidden — native
    scrolling and the toolbar buttons are fine on desktop. */
