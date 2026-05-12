@@ -109,6 +109,28 @@ const DEFAULTS = {
   // should only be enabled for troubleshooting and not shared
   // outside trusted hands. See Settings → Diagnostics.
   practiceMarkingDiagnostics: false,
+
+  // --- Practice policy + Calculator (Stages 1-9) ----------------
+  // Practice attempts come in two flavours. Stamped on attempt at
+  // creation (alongside attempt.calculate_enabled) and never mutated
+  // afterwards — settings changes here affect only NEW attempts.
+  //   - 'assisted' → learning support. Calculate enabled by default.
+  //                  Future helper tools may also be enabled.
+  //   - 'exam'     → assessment-style. Helper tools off by default.
+  // Final-mode attempts ignore this entirely.
+  practiceModeType: 'assisted',
+  // Per-mode Calculate availability. Defaults match the spirit of
+  // each practice type; parent may flip either.
+  calculateEnabledInAssistedPractice: true,
+  calculateEnabledInExamPractice: false,
+  // Calculator-specific config (Stages 5, 7, 9).
+  calcModel: 'gpt-5.4-mini',
+  customCalcPrompt: '',
+  calcAllowedTypes: { arithmetic: true, linear_1var: false, linear_2var: false },
+  calcMinAreaFraction: 0.005,   // 0.5% of page area minimum
+  calcMaxAreaFraction: 0.10,    // 10% of page area maximum
+  calcCapMode: 'per_page',      // 'per_page' | 'per_attempt'
+  calcCapValue: 1,
 };
 
 export function loadSettings() {

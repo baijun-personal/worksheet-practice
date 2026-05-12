@@ -771,6 +771,18 @@ function bindSetupForm() {
       applyPracticeModeVisibility(v);
     });
   }
+  // Practice type radio (Assisted / Exam) — prefill from settings,
+  // persist on change. Only meaningful when the outer mode is
+  // 'practice'; values stamped at attempt creation.
+  const initialPracticeType = state.settings.practiceModeType === 'exam' ? 'exam' : 'assisted';
+  for (const r of document.querySelectorAll('input[name="practice-mode-type"]')) {
+    r.checked = (r.value === initialPracticeType);
+    r.addEventListener('change', () => {
+      const v = r.checked ? r.value : null;
+      if (!v) return;
+      state.settings = saveSettings({ practiceModeType: v });
+    });
+  }
   // Custom prompt overrides — pre-fill with the built-in prompt
   // text so reviewers can see what's being sent without grepping
   // the source. Saved overrides win when present; empty falls
@@ -2003,6 +2015,9 @@ async function onStartPracticeImpl() {
     priceOutPerMTokens: Math.max(0, parseFloat($('price-out').value) || 0),
     markingMode: $('marking-mode').value || 'batch4_fourup',
     practiceMarkingMode: $('practice-marking-mode').value || 'batch4_fourup',
+    practiceModeType:
+      (document.querySelector('input[name="practice-mode-type"]:checked')?.value) === 'exam'
+        ? 'exam' : 'assisted',
     mode: (document.querySelector('input[name="practice-mode"]:checked')?.value) || 'final',
     apiMode: (document.querySelector('input[name="api-mode"]:checked')?.value) || 'direct',
     proxyEndpoint: $('proxy-endpoint').value.trim(),
@@ -2154,6 +2169,34 @@ async function onStartPracticeImpl() {
           cached_visual_rows_by_pair_key: {},
           latest_report: null,
         }
+      : null,
+    // Practice sub-type ('assisted' | 'exam') stamped from settings.
+    // Final-mode attempts skip this entirely.
+    practice_mode_type: attemptMode === 'practice'
+      ? (state.settings.practiceModeType === 'exam' ? 'exam' : 'assisted')
+      : null,
+    // Resolved Calculate availability stamped at creation. Mirrors
+    // attempt.mode's stamped-and-immutable semantics: a settings
+    // change here will only take effect on NEW attempts. The
+    // toolbar button reads this field directly.
+    calculate_enabled: attemptMode === 'practice'
+      && (state.settings.practiceModeType === 'exam'
+          ? !!state.settings.calculateEnabledInExamPractice
+          : !!state.settings.calculateEnabledInAssistedPractice),
+    // Persistent calculator usage log (Stage 2). Initialised empty;
+    // recordCalcUsage appends here and persists via putAttempt.
+    calc_usage: attemptMode === 'practice' ? [] : null,
+    // DOM-side popup state (Stage 4). Distinct from calc_usage —
+    // popups disappear when a page is marked, usage records persist.
+    calc_popups: attemptMode === 'practice' ? [] : null,
+    // Persistent CALCULATION cost task log (Stage 6). Writes here
+    // synchronously after every API call, separate from the per-
+    // mark taskUsages array which is rebuilt each mark.
+    cost_tasks: [],
+    // Practice activity counters (Stage 3). Lazy-initialised on
+    // first bumpActivity if missing.
+    activity: attemptMode === 'practice'
+      ? { fullscreen_exits: 0, tab_blurs: 0, visibility_changes: 0, events: [] }
       : null,
   };
   attempt = snapshotPaperOntoAttempt(state.paperProfile, attempt, { questionPages, answerPages });
@@ -2617,6 +2660,20 @@ function pageNumberLabel(currentPage) {
   const qp = state.attempt?.questionPages || [];
   const idx = qp.indexOf(currentPage);
   return idx >= 0 ? String(idx + 1) : String(currentPage);
+}
+
+// Is the Calculator toolbar button visible for the current attempt?
+// Reads attempt.calculate_enabled which is stamped at attempt
+// creation from settings.practiceModeType +
+// calculateEnabledIn{Assisted|Exam}Practice. Stamped-at-creation
+// (mirrors attempt.mode) so a settings change mid-attempt doesn't
+// retroactively flip the toolbar — only new attempts pick up the
+// new value. Returns false for final-mode attempts and pre-Stage-1
+// attempts that don't carry the field.
+function isCalculateEnabledForCurrentAttempt() {
+  if (!state.attempt) return false;
+  if (state.attempt.mode !== 'practice') return false;
+  return !!state.attempt.calculate_enabled;
 }
 
 // Is the current practice-mode page already marked? Frozen pages

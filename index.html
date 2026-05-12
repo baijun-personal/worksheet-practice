@@ -170,6 +170,24 @@
           Pages are frozen once marked so the child can't go back and edit.
         </p>
         <div id="practice-mode-extra" hidden>
+          <fieldset class="practice-type-row">
+            <legend>Practice type</legend>
+            <label class="checkbox">
+              <input type="radio" name="practice-mode-type" value="assisted" checked />
+              Assisted (learning support)
+            </label>
+            <label class="checkbox">
+              <input type="radio" name="practice-mode-type" value="exam" />
+              Exam (assessment-style)
+            </label>
+            <p class="muted small">
+              <strong>Assisted</strong> — learning support. Calculator and
+              future helper tools enabled by default.
+              <strong>Exam</strong> — assessment-style. Helper tools off by
+              default. The chosen type is stamped on the attempt at start;
+              changing it later only affects new attempts.
+            </p>
+          </fieldset>
           <label>Practice marking mode
             <select id="practice-marking-mode">
               <option value="single_fullpage">Best quality</option>
