@@ -20,7 +20,7 @@ export const ERASER_HIT_RADIUS_PT = 8;
 // DPI (same convention pen widthPt uses). Picking a pixel value would
 // give different visual sizes between the live canvas and the
 // strokes-only composite sent to extraction.
-export const DEFAULT_TYPE_FONT_SIZE_PT = 12;
+export const DEFAULT_TYPE_FONT_SIZE_PT = 10;
 // Default text-wrap width as a fraction of the page width. The
 // student picks the caret position; we wrap at the page edge so
 // nothing falls off the right of the canvas.
@@ -29,7 +29,9 @@ export const DEFAULT_TYPE_WRAP_FRACTION = 0.9;
 // Circle / Tick defaults — both in PDF points so they scale
 // correctly across zoom and the strokes-only composite's DPI.
 // Sized for typical MCQ-letter circling and inline tick marks.
-export const DEFAULT_CIRCLE_RADIUS_PT = 12;
+// 6pt radius fits cleanly around a single printed MCQ letter
+// (a, b, c, d) without overlapping into neighbours.
+export const DEFAULT_CIRCLE_RADIUS_PT = 6;
 export const DEFAULT_TICK_SIZE_PT = 18;
 
 export function makeStrokeId() {
