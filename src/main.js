@@ -2937,7 +2937,27 @@ async function onCalcSelect(rectPt) {
     return;
   }
 
-  // Stage 7's cap check fires here once it ships.
+  // Cap enforcement (Stage 7). The cap counts cap-burning records
+  // only — apiCallMade=true entries in calc_usage. Pre-API refusals
+  // (size / cap) don't deplete the cap. Errors after the API does
+  // (cost was already incurred). Cap mode is per-page or
+  // per-attempt; default 1 per page.
+  const capCheck = calcCapCheck(page);
+  if (!capCheck.ok) {
+    const id = newCalcPopupId();
+    renderCalcPopup({
+      id, page, pdfPage, rectPt,
+      state: 'refused',
+      message: capCheck.message,
+    });
+    setTimeout(() => {
+      const host = $('calc-popup-host');
+      const el = host?.querySelector(`[data-popup-id="${id}"]`);
+      if (el) el.remove();
+    }, 4000);
+    recordCalcUsage({ page, pdfPage, apiCallMade: false, outcome: 'refused_cap', parsedType: null, taskId: null });
+    return;
+  }
 
   // Create a loading popup; Stage 5 fills in the API call and
   // updates it to success / error.
@@ -3169,6 +3189,32 @@ function calcApiCallCount({ pageFilter } = {}) {
   return records.filter((r) =>
     r.apiCallMade && (pageFilter == null || r.page === pageFilter)
   ).length;
+}
+
+// Cap enforcement (Stage 7). Reads settings.calcCapMode +
+// calcCapValue and compares against calc_usage filtered to
+// apiCallMade=true. Returns {ok:true} when the cap is not yet
+// reached, or {ok:false, message} with a friendly refusal text
+// for the popup.
+function calcCapCheck(currentPage) {
+  const settings = state.settings || {};
+  const mode = settings.calcCapMode === 'per_attempt' ? 'per_attempt' : 'per_page';
+  const limit = Number.isFinite(settings.calcCapValue) ? settings.calcCapValue : 1;
+  if (limit <= 0) {
+    return { ok: false, message: 'Calculator is disabled by the usage cap (0).' };
+  }
+  if (mode === 'per_attempt') {
+    const used = calcApiCallCount();
+    if (used >= limit) {
+      return { ok: false, message: `Calculator limit reached for this paper (${used}/${limit}).` };
+    }
+  } else {
+    const used = calcApiCallCount({ pageFilter: currentPage });
+    if (used >= limit) {
+      return { ok: false, message: `Calculator used ${used}/${limit} time${limit === 1 ? '' : 's'} on this page already.` };
+    }
+  }
+  return { ok: true };
 }
 
 // Is the Calculator toolbar button visible for the current attempt?
