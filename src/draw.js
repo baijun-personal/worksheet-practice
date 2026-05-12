@@ -132,7 +132,13 @@ function drawTypeStroke(ctx, stroke, { widthPx, heightPx }) {
   ctx.save();
   ctx.font = `${fontPx}px sans-serif`;
   ctx.fillStyle = stroke.color || PEN_COLOR;
-  ctx.textBaseline = 'top';
+  // textBaseline:'middle' makes the y coordinate the vertical CENTRE
+  // of each line, not its top. That aligns the tap point with the
+  // middle of the first character — what the student expects when
+  // they "click where the text should start" — instead of having
+  // the text appear below the tap as it did with baseline:'top'.
+  // Subsequent wrap lines flow downward by a full line-height.
+  ctx.textBaseline = 'middle';
   const lines = wrapText(ctx, text, wrapPx);
   let y = yPx;
   for (const line of lines) {

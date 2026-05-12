@@ -588,6 +588,13 @@ body.app-immersive .build-badge { display: none; }
   color: var(--blue-ink, #1a4fc4);
   font-family: sans-serif;
   line-height: 1.2;
+  /* Shift the overlay up by half a line-height so the first line is
+     vertically centred on the tap point, matching how
+     drawTypeStroke renders the committed stroke (textBaseline:
+     middle, lines flow downward). 0.6em = half of line-height 1.2.
+     em is relative to the overlay's own font-size, which we set
+     inline to match the PDF-point font scaled by zoom. */
+  transform: translateY(-0.6em);
   /* Wrap visually around the rest of the page-wrap. The commit-time
      widthPt is the source of truth; this just stops the overlay
      from sprawling beyond the page on very long pastes. */
