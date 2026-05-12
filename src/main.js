@@ -4950,6 +4950,12 @@ function showReport(merged) {
     // Read from the live attempt so re-rendering after a Why? tap
     // shows the new cost without needing the marking pass to rerun.
     explanationCosts: state.attempt?.explanation_costs || [],
+    // Stage 8: Calculator usage summary + Practice activity. Both
+    // render only if there's data; otherwise the cards stay hidden.
+    calcUsageEl: $('report-calc-usage'),
+    practiceActivityEl: $('report-practice-activity'),
+    calcUsage: state.attempt?.calc_usage || [],
+    practiceActivity: state.attempt?.activity || null,
   });
   // Gate the Open Review Mode button:
   //   - no answer pages on the attempt → button hidden, note shown

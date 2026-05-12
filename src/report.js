@@ -6,6 +6,9 @@ import { KNOWN_STATUSES } from './openai.js';
 export function renderReport(report, mountNodes) {
   const {
     summaryEl, costEl, wrongEl, uncertainEl, weakEl, redoEl, notAttemptedEl, tableEl, rawEl,
+    calcUsageEl, practiceActivityEl,
+    calcUsage,             // attempt.calc_usage array (practice mode)
+    practiceActivity,      // attempt.activity object (practice mode)
   } = mountNodes;
 
   const summary = report.summary || {};
@@ -186,7 +189,80 @@ export function renderReport(report, mountNodes) {
     tableEl.parentElement.insertBefore(debug, tableEl.nextSibling);
   }
 
+  // Calculator usage summary — practice attempts only; renders
+  // nothing if Calculator was never used (or all uses were
+  // refused before the API). Neutral wording: no "this score may
+  // have been helped by calculator" framing, just facts.
+  if (calcUsageEl) {
+    const usage = Array.isArray(calcUsage) ? calcUsage : [];
+    const html = renderCalcUsageSummary(usage);
+    if (html) {
+      calcUsageEl.innerHTML = html;
+      calcUsageEl.style.display = '';
+    } else {
+      calcUsageEl.innerHTML = '';
+      calcUsageEl.style.display = 'none';
+    }
+  }
+
+  // Practice activity counters — neutral "fullscreen exits / window
+  // switches / page hidden" summary. Renders nothing if all
+  // counters are 0. Heading per reviewer is "Practice activity",
+  // not "Practice integrity".
+  if (practiceActivityEl) {
+    const html = renderPracticeActivity(practiceActivity);
+    if (html) {
+      practiceActivityEl.innerHTML = html;
+      practiceActivityEl.style.display = '';
+    } else {
+      practiceActivityEl.innerHTML = '';
+      practiceActivityEl.style.display = 'none';
+    }
+  }
+
   rawEl.textContent = JSON.stringify(report, null, 2);
+}
+
+// Build a "Calculator usage" report section. Returns '' (no
+// render) when calc_usage is empty or all entries were pre-API
+// refusals. Counts apiCallMade=true entries only — refused
+// outcomes don't represent actual API use.
+function renderCalcUsageSummary(usage) {
+  if (!Array.isArray(usage) || usage.length === 0) return '';
+  const apiCalls = usage.filter((r) => r.apiCallMade).length;
+  if (apiCalls === 0) return '';
+  const byPage = new Map();
+  for (const r of usage) {
+    if (!r.apiCallMade) continue;
+    byPage.set(r.page, (byPage.get(r.page) || 0) + 1);
+  }
+  const perPageRows = [...byPage.entries()]
+    .sort((a, b) => Number(a[0]) - Number(b[0]))
+    .map(([page, count]) => `<li>Page ${escapeHtml(page)}: ${count} use${count === 1 ? '' : 's'}</li>`)
+    .join('');
+  return `<h2>Calculator usage</h2>
+    <p>Calculator used: <strong>${apiCalls} time${apiCalls === 1 ? '' : 's'}</strong></p>
+    <ul>${perPageRows}</ul>`;
+}
+
+// Build a "Practice activity" report section from attempt.activity.
+// Returns '' when no counters fired so the card stays hidden on
+// quiet sessions. The closing note explicitly tells the parent the
+// signals can overlap, so they don't over-interpret duplicates.
+function renderPracticeActivity(activity) {
+  if (!activity) return '';
+  const f = activity.fullscreen_exits || 0;
+  const t = activity.tab_blurs || 0;
+  const v = activity.visibility_changes || 0;
+  if (f === 0 && t === 0 && v === 0) return '';
+  return `<h2>Practice activity</h2>
+    <p class="small muted">During this practice session:</p>
+    <ul>
+      <li>Fullscreen exits: ${f}</li>
+      <li>Window/tab switches: ${t}</li>
+      <li>Page hidden events: ${v}</li>
+    </ul>
+    <p class="small muted">One app or tab switch may trigger more than one browser signal, so these counts can sometimes overlap.</p>`;
 }
 
 // Build a safe display label for a question. Prefers the AI-extracted
