@@ -20,7 +20,7 @@ export const ERASER_HIT_RADIUS_PT = 8;
 // DPI (same convention pen widthPt uses). Picking a pixel value would
 // give different visual sizes between the live canvas and the
 // strokes-only composite sent to extraction.
-export const DEFAULT_TYPE_FONT_SIZE_PT = 10;
+export const DEFAULT_TYPE_FONT_SIZE_PT = 12;
 // Default text-wrap width as a fraction of the page width. The
 // student picks the caret position; we wrap at the page edge so
 // nothing falls off the right of the canvas.
@@ -588,8 +588,17 @@ export function attachInkController({
     // Render the overlay font in CSS px matching what drawTypeStroke
     // will use when this commits. canvas CSS width is wrapRect.width.
     const cssFontPx = (DEFAULT_TYPE_FONT_SIZE_PT / meta.pageWidthPts) * wrapRect.width;
+    // Wrap distance for the live overlay = page-width-from-caret
+    // minus a small right gutter, clamped to a 10% minimum. This
+    // mirrors commitTyping's widthPt math exactly so what the user
+    // sees while typing matches the committed stroke — no visible
+    // jump at commit time when typing in the right half of the page.
+    const rightGutterCss = wrapRect.width * 0.03;
+    const minWrapCss = wrapRect.width * 0.10;
+    const overlayWrapCss = Math.max(minWrapCss, wrapRect.width - cssX - rightGutterCss);
     typeOverlay.style.left = `${cssX}px`;
     typeOverlay.style.top = `${cssY}px`;
+    typeOverlay.style.maxWidth = `${overlayWrapCss}px`;
     typeOverlay.style.fontSize = `${cssFontPx}px`;
     typeOverlay.hidden = false;
     renderTypeOverlay();
