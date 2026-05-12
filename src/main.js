@@ -2773,15 +2773,39 @@ function setToolButtonsDisabled(disabled) {
 }
 
 // Show / hide the Calculator toolbar button based on the attempt's
-// stamped calculate_enabled flag (Stage 1). Re-run on stage entry
-// + after applyPracticeStateForPage so the gate respects per-page
-// frozen state too.
-function applyCalcButtonVisibility() {
+// stamped calculate_enabled flag (Stage 1), AND keep its remaining-
+// uses badge in sync with calc_usage. Re-run on stage entry, after
+// applyPracticeStateForPage (per-page frozen state), and after every
+// recordCalcUsage (to tick the badge down). When the budget is
+// exhausted the button stays visible but becomes muted — taps still
+// fire onCalcSelect which produces a refused_cap popup explaining
+// why.
+function applyCalcButtonState() {
   const btn = document.querySelector('[data-tool="calc"]');
   if (!btn) return;
   const eligible = isCalculateEnabledForCurrentAttempt();
   btn.hidden = !eligible;
+  if (!eligible) return;
+  const remBadge = btn.querySelector('.calc-tool-remaining');
+  if (!remBadge) return;
+  const { limit, remaining } = calcBudgetForAttempt();
+  if (limit <= 0) {
+    remBadge.dataset.empty = 'true';
+    remBadge.textContent = '';
+    btn.classList.remove('is-exhausted');
+    btn.title = 'Calculator is disabled by the usage cap (0).';
+    return;
+  }
+  remBadge.dataset.empty = 'false';
+  remBadge.textContent = String(remaining);
+  btn.classList.toggle('is-exhausted', remaining <= 0);
+  btn.title = remaining > 0
+    ? `Calculator — drag a rectangle around math, get the answer. ${remaining} use${remaining === 1 ? '' : 's'} remaining.`
+    : 'Calculator — no uses remaining for this paper.';
 }
+// Backward-compatible alias so older call sites still work without
+// renaming. Prefer applyCalcButtonState in new code.
+const applyCalcButtonVisibility = applyCalcButtonState;
 
 // Render the visible page label the way the practice toolbar shows it
 // ("Mark pages 1 to N" where N is the 1-based index INTO the
@@ -2881,7 +2905,12 @@ function newCalcPopupId() {
 }
 
 // Render a popup element with the given state. Caller passes the
-// id + the data; we own positioning + persistence.
+// id + the data; we own positioning + persistence. Persistent
+// popups (success / error) carry minimize + close affordances; the
+// minimized state collapses the body to a small pill that the
+// child can click to re-expand. Minimize state lives in
+// popup.minimized + attempt.calc_popups so it survives navigation
+// and reload.
 function renderCalcPopup(popup) {
   const host = $('calc-popup-host');
   if (!host) return null;
@@ -2892,8 +2921,11 @@ function renderCalcPopup(popup) {
     el.dataset.popupId = popup.id;
     host.appendChild(el);
   }
-  el.classList.remove('is-loading', 'is-success', 'is-error', 'is-refused');
+  el.classList.remove('is-loading', 'is-success', 'is-error', 'is-refused', 'is-minimized');
   el.classList.add(`is-${popup.state}`);
+  const isPersistent = popup.state === 'success' || popup.state === 'error';
+  const isMinimized = isPersistent && !!popup.minimized;
+  if (isMinimized) el.classList.add('is-minimized');
 
   // Position: anchor to the right edge of page-wrap. Vertical centre
   // of the popup aligns to the vertical centre of the source rect.
@@ -2907,6 +2939,25 @@ function renderCalcPopup(popup) {
     el.style.top = `${yCss}px`;
     el.style.right = '8px';
     el.style.transform = 'translateY(-50%)';
+  }
+
+  // Minimized form — single-line pill showing just the input.
+  // Click anywhere on it (other than the close X) to re-expand.
+  if (isMinimized) {
+    el.innerHTML = `
+      <button class="calc-popup-close" type="button" aria-label="Dismiss">×</button>
+      <button class="calc-popup-pill" type="button" aria-label="Expand">
+        <span class="calc-popup-pill-icon" aria-hidden="true">+</span>
+        <span class="calc-popup-pill-text">${escapeRailText(popup.input || 'Calc')}</span>
+      </button>`;
+    el.querySelector('.calc-popup-close')?.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      dismissCalcPopup(popup.id);
+    });
+    el.querySelector('.calc-popup-pill')?.addEventListener('click', () => {
+      setCalcPopupMinimized(popup.id, false);
+    });
+    return el;
   }
 
   // Body content
@@ -2927,15 +2978,31 @@ function renderCalcPopup(popup) {
             <div class="calc-popup-divider"></div>
             ${lines}`;
   }
-  // Close button on persistent popups only.
-  const closeBtn = (popup.state === 'success' || popup.state === 'error')
-    ? `<button class="calc-popup-close" type="button" aria-label="Dismiss">×</button>`
+  // Header controls — minimize + close on persistent popups.
+  // Loading and refused popups stay uncluttered (loading is
+  // ephemeral until the API resolves; refused auto-dismisses).
+  const controls = isPersistent
+    ? `<button class="calc-popup-minimize" type="button" aria-label="Minimize">–</button>
+       <button class="calc-popup-close" type="button" aria-label="Dismiss">×</button>`
     : '';
-  el.innerHTML = `${closeBtn}<div class="calc-popup-body">${body}</div>`;
+  el.innerHTML = `${controls}<div class="calc-popup-body">${body}</div>`;
   el.querySelector('.calc-popup-close')?.addEventListener('click', () => {
     dismissCalcPopup(popup.id);
   });
+  el.querySelector('.calc-popup-minimize')?.addEventListener('click', () => {
+    setCalcPopupMinimized(popup.id, true);
+  });
   return el;
+}
+
+// Flip a popup between minimized / expanded, mirror into the
+// persisted attempt record, and re-render.
+function setCalcPopupMinimized(id, minimized) {
+  const popup = (state.attempt?.calc_popups || []).find((p) => p.id === id);
+  if (!popup) return;
+  popup.minimized = !!minimized;
+  putAttempt(state.attempt).catch((e) => console.error('setCalcPopupMinimized persist failed', e));
+  renderCalcPopup(popup);
 }
 
 function dismissCalcPopup(id) {
@@ -3269,6 +3336,10 @@ function recordCalcUsage({ page, pdfPage, apiCallMade, outcome, parsedType, task
   putAttempt(state.attempt).catch((e) =>
     console.error('calc_usage persist failed', e)
   );
+  // Refresh the toolbar badge — usage just changed, so the
+  // remaining-count display needs to tick down (or up if this is
+  // a non-cap-burning record, in which case nothing changes).
+  applyCalcButtonState();
 }
 
 // Count the calculator API calls in the audit log, optionally
@@ -3281,28 +3352,41 @@ function calcApiCallCount({ pageFilter } = {}) {
   ).length;
 }
 
-// Cap enforcement (Stage 7). Reads settings.calcCapMode +
-// calcCapValue and compares against calc_usage filtered to
-// apiCallMade=true. Returns {ok:true} when the cap is not yet
-// reached, or {ok:false, message} with a friendly refusal text
-// for the popup.
-function calcCapCheck(currentPage) {
+// Compute the effective total Calculator budget for the current
+// attempt. Both modes resolve to a pooled budget across the whole
+// paper:
+//   - 'per_attempt': calcCapValue used as-is.
+//   - 'per_page':    calcCapValue × number of question pages
+//                    (so a 2-page paper with per_page=1 gives 2
+//                    total uses anywhere — student isn't blocked
+//                    from page 2 just because they used it on
+//                    page 1).
+// Returns { mode, limit, used, remaining }.
+function calcBudgetForAttempt() {
   const settings = state.settings || {};
   const mode = settings.calcCapMode === 'per_attempt' ? 'per_attempt' : 'per_page';
-  const limit = Number.isFinite(settings.calcCapValue) ? settings.calcCapValue : 1;
+  const v = Number.isFinite(settings.calcCapValue) ? settings.calcCapValue : 1;
+  const pageCount = (state.attempt?.questionPages?.length) || 0;
+  const limit = mode === 'per_attempt' ? v : v * pageCount;
+  const used = calcApiCallCount();
+  return { mode, limit, used, remaining: Math.max(0, limit - used) };
+}
+
+// Cap enforcement (Stage 7). Pooled across pages (both modes).
+// Returns {ok:true} when budget remains, or {ok:false, message}
+// for the popup. The friendly message names the underlying mode
+// so a parent can adjust Settings if they want.
+function calcCapCheck(_currentPage) {
+  const settings = state.settings || {};
+  const { mode, limit, used } = calcBudgetForAttempt();
   if (limit <= 0) {
     return { ok: false, message: 'Calculator is disabled by the usage cap (0).' };
   }
-  if (mode === 'per_attempt') {
-    const used = calcApiCallCount();
-    if (used >= limit) {
-      return { ok: false, message: `Calculator limit reached for this paper (${used}/${limit}).` };
-    }
-  } else {
-    const used = calcApiCallCount({ pageFilter: currentPage });
-    if (used >= limit) {
-      return { ok: false, message: `Calculator used ${used}/${limit} time${limit === 1 ? '' : 's'} on this page already.` };
-    }
+  if (used >= limit) {
+    const scope = mode === 'per_attempt'
+      ? 'for this paper'
+      : `for this paper (${settings.calcCapValue ?? 1} per page × ${(state.attempt?.questionPages?.length) || 0} pages)`;
+    return { ok: false, message: `Calculator limit reached ${scope} (${used}/${limit}).` };
   }
   return { ok: true };
 }

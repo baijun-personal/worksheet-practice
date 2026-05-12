@@ -629,6 +629,44 @@ body.app-immersive .build-badge { display: none; }
   50.01%, 100% { opacity: 0; }
 }
 
+/* Calculator toolbar button. position:relative so the
+   .calc-tool-remaining badge can pin to the corner. The icon is an
+   inline SVG sized to roughly match the existing text-button cap. */
+.calc-tool-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.calc-tool-icon {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+}
+.calc-tool-remaining {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  margin-left: 2px;
+  border-radius: 7px;
+  background: #1a4fc4;
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.calc-tool-remaining[data-empty="true"] { display: none; }
+.calc-tool-btn.is-exhausted .calc-tool-remaining {
+  background: #c0392b;
+}
+.calc-tool-btn.is-exhausted {
+  opacity: 0.6;
+}
+
 /* Calculator drag rectangle — drawn while the student is dragging
    with the Calculator tool active. Dashed outline, semi-transparent
    fill so the printed math underneath stays legible. Pure DOM
@@ -667,10 +705,10 @@ body.app-immersive .build-badge { display: none; }
 .calc-popup.is-refused { background: #fff7e6; border-color: #f0c674; color: #8a5c00; }
 .calc-popup.is-error   { background: #fdecea; border-color: #f3a8a3; color: #a93223; }
 .calc-popup.is-success { background: white; border-color: var(--border, #d8dde5); }
-.calc-popup-close {
+.calc-popup-close,
+.calc-popup-minimize {
   position: absolute;
   top: 2px;
-  right: 4px;
   background: transparent;
   border: 0;
   font-size: 16px;
@@ -679,7 +717,53 @@ body.app-immersive .build-badge { display: none; }
   color: var(--muted, #5b6573);
   padding: 2px 4px;
 }
-.calc-popup-close:hover { color: #2a2200; }
+.calc-popup-close   { right: 4px; }
+.calc-popup-minimize { right: 22px; }
+.calc-popup-close:hover,
+.calc-popup-minimize:hover { color: #2a2200; }
+
+/* Minimized form — collapsed pill that shows just the input.
+   Click to re-expand. Sits inline (no absolute positioning of
+   contents) so its size is determined by the text. */
+.calc-popup.is-minimized {
+  width: auto;
+  min-width: 0;
+  padding: 4px 28px 4px 6px;
+  background: white;
+  border: 1px solid var(--border, #d8dde5);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+}
+.calc-popup.is-minimized .calc-popup-minimize { display: none; }
+.calc-popup-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  color: #1a4fc4;
+}
+.calc-popup-pill-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid #c0d2f5;
+  border-radius: 50%;
+  font-size: 14px;
+  line-height: 1;
+}
+.calc-popup-pill-text {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .calc-popup-body { display: flex; flex-direction: column; gap: 6px; }
 .calc-popup-input {
   font-weight: 600;

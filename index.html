@@ -514,10 +514,28 @@
              override on). Drag a rectangle around a math expression
              → cropped image goes to a cheap vision model for parse
              only → JS computes locally → result appears in a popup
-             pinned to the right edge of the paper. -->
-        <button data-tool="calc" class="tool-btn" type="button"
-                title="Calculator (=) — drag a rectangle around math, get the answer"
-                hidden>=</button>
+             pinned to the right edge of the paper. The calc-tool-
+             remaining badge surfaces the pooled budget left for
+             this attempt — updated after every use. -->
+        <button data-tool="calc" class="tool-btn calc-tool-btn" type="button"
+                title="Calculator — drag a rectangle around math, get the answer"
+                hidden>
+          <span class="calc-tool-icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"
+                 width="14" height="14" fill="none" stroke="currentColor"
+                 stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="1" width="12" height="14" rx="1.5"></rect>
+              <rect x="3.5" y="2.5" width="9" height="3" fill="currentColor" stroke="none"></rect>
+              <circle cx="5"  cy="8.5" r="0.7" fill="currentColor" stroke="none"></circle>
+              <circle cx="8"  cy="8.5" r="0.7" fill="currentColor" stroke="none"></circle>
+              <circle cx="11" cy="8.5" r="0.7" fill="currentColor" stroke="none"></circle>
+              <circle cx="5"  cy="11.5" r="0.7" fill="currentColor" stroke="none"></circle>
+              <circle cx="8"  cy="11.5" r="0.7" fill="currentColor" stroke="none"></circle>
+              <circle cx="11" cy="11.5" r="0.7" fill="currentColor" stroke="none"></circle>
+            </svg>
+          </span>
+          <span class="calc-tool-remaining" data-empty="true"></span>
+        </button>
         <button data-tool="eraser" class="tool-btn" type="button" title="Eraser (E)">Eraser</button>
         <button id="undo-btn" type="button" title="Undo (Ctrl+Z)">Undo</button>
         <button id="clear-page-btn" type="button" title="Clear page" data-short="Clear">Clear page</button>
