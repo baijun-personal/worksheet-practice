@@ -142,13 +142,21 @@ export async function renderReviewPage(ctx) {
   if (!listHost) return;
 
   // Per-page stats block — only rendered when the caller supplies
-  // the full questions list AND there's at least one graded row.
-  // Don't render on no-answer-key papers (every row would be
-  // unclear; stats would be misleading).
-  const stats = Array.isArray(questions) ? buildPageStats(questions) : [];
+  // the full questions list AND the paper had an answer key. On
+  // no-answer-key papers every row is unclear-by-construction and
+  // the "correct/total" denominator would be misleading.
+  const questionList = Array.isArray(questions) ? questions : [];
+  const hasAnyKey =
+    (reviewRecords || []).some(
+      (r) => r.expected_answer && String(r.expected_answer).trim().length > 0
+    ) ||
+    questionList.some(
+      (q) => q.expected_answer && String(q.expected_answer).trim().length > 0
+    );
+  const stats = questionList.length > 0 ? buildPageStats(questionList) : [];
   // Show only THIS page's mark, not the whole-paper roll-up.
   const currentStat = stats.find((s) => Number(s.page) === Number(pageNumber));
-  if (currentStat) {
+  if (currentStat && hasAnyKey) {
     const wrap = document.createElement('div');
     wrap.className = 'page-stats-block';
     wrap.innerHTML = `

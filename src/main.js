@@ -2473,14 +2473,29 @@ function renderPracticeReviewRail(rail, isFrozen) {
 
   rail.innerHTML = '';
 
+  // Did this report actually have an answer key? On no-key papers
+  // every row's expected_answer is empty, so "no mistakes" would be
+  // a lie (nothing was checked). Detect by scanning the actual
+  // rows / records — more reliable than threading match.keysProvided
+  // through every render call.
+  const hasAnyKey =
+    (reviewRecords || []).some(
+      (r) => r.expected_answer && String(r.expected_answer).trim().length > 0
+    ) ||
+    questions.some(
+      (q) => q.expected_answer && String(q.expected_answer).trim().length > 0
+    );
+
   // Per-page stats block — same component as the final-report rail.
+  // Skip on no-answer-key papers: the denominator would be misleading
+  // (every row would be unclear-by-construction).
   const stats = buildPageStats(questions);
   // Show only THIS page's mark — not the whole-paper roll-up. The
   // child is looking at one page at a time in practice mode; the
   // cumulative report is one page-nav-prev away and the across-pages
   // view lives in the final report after the last mark.
   const currentStat = stats.find((s) => s.page === Number(state.currentPage));
-  if (currentStat) {
+  if (currentStat && hasAnyKey) {
     const wrap = document.createElement('div');
     wrap.className = 'page-stats-block';
     wrap.innerHTML = `
@@ -2499,7 +2514,9 @@ function renderPracticeReviewRail(rail, isFrozen) {
     const empty = document.createElement('div');
     empty.className = 'muted small';
     empty.style.marginTop = '6px';
-    empty.textContent = 'No mistakes on this page — nice work!';
+    empty.textContent = hasAnyKey
+      ? 'No mistakes on this page — nice work!'
+      : "No answer key was provided, so this page can't be reviewed.";
     rail.appendChild(empty);
   } else {
     for (const row of rows) {
