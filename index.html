@@ -806,10 +806,59 @@
     a hard refresh. If the user manually appended ?_v=<n> to the URL
     (the "Force refresh" badge does this), use that instead, which
     bypasses any cache the HEAD request might hit.
+
+    Cache-bust ALSO propagates to nested ES module imports via a
+    dynamically-injected importmap. Without this, main.js?_v=N
+    would import './calc.js' (no query), which the browser would
+    serve from its HTTP cache — a fresh main.js paired with a
+    stale calc.js after a rename means a SyntaxError ("does not
+    provide an export named …"). The importmap remaps every
+    src/*.js specifier to the same ?_v=<v> URL so all submodules
+    re-fetch alongside main.js.
+
+    List of local modules MUST stay in sync with the actual files
+    in src/. Adding a new module? Add it here. (Yes, this is
+    awkward without a bundler. Manual list keeps the bootstrap
+    deterministic and avoids a directory-listing fetch.)
   -->
   <script>
     (async () => {
+      const LOCAL_MODULES = [
+        './builtin.js',
+        './calc.js',
+        './compare.js',
+        './contactSheet.js',
+        './cost.js',
+        './detect.js',
+        './draw.js',
+        './flatten.js',
+        './fourup.js',
+        './openai.js',
+        './pageRange.js',
+        './paper.js',
+        './pdfRender.js',
+        './report.js',
+        './review.js',
+        './settings.js',
+        './storage.js',
+      ];
       const inject = (v) => {
+        if (v) {
+          // Build the importmap that remaps each local-module
+          // specifier (as written in `import … from './foo.js'`)
+          // to the same path with the cache-bust query. The
+          // importmap must be inserted BEFORE the main.js
+          // <script type="module"> tag — per spec, importmaps
+          // cannot influence imports of already-fetched modules.
+          const imports = {};
+          for (const m of LOCAL_MODULES) {
+            imports[m] = m + '?_v=' + encodeURIComponent(v);
+          }
+          const mapScript = document.createElement('script');
+          mapScript.type = 'importmap';
+          mapScript.textContent = JSON.stringify({ imports });
+          document.head.appendChild(mapScript);
+        }
         const s = document.createElement('script');
         s.type = 'module';
         s.src = 'src/main.js' + (v ? ('?_v=' + encodeURIComponent(v)) : '');
