@@ -114,6 +114,8 @@ export const KNOWN_STATUSES = ['correct', 'incorrect', 'unclear'];
 
 const COMPARE_PROMPT = `You are marking extracted worksheet answers. No images are provided.
 
+Each input item carries a "pair_id" field. Echo it back unchanged on the corresponding output row so the marker can match output rows to input items. Do not rename, normalise, or omit pair_id. (If an item is missing pair_id, omit the field from that output row too.)
+
 Each item in "items" is EITHER:
   (A) FLAT — has student_answer and expected_answer fields. Compare them and return one row.
   (B) MULTI-PART — has is_multi_part: true with student_parts[] and expected_parts[]. Return ONE row with is_multi_part: true and parts[] containing per-part statuses.
@@ -127,6 +129,7 @@ WORKED EXAMPLE — pool match (order_matters: false):
 
 Input item:
 {
+  "pair_id": "cp=2|q=19|ss=1|ap=3",
   "question": "Q19",
   "is_multi_part": true,
   "order_matters": false,
@@ -147,6 +150,7 @@ Reasoning:
 
 Correct output:
 {
+  "pair_id": "cp=2|q=19|ss=1|ap=3",
   "question": "Q19",
   "is_multi_part": true,
   "parts": [
@@ -209,6 +213,7 @@ Output JSON only:
   },
   "questions": [
     {
+      "pair_id": "",
       "question": "",
       "student_answer": "",
       "expected_answer": "",
@@ -219,6 +224,7 @@ Output JSON only:
       "confidence": 0
     },
     {
+      "pair_id": "",
       "question": "",
       "is_multi_part": true,
       "parts": [
@@ -639,6 +645,13 @@ export async function markPairs({
         question: p.display_question || p.question,
         match_confidence: typeof p.match_confidence === 'number' ? p.match_confidence : 1,
       };
+      // pair_id is stamped on every pair by matchExtractions. Echoing
+      // it lets buildFinalReport / the practice-mode cache write site
+      // map response rows to pairs even when two pairs share a
+      // question string (section-restart papers — Section A Q1 and
+      // Section B Q1). Defensive: omit the field when absent so an
+      // un-stamped pair (e.g. tests) still produces a valid payload.
+      if (p.pair_id) item.pair_id = p.pair_id;
       if (p.is_multi_part) {
         item.is_multi_part = true;
         item.order_matters = !!p.order_matters;

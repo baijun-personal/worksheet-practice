@@ -54,6 +54,31 @@ function normalizeKeyPart(s) {
 //   "Q19(i)"     → "19i"
 //   "Q 19 (i)"   → "19i"
 //   "Question 5" → "5"
+// Stable per-pair identifier. Built from raw fields that don't
+// renumber as the paper grows:
+//   - completed_page (the student's page — fixed)
+//   - normalised question_number
+//   - _syntheticSection (assignSyntheticSections only ADDS sections
+//     for later pages; existing entries' indices stay)
+//   - answer_page (cached answer-key is fixed once extracted)
+//
+// Doubles as:
+//   - the practice-mode comparator cache key
+//   - the echoed pair_id sent to / returned by markPairs so the
+//     mapping from response rows back to pairs is correct even on
+//     section-restart papers where two pairs share a question
+//     number ("Section A Q1" vs "Section B Q1")
+//
+// Format is deliberately human-readable so dumps are auditable
+// ("cp=1|q=1|ss=1|ap=3" reads as "completed page 1, question 1,
+// synthetic section 1, answer page 3").
+export function pairCacheKey(pair) {
+  return `cp=${pair?.completed_page ?? ''}`
+       + `|q=${normalizeQNumber(pair?.question_number ?? pair?.question ?? '')}`
+       + `|ss=${pair?._syntheticSection ?? ''}`
+       + `|ap=${pair?.answer_page ?? ''}`;
+}
+
 export function normalizeQNumber(q) {
   if (q == null) return '';
   let s = String(q).trim().toLowerCase();
@@ -826,12 +851,26 @@ export function matchExtractions(studentBatchResults, answerKeyResults) {
     // studentGrouped flag.
     const finalIsMultiPart = studentParts.length > 1 || expectedParts.length > 1;
 
+    // Stable per-pair identifier — used both as the comparator
+    // response-mapping key (echoed by the model) AND as the
+    // practice-mode cache key. Computed once here off the pair's
+    // raw construction inputs so every downstream consumer uses
+    // the same value.
+    const pairId = pairCacheKey({
+      completed_page: s.page ?? null,
+      question_number: s.question_number || '',
+      _syntheticSection: s._syntheticSection,
+      answer_page: key?.page ?? null,
+    });
+
     pairs.push({
+      pair_id: pairId,
       question: String(s.question_number || s.global_question_index || ''),
       section: s.section || '',
       display_question: buildDisplayQuestion(s, paperHasSections),
       completed_page: s.page ?? null,
       answer_page: key?.page ?? null,
+      _syntheticSection: s._syntheticSection,
       // Multi-part fields (always populated; for flat pairs parts has length 1).
       is_multi_part: finalIsMultiPart,
       order_matters: orderMatters,
@@ -922,17 +961,40 @@ export function partitionPairsByModality(match) {
 // Visual rows show '[visual answer]' as the student/expected text
 // (with the AI's descriptions and comment recorded in row.comment).
 export function buildFinalReport({ match, aiTextReport, visualResults }) {
-  const visualResultByQ = new Map();
+  // Visual results carry their own pair_id (we own both ends of the
+  // visual round-trip — no model echo step), so the lookup is
+  // pair_id-only. No qnum fallback needed.
+  const visualResultByPairId = new Map();
   for (const v of visualResults || []) {
-    const qn = normalizeQNumber(v.pair?.display_question || v.pair?.question || '');
-    if (qn) visualResultByQ.set(qn, v);
+    const pid = v.pair?.pair_id;
+    if (pid) visualResultByPairId.set(pid, v);
   }
 
+  // Text comparator response: prefer the model-echoed pair_id (so
+  // section-restart papers with duplicate question numbers can't
+  // mis-route a verdict), fall back to normalised qnum for legacy
+  // cached rows / model glitches / custom-compare-prompt users that
+  // didn't echo. The qnum fallback only fires on rows without
+  // pair_id, so a single missing echo doesn't poison rows that DID
+  // echo correctly.
+  const aiByPairId = new Map();
+  const aiByQNumFallback = new Map();
+  // aiQByQ is the legacy qnum-keyed map. buildReviewRecords still
+  // groups by base question label, so it needs a qnum lookup that
+  // covers ALL rows (whether pair_id was echoed or not). Built
+  // alongside the pair_id map; the two are independent indexes
+  // over the same row list.
   const aiQByQ = new Map();
   if (aiTextReport && Array.isArray(aiTextReport.questions)) {
     for (const q of aiTextReport.questions) {
-      const qn = normalizeQNumber(q.question || '');
-      if (qn) aiQByQ.set(qn, q);
+      if (q.pair_id) {
+        aiByPairId.set(q.pair_id, q);
+      } else {
+        const qn = normalizeQNumber(q.question || '');
+        if (qn && !aiByQNumFallback.has(qn)) aiByQNumFallback.set(qn, q);
+      }
+      const qn2 = normalizeQNumber(q.question || '');
+      if (qn2 && !aiQByQ.has(qn2)) aiQByQ.set(qn2, q);
     }
   }
 
@@ -958,7 +1020,7 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
     // question for MVP (per-part visual handling is a future
     // refinement; the prompt scope is already noisy with full pages).
     if (isVisualPair(p)) {
-      const v = visualResultByQ.get(qn);
+      const v = visualResultByPairId.get(p.pair_id);
       let row;
       if (v?.parsed) {
         const status = normalizeStatus(v.parsed.status);
@@ -996,7 +1058,7 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
     // Text path — multi-part: one row per student part using the AI's
     // per-part response (or per-part local fallback if AI didn't grade).
     if (p.is_multi_part) {
-      const ai = aiQByQ.get(qn);
+      const ai = aiByPairId.get(p.pair_id) || aiByQNumFallback.get(qn);
       const aiParts = ai && Array.isArray(ai.parts) ? ai.parts : null;
       const partRows = buildMultiPartRows(p, aiParts, match.keysProvided);
       for (const row of partRows) {
@@ -1007,7 +1069,7 @@ export function buildFinalReport({ match, aiTextReport, visualResults }) {
     }
 
     // Flat text pair
-    const ai = aiQByQ.get(qn);
+    const ai = aiByPairId.get(p.pair_id) || aiByQNumFallback.get(qn);
     if (ai) {
       let status = normalizeStatus(ai.status);
       let comment = ai.comment ? String(ai.comment) : '';

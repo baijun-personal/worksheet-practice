@@ -20,7 +20,7 @@ import {
   requestExplanation, MODEL_PRESETS, DEFAULT_MODEL, presetForModel,
   BUILTIN_PROMPTS,
 } from './openai.js';
-import { matchExtractions, buildFinalReport, partitionPairsByModality, normalizeQNumber } from './compare.js';
+import { matchExtractions, buildFinalReport, partitionPairsByModality, normalizeQNumber, pairCacheKey } from './compare.js';
 import { renderReport, exportReportPdf, exportCompletedAttemptPdf } from './report.js';
 import { loadCatalog, fetchBuiltinPdf, builtinAttemptId } from './builtin.js';
 import { composeFourUpA4, composeContactSheetA4, chunkInto } from './fourup.js';
@@ -2625,25 +2625,9 @@ function isCurrentPageFrozen() {
   return marked.includes(state.currentPage);
 }
 
-// Stable cache key for a matched pair, used to look up cached
-// comparator results. Built from raw fields that don't change when
-// later pages are added:
-//   - completed_page (the student's page — never changes after the
-//     page is marked)
-//   - normalised question_number
-//   - _syntheticSection (stable per question_number once
-//     assignSyntheticSections has assigned it; later pages can only
-//     add NEW sections, never renumber existing ones)
-//   - answer_page (stable because the answer key is cached once and
-//     never re-extracted within a practice session)
-// The pair object as returned by matchExtractions today carries
-// all four; defensive '' fallbacks prevent undefined-keying.
-function pairCacheKey(pair) {
-  return `cp=${pair.completed_page ?? ''}`
-       + `|q=${normalizeQNumber(pair.question || '')}`
-       + `|ss=${pair._syntheticSection ?? ''}`
-       + `|ap=${pair.answer_page ?? ''}`;
-}
+// pairCacheKey lives in compare.js now (also exported there as the
+// pair_id stamped on every match-output pair). The cache key is
+// equivalent to pair.pair_id; use that directly at lookup sites.
 
 // Would the proposed new pages / subject / level change invalidate
 // the practice attempt's existing cache? Returns true only if BOTH
@@ -3683,8 +3667,12 @@ async function onMarkUpToHere() {
         // return rows in a different order than the input pairs, so
         // match by normalised question number.
         for (const { pair, key } of textPairsToCompare) {
+          // Prefer the model-echoed pair_id; fall back to normalised
+          // qnum for robustness (older cached rows, custom-prompt
+          // users who dropped the echo instruction, model glitches).
           const qn = normalizeQNumber(pair.question || '');
-          const row = newRows.find((r) => normalizeQNumber(r.question || '') === qn);
+          const row = newRows.find((r) => r.pair_id && r.pair_id === pair.pair_id)
+                   || newRows.find((r) => !r.pair_id && normalizeQNumber(r.question || '') === qn);
           if (row) practice.cached_compare_rows_by_pair_key[key] = row;
         }
         aiTextReport = {
