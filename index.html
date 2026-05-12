@@ -458,16 +458,16 @@
         </span>
       </div>
       <div id="page-stage-frame">
-        <!-- Practice-mode review rail, shown only on frozen pages. Same
-             component shape as the final-report review rail (per-page
-             stats block + clickable review rows). Mounted as a flex
-             sibling of #page-stage so layout is single-column when
-             hidden and two-column when shown. Click handlers open the
-             existing Review Mode popup. -->
-        <aside id="practice-review-rail"
-               class="practice-review-rail review-list-rail"
-               aria-label="Review questions on this page" hidden></aside>
         <div id="page-stage" class="page-stage">
+          <!-- Practice-mode review rail, shown only on frozen pages.
+               Lives INSIDE page-stage so it's centred as a group with
+               the page-wrap (rail directly to the left of the paper,
+               not floating at the far edge of the dark backdrop).
+               Same content as the final-report review rail —
+               per-page stats block + clickable review rows. -->
+          <aside id="practice-review-rail"
+                 class="practice-review-rail review-list-rail"
+                 aria-label="Review questions on this page" hidden></aside>
           <div id="page-wrap" class="page-wrap">
             <canvas id="pdf-canvas" class="pdf-canvas"></canvas>
             <canvas id="ink-canvas" class="ink-canvas"></canvas>

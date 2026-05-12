@@ -234,18 +234,27 @@ body.app-immersive .build-badge { display: none; }
    on-page ✗ overlay design is gone — without per-question
    coordinates, the markers drifted off their questions. The
    list rail makes the data structure explicit. */
+/* Review stage frame — fills the viewport with the same dark
+   backdrop the practice page-stage uses. justify-content:center
+   keeps the rail + page-host group together (rail directly to the
+   left of the paper); the previous max-width:1160px frame is gone
+   so the rail no longer floats at the far edge of an empty side
+   gutter. */
 .review-stage-frame {
   display: flex;
-  gap: 16px;
-  max-width: 1160px;
-  margin: 0 auto;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 4px;
+  background: #2a2f37;
+  padding: 16px;
+  min-height: calc(100vh - 100px);
 }
 .review-page-host {
-  margin: 16px auto;
-  flex: 1 1 auto;
+  margin: 0; /* no auto-centring — flex justify-content does it */
+  flex: 0 1 auto;
   max-width: 1000px;
   background: white;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.15);
+  box-shadow: 0 4px 24px rgba(0,0,0,0.3);
 }
 .review-pdf-canvas {
   display: block;
@@ -257,7 +266,8 @@ body.app-immersive .build-badge { display: none; }
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 16px 0;
+  padding: 0;
+  align-self: flex-start;
 }
 .review-list-row {
   display: flex;
@@ -929,43 +939,40 @@ body.app-immersive #page-indicator { display: none; }
 /* The frame wraps #page-stage so we can absolutely-position the rails and
    the bottom nav over it without disturbing the existing flex centering
    of the worksheet inside #page-stage. */
-/* Two-column flex layout: page on the left, optional review rail
-   on the right. When the rail is hidden (final mode, OR practice
-   mode on an unmarked page), the rail takes zero space because
-   [hidden] is display:none and page-stage stretches across the
-   row via flex:1. When shown, the rail takes a fixed width on
-   the right edge. */
-#page-stage-frame {
-  position: relative;
-  display: flex;
-  flex-direction: row;
-  align-items: stretch;
-}
-#page-stage-frame > #page-stage { flex: 1 1 auto; min-width: 0; }
+/* Practice-mode review rail. Lives INSIDE #page-stage so it joins
+   the page-wrap's centring group — rail directly to the left of the
+   paper, both centred as a pair against the dark page-stage backdrop.
+   No own background or border — the rail blends into the dark
+   surrounding rather than looking like a "separate frame" pinned to
+   the side. The row buttons (.review-list-row) keep their own white
+   pill backgrounds so they remain readable against the dark. */
 .practice-review-rail {
   flex: 0 0 160px;
-  background: var(--surface, #f4f6fa);
-  border-left: 1px solid var(--border, #d8dde5);
-  padding: 12px 10px;
+  align-self: flex-start; /* anchor at the TOP of the page area */
+  padding: 0;
+  margin-right: 4px;       /* tiny gap between rail and paper edge */
   overflow-y: auto;
-  /* Don't grow beyond what the page area is tall — same scroll-
-     contained behaviour the final-report review rail has. */
-  max-height: calc(100vh - 100px);
+  max-height: calc(100vh - 120px);
 }
-/* Same [hidden] specificity workaround as .frozen-page-banner —
-   .practice-review-rail uses position-ish flex defaults but no
-   explicit display, so [hidden] would actually work; the rule
-   here is preventive so a future style addition doesn't regress. */
 .practice-review-rail[hidden] { display: none; }
+/* Title in the per-page stats block needs a light colour on the dark
+   page-stage / review-stage backdrop. The default .page-stats-title
+   colour was tuned for light card surfaces. */
+.practice-review-rail .page-stats-title,
+.review-list-rail .page-stats-title { color: rgba(255, 255, 255, 0.7); }
+/* Add a small gap inside page-stage so the rail doesn't sit flush
+   against the paper. The existing flex (justify-content:center,
+   align-items:flex-start) naturally centres the rail+page pair
+   together horizontally and aligns them to the top vertically. */
+.page-stage { gap: 4px; }
 /* Narrow viewports: stack rail below the page rather than beside it.
    Same threshold as the final-report rail (~720px). */
 @media (max-width: 720px) {
-  #page-stage-frame { flex-direction: column; }
+  .page-stage { flex-direction: column; }
   .practice-review-rail {
     flex: 0 0 auto;
     max-height: 240px;
-    border-left: none;
-    border-top: 1px solid var(--border, #d8dde5);
+    margin-right: 0;
   }
 }
 
