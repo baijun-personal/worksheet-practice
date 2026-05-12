@@ -2045,7 +2045,16 @@ async function onStartPracticeImpl() {
 function bindPracticeUI() {
   for (const btn of document.querySelectorAll('.tool-btn')) {
     btn.addEventListener('click', () => {
-      state.tool = btn.dataset.tool;
+      // Switching away from Type while a typing session is active
+      // should commit the in-progress text — same semantics as
+      // tapping elsewhere on the page.
+      const prevTool = state.tool;
+      const nextTool = btn.dataset.tool;
+      if (prevTool === 'type' && nextTool !== 'type'
+          && state.inkController && typeof state.inkController.commitTyping === 'function') {
+        state.inkController.commitTyping();
+      }
+      state.tool = nextTool;
       for (const b of document.querySelectorAll('.tool-btn')) {
         b.classList.toggle('active', b === btn);
       }
@@ -2077,6 +2086,7 @@ function bindPracticeUI() {
     if (ev.target.tagName === 'INPUT' || ev.target.tagName === 'TEXTAREA') return;
     if (ev.key === 'p') document.querySelector('[data-tool="pen"]').click();
     else if (ev.key === 'e') document.querySelector('[data-tool="eraser"]').click();
+    else if (ev.key === 't') document.querySelector('[data-tool="type"]')?.click();
     else if ((ev.ctrlKey || ev.metaKey) && ev.key === 'z') { ev.preventDefault(); onUndo(); }
     else if (ev.key === 'ArrowLeft') navigateBy(-1);
     else if (ev.key === 'ArrowRight') navigateBy(1);
@@ -2102,6 +2112,12 @@ function setZoom(z) {
 
 async function navigateBy(dir) {
   if (!state.attempt) return;
+  // Flush any in-progress typed text before leaving the page,
+  // otherwise the caret stays "live" on the next page and the
+  // student's draft would commit at the wrong coordinates.
+  if (state.inkController && typeof state.inkController.commitTyping === 'function') {
+    state.inkController.commitTyping();
+  }
   const qp = state.attempt.questionPages;
   const idx = qp.indexOf(state.currentPage);
   const next = qp[idx + dir];
@@ -2157,6 +2173,13 @@ async function loadCurrentPage() {
   if (state.inkController) state.inkController.detach();
   state.inkController = attachInkController({
     inkCanvas,
+    // Type-tool DOM dependencies. Both live inside #page-wrap (same
+    // CSS coordinate space as the ink canvas) and are added in
+    // index.html. attachInkController defends against null so older
+    // cached HTML without these elements still loads.
+    typeInput:   document.getElementById('type-input'),
+    typeOverlay: document.getElementById('type-overlay'),
+    pageWrap:    document.getElementById('page-wrap'),
     getPageMeta: () => ({
       pageWidthPts: state.pageMeta.pageWidthPts,
       pageHeightPts: state.pageMeta.pageHeightPts,
@@ -2295,6 +2318,13 @@ function bindMarkingUI() {
 
 async function onSubmit() {
   if (!state.attempt) return;
+  // Flush any in-progress typed text first. The Type tool keeps text
+  // in an overlay until the student taps elsewhere or switches
+  // tools; pressing Submit without an explicit tap-out would
+  // otherwise silently discard their draft.
+  if (state.inkController && typeof state.inkController.commitTyping === 'function') {
+    state.inkController.commitTyping();
+  }
   // In direct mode we need the OpenAI key here; in proxy mode the
   // Worker holds the key, but we need the proxy URL + token.
   const apiMode = state.settings.apiMode || 'direct';

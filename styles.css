@@ -530,6 +530,64 @@ body.app-immersive .build-badge { display: none; }
   cursor: crosshair;
 }
 
+/* Type tool — visible overlay showing the in-progress text and a
+   blinking caret. Positioned in page-wrap-local CSS pixels by
+   attachInkController; the font-size is set inline to match the
+   PDF-point font size at the current zoom. Wrapping is handled
+   visually via CSS word-wrap; the committed stroke uses its own
+   canvas-side wrap helper. */
+.type-overlay {
+  position: absolute;
+  pointer-events: none;
+  color: var(--blue-ink, #1a4fc4);
+  font-family: sans-serif;
+  line-height: 1.2;
+  /* Wrap visually around the rest of the page-wrap. The commit-time
+     widthPt is the source of truth; this just stops the overlay
+     from sprawling beyond the page on very long pastes. */
+  max-width: 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.type-overlay-text { display: inline; }
+.type-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.1em;
+  vertical-align: text-bottom;
+  background: currentColor;
+  margin-left: 1px;
+  animation: type-caret-blink 1s step-end infinite;
+}
+@keyframes type-caret-blink {
+  0%, 50% { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+
+/* Hidden textarea — captures keyboard input for the Type tool.
+   Positioned at the caret so the iPad on-screen keyboard anchors
+   near the visible caret. Visually invisible but technically
+   focusable (opacity 0, 1x1, no border). pointer-events:none so a
+   subsequent tap on the canvas still reaches the canvas pointer
+   handler, which calls commitTyping() before relocating. */
+.type-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  opacity: 0;
+  pointer-events: none;
+  background: transparent;
+  resize: none;
+  /* Default off-canvas position so the textarea doesn't intercept
+     focus from any unrelated layout pass before the Type tool is
+     activated. */
+  left: -9999px;
+  top: -9999px;
+}
+
 /* Marking */
 .batch-list { padding-left: 20px; }
 .batch-list li { margin-bottom: 6px; font-size: 14px; }

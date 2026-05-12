@@ -375,6 +375,7 @@
     <section id="stage-practice" class="stage" hidden>
       <div class="practice-toolbar">
         <button data-tool="pen" class="tool-btn active" type="button" title="Pen (P)">Pen</button>
+        <button data-tool="type" class="tool-btn" type="button" title="Type (T) — typed text extracts more reliably than handwriting">Type</button>
         <button data-tool="eraser" class="tool-btn" type="button" title="Eraser (E)">Eraser</button>
         <button id="undo-btn" type="button" title="Undo (Ctrl+Z)">Undo</button>
         <button id="clear-page-btn" type="button" title="Clear page" data-short="Clear">Clear page</button>
@@ -399,6 +400,19 @@
           <div id="page-wrap" class="page-wrap">
             <canvas id="pdf-canvas" class="pdf-canvas"></canvas>
             <canvas id="ink-canvas" class="ink-canvas"></canvas>
+            <!-- Type-tool visible overlay. Shows the in-progress text
+                 (rendered DOM, not canvas) plus the blinking caret.
+                 Positioned absolutely in page-wrap-local CSS pixels by
+                 attachInkController. Hidden when the Type tool is
+                 inactive or no caret is placed. -->
+            <div id="type-overlay" class="type-overlay" hidden aria-hidden="true"></div>
+            <!-- Hidden textarea — the focus target that summons the
+                 OS keyboard on tablet. Captures `input` and `blur`
+                 events; its .value is mirrored into the visible
+                 overlay each keystroke. 1×1 transparent. -->
+            <textarea id="type-input" class="type-input"
+                      autocomplete="off" autocorrect="off" autocapitalize="off"
+                      spellcheck="false" aria-hidden="true"></textarea>
           </div>
         </div>
         <!-- Visible scroll rails for tablet use, shown only in immersive mode -->
