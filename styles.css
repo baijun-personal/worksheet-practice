@@ -1122,16 +1122,6 @@ body.app-immersive #prev-page-btn,
 body.app-immersive #next-page-btn,
 body.app-immersive #page-indicator { display: none; }
 
-/* Zoom controls are hidden in immersive mode. The page-stage-frame
-   is sized to 100svh and content scrolls via the custom rails, so
-   the in-toolbar zoom buttons don't actually have a useful target
-   to zoom (the frame's overflow:hidden clips the result). Hiding
-   them removes a dead UI surface — the page-zoom controls remain
-   reachable from non-immersive mode if a parent really needs them. */
-body.app-immersive #zoom-out-btn,
-body.app-immersive #zoom-fit-btn,
-body.app-immersive #zoom-in-btn { display: none; }
-
 /* ---------- Page-stage frame: scroll rails + bottom nav bar ---------- */
 /* The frame wraps #page-stage so we can absolutely-position the rails and
    the bottom nav over it without disturbing the existing flex centering

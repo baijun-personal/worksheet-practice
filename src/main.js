@@ -51,7 +51,6 @@ const state = {
   currentPage: null,     // 1-based PDF page number, must be a question page
   pageMeta: null,        // result from renderPageToCanvas
   tool: 'pen',
-  zoomLevel: 1,
   inkController: null,
   cancelMarking: false,
   flattenedCompletedPages: null, // cached after submit for "download attempt"
@@ -2396,9 +2395,6 @@ function bindPracticeUI() {
   }
   $('undo-btn').addEventListener('click', onUndo);
   $('clear-page-btn').addEventListener('click', onClearPage);
-  $('zoom-in-btn').addEventListener('click', () => setZoom(state.zoomLevel * 1.2));
-  $('zoom-out-btn').addEventListener('click', () => setZoom(state.zoomLevel / 1.2));
-  $('zoom-fit-btn').addEventListener('click', () => setZoom(1));
   $('prev-page-btn').addEventListener('click', () => navigateBy(-1));
   $('next-page-btn').addEventListener('click', () => navigateBy(1));
   $('page-nav-prev').addEventListener('click', () => navigateBy(-1));
@@ -2449,11 +2445,6 @@ function debounce(fn, wait) {
   };
 }
 
-function setZoom(z) {
-  state.zoomLevel = Math.max(0.5, Math.min(z, 3));
-  loadCurrentPage();
-}
-
 async function navigateBy(dir) {
   if (!state.attempt) return;
   // Flush any in-progress typed text before leaving the page,
@@ -2498,10 +2489,15 @@ async function loadCurrentPage() {
   const pdfCanvas = $('pdf-canvas');
   const inkCanvas = $('ink-canvas');
 
-  // Compute target CSS width for the rendered page.
+  // Compute target CSS width for the rendered page. The user-facing
+  // zoom buttons used to scale this via state.zoomLevel; they were
+  // removed (they didn't behave well — content would clip to the
+  // frame edge as the window was resized). The page now always
+  // renders at the natural stage width, clamped to [320, 1400] so
+  // tiny / huge viewports still produce a sensible canvas.
   const stage = $('page-stage');
   const stageW = stage.clientWidth - 32; // padding
-  const cssWidth = Math.max(320, Math.min(1400, stageW * state.zoomLevel));
+  const cssWidth = Math.max(320, Math.min(1400, stageW));
 
   state.pageMeta = await renderPageToCanvas(state.pdf, state.currentPage, pdfCanvas, { cssWidth });
 
